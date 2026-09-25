@@ -1,0 +1,57 @@
+{
+  "name": "trading-bot-backend",
+  "version": "10.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "dev:ts": "ts-node-dev --respawn --transpile-only --esm src/index.ts",
+    "build": "tsc --noEmitOnError",
+    "test": "tsx src/tests/run-all-tests.ts",
+    "test:jest": "jest --forceExit",
+    "backtest": "tsx src/backtest/runBacktest.ts",
+    "wfo": "tsx src/optimization/runWFO.ts",
+    "typecheck": "tsc --noEmit",
+    "rebuild": "npm rebuild better-sqlite3",
+    "download-history": "tsx src/backtest/runDownloadHistory.ts",
+    "pretrain": "tsx src/backtest/runDownloadHistory.ts --years 2 --tf H1",
+    "pretrain:fast": "tsx src/backtest/runDownloadHistory.ts --years 1 --tf H1 --skip-wfo",
+    "mega:upload": "python ../../pipeline/run_all.py upload",
+    "mega:download": "tsx src/backtest/MegaSyncManager.ts download",
+    "mega:status": "python ../../pipeline/run_all.py mega-status",
+    "pipeline": "tsx src/backtest/runDownloadHistory.ts --years 2 --tf H1 && tsx src/backtest/MegaSyncManager.ts upload",
+    "mega:backup": "python ../../pipeline/run_all.py backup",
+    "mega:restore-check": "python ../../pipeline/run_all.py restore-check"
+  },
+  "dependencies": {
+    "@types/ws": "8.5.10",
+    "axios": "1.20.0",
+    "better-sqlite3": "11.3.0",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "express": "4.22.3",
+    "form-data": "4.0.6",
+    "node-telegram-bot-api": "1.2.0",
+    "socket.io": "4.8.0",
+    "technicalindicators": "3.1.0",
+    "tsx": "4.23.15",
+    "ws": "8.21.3",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.11",
+    "@types/cors": "2.8.17",
+    "@types/express": "4.17.21",
+    "@types/form-data": "2.5.0",
+    "@types/node": "22.7.0",
+    "jest": "29.7.0",
+    "ts-jest": "29.2.5",
+    "ts-node": "10.9.2",
+    "ts-node-dev": "2.0.0",
+    "typescript": "5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  }
+}

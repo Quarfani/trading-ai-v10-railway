@@ -1,0 +1,42 @@
+# Secrets / credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+coverage/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Runtime state / databases
+*.db
+*.sqlite
+*.sqlite3
+bot/backend/data/
+bot/backend/backups/
+pipeline/data/
+pipeline/logs/
+.runtime/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+bot/backend/test-output.txt

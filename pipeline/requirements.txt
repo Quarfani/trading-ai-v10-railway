@@ -1,0 +1,53 @@
+# ─── Core data ────────────────────────────────────────────────────────────────
+pandas>=2.2.0
+numpy>=1.26.0
+pyarrow>=15.0.0       # Parquet engine with ZSTD support
+
+# ─── HTTP / APIs ──────────────────────────────────────────────────────────────
+requests>=2.31.0
+
+# ─── Environment ──────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0  # REQUIRED — loads .env into os.getenv()
+
+# ─── MT5 (Windows only) ───────────────────────────────────────────────────────
+# MetaTrader5>=5.0.45  # uncomment on Windows with MT5 terminal
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-cov>=5.0.0
+
+# ─── Machine Learning ─────────────────────────────────────────────────────────
+xgboost>=2.1.0
+scikit-learn>=1.5.0
+
+# ─── Hyperparameter Search (ADD-6 — was commented out, now active) ────────────
+# Enables XGBoostModel to run proper Bayesian hyperparameter search
+# instead of using fixed DEFAULT_PARAMS.
+optuna>=3.6.0
+
+# ─── Explainability (ADD-6) ───────────────────────────────────────────────────
+# SHAP values for feature importance — used in TrainingReport
+# and for understanding which features drive each prediction.
+shap>=0.45.0
+
+# ─── Optional: Deep Learning (choose one) ────────────────────────────────────
+# tensorflow>=2.15.0       # for LSTM (Linux/Mac)
+# torch>=2.1.0             # PyTorch alternative
+
+# ─── Optional: ONNX Export ───────────────────────────────────────────────────
+# onnxmltools>=1.12.0
+# onnxruntime>=1.18.0
+
+# ─── Optional accelerators ────────────────────────────────────────────────────
+# polars>=0.20.0       # faster alternative to pandas for large datasets
+# numba>=0.59.0        # JIT acceleration for indicator loops
+
+# ─── Mega upload ──────────────────────────────────────────────────────────────
+# megapy>=1.1.0        # API-based Mega upload (alternative to mega-cmd)
+
+# ─── MT5 Bridge ────────────────────────────────────────────────────────────────
+flask>=3.0.0
+
+# ─── ML Server ─────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn>=0.30.0

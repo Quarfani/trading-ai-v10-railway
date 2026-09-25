@@ -1,0 +1,152 @@
+/**
+ * SCHEDULED WFO — new module
+ * ════════════════════════════════════════════════════════════════════
+ * WHY THIS IS NEEDED:
+ *   WalkForwardOptimizer exists and works correctly.
+ *   It is only run manually via runWFO.ts CLI.
+ *   Strategy parameters (atrMult, tpRatio, minConfidence) never
+ *   auto-update in production — they drift from optimal as market
+ *   conditions evolve (regime changes, volatility shifts, etc).
+ *
+ * WHAT THIS DOES:
+ *   - Runs WFO on the 1st of each month at 03:00 UTC
+ *   - Applies the resulting optimal params to the live system
+ *   - Sends a full WFO report to Telegram
+ *   - Saves results to DB for audit trail
+ *
+ * HOW TO USE (in index.ts after engine.start()):
+ *   const scheduler = new ScheduledWFO(config, db, engine, telegram);
+ *   scheduler.start();
+ *   // on shutdown:
+ *   scheduler.stop();
+ * ════════════════════════════════════════════════════════════════════
+ */
+import { SystemConfig }         from '../types/trading.types';
+import { DatabaseManager }      from '../database/DatabaseManager';
+import { WalkForwardOptimizer } from '../optimization/WalkForwardOptimizer';
+import { Backtester }           from '../backtest/Backtester';
+import { TelegramBot }          from '../notifications/TelegramBot';
+import { MarketScanner }        from '../core/MarketScanner';
+import { Logger }               from '../utils/Logger';
+
+const WFO_HOUR_UTC   = 3;   // run at 03:00 UTC
+const WFO_DAY_OF_MONTH = 1; // run on the 1st of each month
+const CHECK_INTERVAL = 10 * 60_000; // check every 10 minutes
+
+export class ScheduledWFO {
+  private logger   = new Logger('ScheduledWFO');
+  private interval: NodeJS.Timeout | null = null;
+  private lastRunMonth = '';
+  private running  = false;
+
+  private wfo: WalkForwardOptimizer;
+
+  constructor(
+    private config:   SystemConfig,
+    private db:       DatabaseManager,
+    private scanner:  MarketScanner,
+    private telegram: TelegramBot,
+  ) {
+    this.wfo = new WalkForwardOptimizer(db.path);
+  }
+
+  start(): void {
+    if (!this.isAllowedToMutateParams()) {
+      this.logger.warn('Scheduled WFO disabled: automatic parameter mutation is restricted to paper mode by default');
+      return;
+    }
+    if (this.interval) return;
+    this.interval = setInterval(() => this.tick().catch(() => {}), CHECK_INTERVAL);
+    this.logger.info(`Scheduled WFO: will run on day ${WFO_DAY_OF_MONTH} at ${WFO_HOUR_UTC}:00 UTC`);
+  }
+
+  stop(): void {
+    if (this.interval) { clearInterval(this.interval); this.interval = null; }
+  }
+
+  /** Force an immediate WFO run (callable from TelegramCommands /wfo) */
+  async runNow(symbol?: string): Promise<void> {
+    if (!this.isAllowedToMutateParams()) throw new Error('Live WFO is disabled; explicit LIVE_WFO_ACK is required outside paper mode');
+    await this.runWFO(symbol ? [symbol] : this.config.symbols);
+  }
+
+  private isAllowedToMutateParams(): boolean {
+    if (this.config.mode === 'paper') return process.env.AUTO_WFO_ENABLED === 'true';
+    return process.env.AUTO_WFO_ENABLED === 'true' && process.env.LIVE_WFO_ACK === 'I_UNDERSTAND_LIVE_WFO_RISK';
+  }
+
+  // ─── Internal ──────────────────────────────────────────────────────
+
+  private async tick(): Promise<void> {
+    if (this.running) return;
+
+    const now        = new Date();
+    const month      = `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`;
+    const isWFOTime  = now.getUTCDate() === WFO_DAY_OF_MONTH
+                    && now.getUTCHours() === WFO_HOUR_UTC;
+
+    if (!isWFOTime || this.lastRunMonth === month) return;
+
+    this.lastRunMonth = month;
+    await this.runWFO(this.config.symbols);
+  }
+
+  private async runWFO(symbols: string[]): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+
+    this.logger.info(`Monthly WFO starting for ${symbols.length} symbols...`);
+    await this.telegram
+      .sendMessage(`🔄 <b>Monthly WFO Started</b>\nOptimizing ${symbols.length} symbols...`)
+      .catch(() => {});
+
+    const results: string[] = [];
+    let successCount = 0;
+
+    for (const symbol of symbols) {
+      try {
+        // Fetch historical candles for WFO
+        const candles = await this.scanner
+          .fetchCandles(symbol, 'H1', 2000)
+          .catch(() => []);
+
+        if (candles.length < 500) {
+          this.logger.warn(`WFO skip ${symbol}: only ${candles.length} candles`);
+          continue;
+        }
+
+        // Run walk-forward optimization
+        const result = await this.wfo.run(symbol, candles);
+
+        const p = result.finalParams;
+        results.push(
+          `${symbol}: ATR×${p.atrMult.toFixed(2)} TP×${p.tpRatio.toFixed(2)} ` +
+          `conf=${p.minConfidence.toFixed(2)} OOS_WR=${(result.oos_winRate * 100).toFixed(1)}%`
+        );
+
+        // Persist optimal params to DB for AdaptiveATRManager to pick up
+        this.db.setSetting(
+          `wfo_params_${symbol}`,
+          JSON.stringify({ ...p, updatedAt: Date.now() }),
+        );
+
+        successCount++;
+        this.logger.info(`WFO ${symbol}: ${results[results.length - 1]}`);
+
+      } catch (e: any) {
+        this.logger.error(`WFO failed for ${symbol}: ${e.message}`);
+        results.push(`${symbol}: ❌ ${e.message}`);
+      }
+    }
+
+    const report =
+      `✅ <b>Monthly WFO Complete</b>\n` +
+      `${successCount}/${symbols.length} symbols optimized\n\n` +
+      `<b>New params:</b>\n` +
+      results.map(r => `  ${r}`).join('\n');
+
+    await this.telegram.sendMessage(report).catch(() => {});
+    this.logger.info(`WFO complete: ${successCount}/${symbols.length} succeeded`);
+    this.running = false;
+  }
+}

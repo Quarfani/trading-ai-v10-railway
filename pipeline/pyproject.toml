@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "trading-data-pipeline"
+version = "1.0.0"
+requires-python = ">=3.12"
+description = "Historical trading data pipeline for AI training"
+dependencies = [
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "pyarrow>=15.0.0",
+    "requests>=2.31.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
