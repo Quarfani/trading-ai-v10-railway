@@ -51,8 +51,15 @@ export class AdaptiveATRManager {
     }
     this.cache.set(key, { params, updatedAt: Date.now() });
     try {
-      this.db.raw().prepare(`INSERT INTO system_events(type,level,data,timestamp) VALUES (?,?,?,?)`)
-        .run('ADAPTIVE_PARAMS_UPDATED', 'INFO', JSON.stringify({ symbol: key, previous, next: params }), Date.now());
+      this.db.raw().prepare(
+  `INSERT INTO system_events(event,severity,payload,timestamp)
+   VALUES (?,?,?,?)`,
+).run(
+  'ADAPTIVE_PARAMS_UPDATED',
+  'INFO',
+  JSON.stringify({ symbol: key, previous, next: params }),
+  Date.now(),
+);
     } catch (e) {
       this.logger.error(`Adaptive audit write failed: ${String(e)}`);
     }
