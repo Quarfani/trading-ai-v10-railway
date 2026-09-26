@@ -7,7 +7,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const r = await api.post('/auth/login', { password: pwd });
+      const r = await api.post('/api/auth/login', { password: pwd });
       localStorage.setItem('token', r.data.token);
       onSuccess();
     } catch { setErr('كلمة سر غير صحيحة'); }
