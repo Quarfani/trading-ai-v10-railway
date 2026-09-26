@@ -29,6 +29,8 @@ import { API, socket } from './lib/api';
 interface Status {
   running: boolean;
   mode: string;
+  version?: string;
+  botVersion?: string;
   circuitBreaker: string;
   performance: any;
   openPositions: any;
@@ -78,10 +80,10 @@ function saveAuthToken(payload: LoginResponse): string | null {
     payload.data?.jwt ??
     null;
 
-  if (!token) return null;
+  if (!token) {
+    return null;
+  }
 
-  // Save under several conventional names so the existing API client
-  // can use whichever token key it expects.
   localStorage.setItem('token', token);
   localStorage.setItem('authToken', token);
   localStorage.setItem('accessToken', token);
@@ -93,9 +95,9 @@ function saveAuthToken(payload: LoginResponse): string | null {
 function hasLocalAuth(): boolean {
   return Boolean(
     localStorage.getItem('token') ||
-    localStorage.getItem('authToken') ||
-    localStorage.getItem('accessToken') ||
-    localStorage.getItem('sessionToken')
+      localStorage.getItem('authToken') ||
+      localStorage.getItem('accessToken') ||
+      localStorage.getItem('sessionToken')
   );
 }
 
@@ -117,7 +119,9 @@ function DashboardLogin({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const submit = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
     event.preventDefault();
 
     if (!password.trim()) {
@@ -129,19 +133,23 @@ function DashboardLogin({
     setError('');
 
     try {
-      const baseUrl =
-        (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+      const baseUrl = (
+        import.meta.env.VITE_API_URL || ''
+      ).replace(/\/+$/, '');
 
-      const response = await fetch(`${baseUrl}/api/auth/login`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          password,
-        }),
-      });
+      const response = await fetch(
+        `${baseUrl}/api/auth/login`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            password,
+          }),
+        }
+      );
 
       let payload: LoginResponse = {};
 
@@ -153,21 +161,18 @@ function DashboardLogin({
 
       if (!response.ok) {
         if (response.status === 401) {
-          throw new Error('Invalid dashboard password.');
+          throw new Error(
+            'Invalid dashboard password.'
+          );
         }
 
         throw new Error(
-          payload?.data?.token
-            ? 'Authentication failed.'
-            : `Login failed (${response.status}).`
+          `Login failed (${response.status}).`
         );
       }
 
       saveAuthToken(payload);
 
-      // The backend may authenticate with an HttpOnly cookie instead
-      // of a JSON token. In that case credentials: include above
-      // preserves the session automatically.
       setPassword('');
       onSuccess();
     } catch (err: any) {
@@ -184,9 +189,13 @@ function DashboardLogin({
     <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
+
           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 rounded-2xl bg-blue-900/40 border border-blue-700/40 flex items-center justify-center">
-              <LockKeyhole size={30} className="text-blue-400" />
+              <LockKeyhole
+                size={30}
+                className="text-blue-400"
+              />
             </div>
           </div>
 
@@ -200,7 +209,10 @@ function DashboardLogin({
             </p>
           </div>
 
-          <form onSubmit={submit} className="space-y-5">
+          <form
+            onSubmit={submit}
+            className="space-y-5"
+          >
             <div>
               <label
                 htmlFor="dashboard-password"
@@ -214,7 +226,9 @@ function DashboardLogin({
                 type="password"
                 autoComplete="current-password"
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={(event) =>
+                  setPassword(event.target.value)
+                }
                 placeholder="Enter dashboard password"
                 className="w-full rounded-xl bg-gray-950 border border-gray-700 px-4 py-3 text-white outline-none focus:border-blue-500"
                 disabled={busy}
@@ -223,7 +237,10 @@ function DashboardLogin({
 
             {error && (
               <div className="flex items-start gap-2 rounded-xl border border-red-800/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-                <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+                <AlertTriangle
+                  size={17}
+                  className="mt-0.5 shrink-0"
+                />
                 <span>{error}</span>
               </div>
             )}
@@ -235,7 +252,10 @@ function DashboardLogin({
             >
               {busy ? (
                 <>
-                  <RefreshCw size={18} className="animate-spin" />
+                  <RefreshCw
+                    size={18}
+                    className="animate-spin"
+                  />
                   Signing in...
                 </>
               ) : (
@@ -259,27 +279,51 @@ function DashboardLogin({
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState<boolean>(
-    () => hasLocalAuth()
-  );
+  const [authenticated, setAuthenticated] =
+    useState<boolean>(() => hasLocalAuth());
 
-  const [status, setStatus] = useState<Status | null>(null);
-  const [consensus, setConsensus] = useState<any>(null);
-  const [equity, setEquity] = useState<any[]>([]);
-  const [trades, setTrades] = useState<any[]>([]);
-  const [recovery, setRecovery] = useState<RecoveryState | null>(null);
-  const [journal, setJournal] = useState<any[]>([]);
-  const [grades, setGrades] = useState<any>({});
-  const [mlStatus, setMlStatus] = useState<any>(null);
-  const [symScores, setSymScores] = useState<any[]>([]);
+  const [status, setStatus] =
+    useState<Status | null>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [authChecking, setAuthChecking] = useState(true);
-  const [activeTab, setActiveTab] = useState<string>('overview');
-  const [liveSignal, setLiveSignal] = useState<any>(null);
+  const [consensus, setConsensus] =
+    useState<any>(null);
+
+  const [equity, setEquity] =
+    useState<any[]>([]);
+
+  const [trades, setTrades] =
+    useState<any[]>([]);
+
+  const [recovery, setRecovery] =
+    useState<RecoveryState | null>(null);
+
+  const [journal, setJournal] =
+    useState<any[]>([]);
+
+  const [grades, setGrades] =
+    useState<any>({});
+
+  const [mlStatus, setMlStatus] =
+    useState<any>(null);
+
+  const [symScores, setSymScores] =
+    useState<any[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [authChecking, setAuthChecking] =
+    useState(true);
+
+  const [activeTab, setActiveTab] =
+    useState<string>('overview');
+
+  const [liveSignal, setLiveSignal] =
+    useState<any>(null);
 
   const forceLogout = () => {
     clearLocalAuth();
+
     setAuthenticated(false);
     setStatus(null);
     setConsensus(null);
@@ -293,7 +337,9 @@ export default function App() {
   };
 
   const refresh = async () => {
-    if (!authenticated) return;
+    if (!authenticated) {
+      return;
+    }
 
     try {
       const results = await Promise.allSettled([
@@ -311,8 +357,11 @@ export default function App() {
       const unauthorized = results.some(
         (result: any) =>
           result.status === 'rejected' &&
-          (result.reason?.response?.status === 401 ||
-            result.reason?.status === 401)
+          (
+            result.reason?.response?.status === 401 ||
+            result.reason?.status === 401 ||
+            result.reason?.statusCode === 401
+          )
       );
 
       if (unauthorized) {
@@ -320,7 +369,17 @@ export default function App() {
         return;
       }
 
-      const [s, c, e, t, r, j, g, ml, ss] = results;
+      const [
+        s,
+        c,
+        e,
+        t,
+        r,
+        j,
+        g,
+        ml,
+        ss,
+      ] = results;
 
       if (s.status === 'fulfilled') {
         setStatus(s.value.data);
@@ -366,8 +425,7 @@ export default function App() {
         );
       }
     } catch {
-      // Individual API failures are intentionally tolerated so
-      // one unavailable subsystem does not crash the dashboard.
+      // Individual API failures are intentionally tolerated.
     }
 
     setLoading(false);
@@ -386,15 +444,23 @@ export default function App() {
     let alive = true;
 
     const runInitialRefresh = async () => {
-      if (!alive) return;
+      if (!alive) {
+        return;
+      }
+
       await refresh();
     };
 
     runInitialRefresh();
 
-    const interval = window.setInterval(() => {
-      if (alive) refresh();
-    }, 30_000);
+    const interval = window.setInterval(
+      () => {
+        if (alive) {
+          refresh();
+        }
+      },
+      30_000
+    );
 
     const onSignal = (sig: any) => {
       if (alive) {
@@ -407,7 +473,9 @@ export default function App() {
 
     return () => {
       alive = false;
+
       window.clearInterval(interval);
+
       socket.off('signal', onSignal);
       socket.disconnect();
     };
@@ -419,7 +487,9 @@ export default function App() {
     return (
       <div className="flex h-screen bg-gray-950 items-center justify-center">
         <div className="text-center">
+
           <div className="w-14 h-14 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+
           <p className="text-gray-400">
             Checking authentication...
           </p>
@@ -443,7 +513,9 @@ export default function App() {
     return (
       <div className="flex h-screen bg-gray-950 items-center justify-center">
         <div className="text-center">
+
           <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+
           <p className="text-gray-400">
             Loading Trading Dashboard...
           </p>
@@ -456,8 +528,19 @@ export default function App() {
 
   const perf = status?.performance;
   const today = perf?.today ?? {};
+
+  const rawOverallWinRate = Number(
+    perf?.winrate
+  );
+
+  const hasOverallTrades =
+    Number(perf?.totalTrades ?? perf?.trades ?? 0) > 0;
+
   const winRate =
-    ((perf?.winrate ?? 0) * 100).toFixed(1);
+    hasOverallTrades &&
+    Number.isFinite(rawOverallWinRate)
+      ? rawOverallWinRate * 100
+      : null;
 
   const equityValue =
     typeof perf?.equity === 'number'
@@ -467,8 +550,27 @@ export default function App() {
   const equity$ =
     equityValue.toFixed(2);
 
-  const stratCount =
-    consensus?.active_count ?? 0;
+  // ── Dynamic strategies ─────────────────────────────────────────────────────
+
+  const strategyMap =
+    consensus?.strategies &&
+    typeof consensus.strategies === 'object'
+      ? consensus.strategies
+      : {};
+
+  const totalStrategies =
+    Object.keys(strategyMap).length;
+
+  const activeStrategies =
+    Object.values(strategyMap).filter(
+      (strategy: any) =>
+        strategy?.enabled !== false
+    ).length;
+
+  const dashboardVersion =
+    status?.version ||
+    status?.botVersion ||
+    '9.1';
 
   const tabs = [
     'overview',
@@ -487,8 +589,11 @@ export default function App() {
 
       {/* Header */}
       <header className="border-b border-gray-800 bg-gray-900/80 backdrop-blur sticky top-0 z-50">
+
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+
           <div className="flex items-center gap-3">
+
             <div
               className={`w-3 h-3 rounded-full ${
                 status?.running
@@ -498,7 +603,7 @@ export default function App() {
             />
 
             <h1 className="text-xl font-bold text-white">
-              Trading Bot v8.0
+              Trading Bot v{dashboardVersion}
             </h1>
 
             <span className="px-2 py-0.5 bg-blue-900/50 text-blue-300 rounded text-xs font-mono">
@@ -513,12 +618,14 @@ export default function App() {
                     : 'bg-red-900 text-red-300'
                 }`}
               >
-                🔔 {liveSignal.symbol} {liveSignal.side}
+                🔔 {liveSignal.symbol}{' '}
+                {liveSignal.side}
               </span>
             )}
           </div>
 
           <div className="flex gap-2">
+
             <button
               onClick={refresh}
               className="p-2 rounded hover:bg-gray-800 text-gray-400 hover:text-white"
@@ -538,6 +645,7 @@ export default function App() {
 
         {/* Tabs */}
         <div className="max-w-7xl mx-auto px-4 flex gap-1 pb-0 overflow-x-auto">
+
           {tabs.map((tab) => (
             <button
               key={tab}
@@ -556,11 +664,12 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
-        {/* ── OVERVIEW ───────────────────────────────────────────────────── */}
+        {/* ── OVERVIEW ──────────────────────────────────────────────────── */}
 
         {activeTab === 'overview' && (
           <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+
               {[
                 {
                   label: 'Equity',
@@ -568,27 +677,38 @@ export default function App() {
                   icon: <TrendingUp size={20} />,
                   color: 'text-green-400',
                 },
+
                 {
                   label: 'Win Rate',
-                  value: `${winRate}%`,
+                  value:
+                    winRate === null
+                      ? 'N/A'
+                      : `${winRate.toFixed(1)}%`,
                   icon: <Activity size={20} />,
                   color:
-                    Number(winRate) >= 52
+                    winRate === null
+                      ? 'text-gray-400'
+                      : winRate >= 52
                       ? 'text-green-400'
                       : 'text-yellow-400',
                 },
+
                 {
                   label: 'Today P/L',
-                  value: `$${(today.pnl ?? 0).toFixed(2)}`,
+                  value: `$${(
+                    today.pnl ?? 0
+                  ).toFixed(2)}`,
                   icon: <Zap size={20} />,
                   color:
                     (today.pnl ?? 0) >= 0
                       ? 'text-green-400'
                       : 'text-red-400',
                 },
+
                 {
                   label: 'Strategies',
-                  value: `${stratCount}/8`,
+                  value:
+                    `${activeStrategies}/${totalStrategies}`,
                   icon: <Brain size={20} />,
                   color: 'text-blue-400',
                 },
@@ -597,10 +717,13 @@ export default function App() {
                   key={card.label}
                   className="bg-gray-900 border border-gray-800 rounded-xl p-4"
                 >
+
                   <div className="flex items-center justify-between mb-2">
+
                     <span className="text-gray-400 text-sm">
                       {card.label}
                     </span>
+
                     <span className={card.color}>
                       {card.icon}
                     </span>
@@ -617,12 +740,17 @@ export default function App() {
 
             {/* Equity Curve */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
               <h2 className="text-lg font-semibold mb-4">
                 Equity Curve
               </h2>
 
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveContainer
+                width="100%"
+                height={200}
+              >
                 <AreaChart data={equity}>
+
                   <defs>
                     <linearGradient
                       id="eq"
@@ -636,6 +764,7 @@ export default function App() {
                         stopColor="#3b82f6"
                         stopOpacity={0.3}
                       />
+
                       <stop
                         offset="95%"
                         stopColor="#3b82f6"
@@ -652,7 +781,9 @@ export default function App() {
                   <XAxis
                     dataKey="t"
                     tickFormatter={(value) =>
-                      new Date(value).toLocaleDateString()
+                      new Date(
+                        value
+                      ).toLocaleDateString()
                     }
                     stroke="#4b5563"
                     tick={{ fontSize: 11 }}
@@ -668,7 +799,9 @@ export default function App() {
 
                   <Tooltip
                     formatter={(value: any) => [
-                      `$${Number(value ?? 0).toFixed(2)}`,
+                      `$${Number(
+                        value ?? 0
+                      ).toFixed(2)}`,
                       'Equity',
                     ]}
                     contentStyle={{
@@ -695,30 +828,39 @@ export default function App() {
                 className="bg-gray-900 border rounded-xl p-4"
                 style={{
                   borderColor:
-                    (LEVEL_COLORS[recovery.level] ??
-                      '#6b7280') + '44',
+                    (
+                      LEVEL_COLORS[
+                        recovery.level
+                      ] ?? '#6b7280'
+                    ) + '44',
                 }}
               >
+
                 <div className="flex items-center gap-3">
+
                   <Shield
                     size={20}
                     style={{
                       color:
-                        LEVEL_COLORS[recovery.level] ??
-                        '#6b7280',
+                        LEVEL_COLORS[
+                          recovery.level
+                        ] ?? '#6b7280',
                     }}
                   />
 
                   <div>
+
                     <span
                       className="font-semibold"
                       style={{
                         color:
-                          LEVEL_COLORS[recovery.level] ??
-                          '#6b7280',
+                          LEVEL_COLORS[
+                            recovery.level
+                          ] ?? '#6b7280',
                       }}
                     >
-                      Recovery Mode: {recovery.level}
+                      Recovery Mode:{' '}
+                      {recovery.level}
                     </span>
 
                     <p className="text-gray-400 text-sm">
@@ -728,9 +870,13 @@ export default function App() {
 
                   <span className="ml-auto text-gray-300 font-mono">
                     DD:{' '}
-                    {(recovery.drawdownPct * 100).toFixed(2)}%
+                    {(
+                      recovery.drawdownPct * 100
+                    ).toFixed(2)}
+                    %
                     {' | '}
-                    Vol: ×{recovery.volumeMultiplier}
+                    Vol: ×
+                    {recovery.volumeMultiplier}
                   </span>
                 </div>
               </div>
@@ -738,26 +884,39 @@ export default function App() {
 
             {/* Open Positions */}
             {status?.openPositions &&
-              Object.keys(status.openPositions).length > 0 && (
+              Object.keys(
+                status.openPositions
+              ).length > 0 && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
                   <h2 className="text-lg font-semibold mb-4">
                     Open Positions
                   </h2>
 
                   <div className="space-y-2">
-                    {Object.entries(status.openPositions).map(
-                      ([symbol, position]: [string, any]) => (
+
+                    {Object.entries(
+                      status.openPositions
+                    ).map(
+                      (
+                        [
+                          symbol,
+                          position,
+                        ]: [string, any]
+                      ) => (
                         <div
                           key={symbol}
                           className="flex items-center justify-between bg-gray-800 rounded-lg px-4 py-2"
                         >
+
                           <span className="font-mono font-semibold">
                             {symbol}
                           </span>
 
                           <span
                             className={`px-2 py-0.5 rounded text-xs font-mono ${
-                              position.side === 'BUY'
+                              position.side ===
+                              'BUY'
                                 ? 'bg-green-900/50 text-green-300'
                                 : 'bg-red-900/50 text-red-300'
                             }`}
@@ -789,29 +948,78 @@ export default function App() {
 
         {activeTab === 'strategies' && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <h2 className="text-lg font-semibold mb-4">
-              Strategy Performance
-            </h2>
+
+            <div className="flex items-center justify-between mb-4">
+
+              <h2 className="text-lg font-semibold">
+                Strategy Performance
+              </h2>
+
+              <span className="text-xs text-gray-500">
+                Active: {activeStrategies} /{' '}
+                {totalStrategies}
+              </span>
+            </div>
 
             <div className="space-y-3">
+
               {Object.entries(
-                consensus?.strategies ?? {}
+                strategyMap
               ).map(
-                ([name, strategy]: [string, any]) => {
+                ([name, strategy]: [
+                  string,
+                  any
+                ]) => {
+                  const tradeCount = Number(
+                    strategy?.metrics?.total_trades ??
+                      strategy?.metrics?.trades ??
+                      0
+                  );
+
+                  const hasTrades =
+                    Number.isFinite(
+                      tradeCount
+                    ) &&
+                    tradeCount > 0;
+
+                  const rawWinRate =
+                    Number(
+                      strategy?.metrics?.win_rate
+                    );
+
                   const winRateValue =
-                    (strategy.metrics?.win_rate ?? 0.5) * 100;
+                    hasTrades &&
+                    Number.isFinite(
+                      rawWinRate
+                    )
+                      ? rawWinRate * 100
+                      : null;
+
+                  const rawSharpe =
+                    Number(
+                      strategy?.metrics
+                        ?.sharpe_ratio
+                    );
 
                   const sharpe =
-                    strategy.metrics?.sharpe_ratio ?? 0;
+                    hasTrades &&
+                    Number.isFinite(
+                      rawSharpe
+                    )
+                      ? rawSharpe
+                      : null;
 
                   return (
                     <div
                       key={name}
                       className="bg-gray-800 rounded-lg p-4"
                     >
+
                       <div className="flex items-center justify-between mb-2">
+
                         <div className="flex items-center gap-2">
-                          {strategy.enabled ? (
+
+                          {strategy?.enabled ? (
                             <CheckCircle
                               size={16}
                               className="text-green-400"
@@ -829,47 +1037,80 @@ export default function App() {
                         </div>
 
                         <div className="flex gap-4 text-sm">
+
                           <span
                             className={
-                              winRateValue >= 52
+                              winRateValue ===
+                              null
+                                ? 'text-gray-500'
+                                : winRateValue >=
+                                  52
                                 ? 'text-green-400'
                                 : 'text-yellow-400'
                             }
                           >
-                            WR: {winRateValue.toFixed(1)}%
+                            WR:{' '}
+                            {winRateValue ===
+                            null
+                              ? 'N/A'
+                              : `${winRateValue.toFixed(
+                                  1
+                                )}%`}
                           </span>
 
                           <span
                             className={
-                              sharpe >= 0.8
+                              sharpe === null
+                                ? 'text-gray-500'
+                                : sharpe >= 0.8
                                 ? 'text-green-400'
                                 : 'text-gray-400'
                             }
                           >
-                            Sharpe: {sharpe.toFixed(2)}
+                            Sharpe:{' '}
+                            {sharpe === null
+                              ? 'N/A'
+                              : sharpe.toFixed(2)}
                           </span>
 
                           <span className="text-gray-400">
                             Trades:{' '}
-                            {strategy.metrics?.total_trades ?? 0}
+                            {tradeCount}
                           </span>
                         </div>
                       </div>
 
                       <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-blue-500 to-green-500 transition-all"
                           style={{
-                            width: `${Math.min(
-                              100,
-                              Math.max(0, winRateValue)
-                            )}%`,
+                            width: `${
+                              winRateValue ===
+                              null
+                                ? 0
+                                : Math.min(
+                                    100,
+                                    Math.max(
+                                      0,
+                                      winRateValue
+                                    )
+                                  )
+                            }%`,
                           }}
                         />
                       </div>
                     </div>
                   );
                 }
+              )}
+
+              {!Object.keys(
+                strategyMap
+              ).length && (
+                <div className="text-center py-8 text-gray-500">
+                  No strategy data available yet.
+                </div>
               )}
             </div>
           </div>
@@ -879,29 +1120,38 @@ export default function App() {
 
         {activeTab === 'trades' && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
             <h2 className="text-lg font-semibold mb-4">
               Recent Trades
             </h2>
 
             <div className="overflow-x-auto">
+
               <table className="w-full text-sm">
+
                 <thead>
                   <tr className="text-gray-500 border-b border-gray-800">
+
                     <th className="text-left py-2 px-3">
                       Symbol
                     </th>
+
                     <th className="text-left py-2 px-3">
                       Side
                     </th>
+
                     <th className="text-right py-2 px-3">
                       Entry
                     </th>
+
                     <th className="text-right py-2 px-3">
                       P/L
                     </th>
+
                     <th className="text-left py-2 px-3">
                       Source
                     </th>
+
                     <th className="text-left py-2 px-3">
                       Status
                     </th>
@@ -909,20 +1159,27 @@ export default function App() {
                 </thead>
 
                 <tbody>
+
                   {trades.map(
-                    (trade: any, index: number) => (
+                    (
+                      trade: any,
+                      index: number
+                    ) => (
                       <tr
                         key={index}
                         className="border-b border-gray-800/50 hover:bg-gray-800/30"
                       >
+
                         <td className="py-2 px-3 font-mono font-semibold">
                           {trade.symbol}
                         </td>
 
                         <td className="py-2 px-3">
+
                           <span
                             className={`px-2 py-0.5 rounded text-xs ${
-                              trade.side === 'BUY'
+                              trade.side ===
+                              'BUY'
                                 ? 'bg-green-900/40 text-green-300'
                                 : 'bg-red-900/40 text-red-300'
                             }`}
@@ -932,47 +1189,68 @@ export default function App() {
                         </td>
 
                         <td className="py-2 px-3 text-right font-mono">
-                          {typeof trade.entry === 'number'
+                          {typeof trade.entry ===
+                          'number'
                             ? trade.entry.toFixed(5)
                             : '—'}
                         </td>
 
                         <td
                           className={`py-2 px-3 text-right font-mono font-semibold ${
-                            (trade.profit ?? 0) >= 0
+                            (trade.profit ?? 0) >=
+                            0
                               ? 'text-green-400'
                               : 'text-red-400'
                           }`}
                         >
-                          {trade.profit != null
+                          {trade.profit !=
+                          null
                             ? `${
-                                trade.profit >= 0 ? '+' : ''
-                              }$${trade.profit.toFixed(2)}`
+                                trade.profit >=
+                                0
+                                  ? '+'
+                                  : ''
+                              }$${trade.profit.toFixed(
+                                2
+                              )}`
                             : '—'}
                         </td>
 
                         <td className="py-2 px-3 text-gray-400 text-xs">
                           {trade.source
                             ?.split('+')
-                            ?.[
-                              0
-                            ] ?? '—'}
+                            ?.at(0) ?? '—'}
                         </td>
 
                         <td className="py-2 px-3">
+
                           <span
                             className={`px-2 py-0.5 rounded text-xs ${
-                              trade.status === 'open'
+                              trade.status ===
+                              'open'
                                 ? 'bg-blue-900/40 text-blue-300'
                                 : 'bg-gray-800 text-gray-400'
                             }`}
                           >
-                            {trade.status ?? '—'}
+                            {trade.status ??
+                              '—'}
                           </span>
                         </td>
                       </tr>
                     )
                   )}
+
+                  {!trades.length && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="text-center py-10 text-gray-500"
+                      >
+                        No trades yet.
+                      </td>
+                    </tr>
+                  )}
+
                 </tbody>
               </table>
             </div>
@@ -981,70 +1259,100 @@ export default function App() {
 
         {/* ── RECOVERY ────────────────────────────────────────────────── */}
 
-        {activeTab === 'recovery' && recovery && (
-          <div className="space-y-6">
-            <div
-              className="bg-gray-900 border rounded-xl p-6"
-              style={{
-                borderColor:
-                  (LEVEL_COLORS[recovery.level] ??
-                    '#6b7280') + '66',
-              }}
-            >
-              <h2
-                className="text-2xl font-bold mb-2"
+        {activeTab === 'recovery' &&
+          recovery && (
+            <div className="space-y-6">
+
+              <div
+                className="bg-gray-900 border rounded-xl p-6"
                 style={{
-                  color:
-                    LEVEL_COLORS[recovery.level] ??
-                    '#6b7280',
+                  borderColor:
+                    (
+                      LEVEL_COLORS[
+                        recovery.level
+                      ] ?? '#6b7280'
+                    ) + '66',
                 }}
               >
-                {recovery.level} MODE
-              </h2>
 
-              <p className="text-gray-300 mb-4">
-                {recovery.message}
-              </p>
+                <h2
+                  className="text-2xl font-bold mb-2"
+                  style={{
+                    color:
+                      LEVEL_COLORS[
+                        recovery.level
+                      ] ?? '#6b7280',
+                  }}
+                >
+                  {recovery.level} MODE
+                </h2>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <p className="text-gray-500 text-sm">
-                    Drawdown
-                  </p>
-                  <p className="text-xl font-bold">
-                    {(recovery.drawdownPct * 100).toFixed(2)}%
-                  </p>
-                </div>
+                <p className="text-gray-300 mb-4">
+                  {recovery.message}
+                </p>
 
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <p className="text-gray-500 text-sm">
-                    Vol Multiplier
-                  </p>
-                  <p className="text-xl font-bold">
-                    ×{recovery.volumeMultiplier}
-                  </p>
+                <div className="grid grid-cols-2 gap-4">
+
+                  <div className="bg-gray-800 rounded-lg p-3">
+
+                    <p className="text-gray-500 text-sm">
+                      Drawdown
+                    </p>
+
+                    <p className="text-xl font-bold">
+                      {(
+                        recovery.drawdownPct *
+                        100
+                      ).toFixed(2)}
+                      %
+                    </p>
+                  </div>
+
+                  <div className="bg-gray-800 rounded-lg p-3">
+
+                    <p className="text-gray-500 text-sm">
+                      Vol Multiplier
+                    </p>
+
+                    <p className="text-xl font-bold">
+                      ×
+                      {
+                        recovery.volumeMultiplier
+                      }
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         {/* ── JOURNAL ────────────────────────────────────────────────── */}
 
         {activeTab === 'journal' && (
           <div className="space-y-6">
+
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
               <h2 className="text-lg font-semibold mb-4">
                 Grade Distribution
               </h2>
 
               <div className="flex gap-4">
-                {Object.entries(grades).map(
-                  ([grade, count]: [string, any]) => (
+
+                {Object.entries(
+                  grades
+                ).map(
+                  (
+                    [
+                      grade,
+                      count,
+                    ]: [string, any]
+                  ) => (
                     <div
                       key={grade}
                       className="flex-1 text-center bg-gray-800 rounded-lg p-3"
                     >
+
                       <p className="text-2xl font-bold">
                         {count}
                       </p>
@@ -1055,40 +1363,60 @@ export default function App() {
                     </div>
                   )
                 )}
+
+                {!Object.keys(grades).length && (
+                  <div className="w-full text-center py-6 text-gray-500">
+                    No journal grades yet.
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
               <h2 className="text-lg font-semibold mb-4">
                 Recent Journal Entries
               </h2>
 
               <div className="space-y-3">
+
                 {journal.map(
-                  (entry: any, index: number) => (
+                  (
+                    entry: any,
+                    index: number
+                  ) => (
                     <div
                       key={index}
                       className="bg-gray-800 rounded-lg p-4"
                     >
+
                       <div className="flex items-center justify-between mb-2">
+
                         <span className="font-mono font-semibold">
-                          {entry.symbol} {entry.side} #
+                          {entry.symbol}{' '}
+                          {entry.side} #
                           {entry.tradeId}
                         </span>
 
                         <div className="flex gap-2">
+
                           <span className="font-bold text-lg">
                             {entry.grade}
                           </span>
 
                           <span
                             className={`font-semibold ${
-                              (entry.profit ?? 0) >= 0
+                              (entry.profit ??
+                                0) >= 0
                                 ? 'text-green-400'
                                 : 'text-red-400'
                             }`}
                           >
-                            ${(entry.profit ?? 0).toFixed(2)}
+                            $
+                            {(
+                              entry.profit ??
+                              0
+                            ).toFixed(2)}
                           </span>
                         </div>
                       </div>
@@ -1105,6 +1433,13 @@ export default function App() {
                     </div>
                   )
                 )}
+
+                {!journal.length && (
+                  <div className="text-center py-8 text-gray-500">
+                    No journal entries yet.
+                  </div>
+                )}
+
               </div>
             </div>
           </div>
@@ -1114,7 +1449,9 @@ export default function App() {
 
         {activeTab === 'ml' && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
             <div className="flex items-center justify-between mb-6">
+
               <h2 className="text-lg font-semibold">
                 ML Model Status
               </h2>
@@ -1128,7 +1465,9 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-2 gap-4 mb-6">
+
               <div className="bg-gray-800 rounded-lg p-4">
+
                 <p className="text-gray-500 text-sm">
                   Status
                 </p>
@@ -1149,36 +1488,48 @@ export default function App() {
 
             {mlStatus?.importance && (
               <div>
+
                 <h3 className="text-sm font-semibold text-gray-400 mb-3">
                   Feature Importance
                 </h3>
 
                 <div className="space-y-2">
+
                   {Object.entries(
                     mlStatus.importance
                   )
                     .sort(
-                      ([, a]: any, [, b]: any) =>
-                        b - a
+                      (
+                        [, a]: any,
+                        [, b]: any
+                      ) => b - a
                     )
                     .slice(0, 8)
                     .map(
-                      ([feature, importance]: any) => (
+                      (
+                        [
+                          feature,
+                          importance,
+                        ]: any
+                      ) => (
                         <div
                           key={feature}
                           className="flex items-center gap-3"
                         >
+
                           <span className="text-gray-400 text-xs w-32 truncate">
                             {feature}
                           </span>
 
                           <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+
                             <div
                               className="h-full bg-blue-500 rounded-full"
                               style={{
                                 width: `${Math.min(
                                   100,
-                                  (importance / 0.1) *
+                                  (importance /
+                                    0.1) *
                                     100
                                 )}%`,
                               }}
@@ -1204,58 +1555,66 @@ export default function App() {
 
         {activeTab === 'symbols' && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+
             <h2 className="text-lg font-semibold mb-4">
               Symbol Scores
             </h2>
 
             <div className="space-y-2">
+
               {symScores
                 .filter(Boolean)
-                .map((score: any) => (
-                  <div
-                    key={score.symbol}
-                    className="flex items-center gap-4 bg-gray-800 rounded-lg px-4 py-2"
-                  >
-                    <span
-                      className={`w-3 h-3 rounded-full ${
-                        score.suitable
-                          ? 'bg-green-400'
-                          : 'bg-gray-600'
-                      }`}
-                    />
+                .map(
+                  (score: any) => (
+                    <div
+                      key={score.symbol}
+                      className="flex items-center gap-4 bg-gray-800 rounded-lg px-4 py-2"
+                    >
 
-                    <span className="font-mono font-semibold w-20">
-                      {score.symbol}
-                    </span>
-
-                    <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
+                      <span
+                        className={`w-3 h-3 rounded-full ${
                           score.suitable
-                            ? 'bg-green-500'
-                            : 'bg-gray-500'
+                            ? 'bg-green-400'
+                            : 'bg-gray-600'
                         }`}
-                        style={{
-                          width: `${Math.max(
-                            0,
-                            Math.min(
-                              100,
-                              Number(score.score) || 0
-                            )
-                          )}%`,
-                        }}
                       />
+
+                      <span className="font-mono font-semibold w-20">
+                        {score.symbol}
+                      </span>
+
+                      <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+
+                        <div
+                          className={`h-full rounded-full ${
+                            score.suitable
+                              ? 'bg-green-500'
+                              : 'bg-gray-500'
+                          }`}
+                          style={{
+                            width: `${Math.max(
+                              0,
+                              Math.min(
+                                100,
+                                Number(
+                                  score.score
+                                ) || 0
+                              )
+                            )}%`,
+                          }}
+                        />
+                      </div>
+
+                      <span className="text-gray-300 w-8 text-right font-mono">
+                        {score.score}
+                      </span>
+
+                      <span className="text-gray-500 text-xs w-64 truncate">
+                        {score.reason}
+                      </span>
                     </div>
-
-                    <span className="text-gray-300 w-8 text-right font-mono">
-                      {score.score}
-                    </span>
-
-                    <span className="text-gray-500 text-xs w-64 truncate">
-                      {score.reason}
-                    </span>
-                  </div>
-                ))}
+                  )
+                )}
 
               {!symScores.length && (
                 <p className="text-gray-500 text-center py-8">
@@ -1265,6 +1624,7 @@ export default function App() {
             </div>
           </div>
         )}
+
       </main>
     </div>
   );
