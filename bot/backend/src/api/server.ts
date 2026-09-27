@@ -210,6 +210,24 @@ export function createApi(engine: TradingEngine) {
 // These are added at module bottom; createApi() must be called on the same app
 
 export function extendApiV8(app: Express, engine: any) {
+  // MEGA archive / disaster-recovery status (non-secret).
+  // MEGA credentials stay on the dedicated Windows backup agent.
+  app.get('/api/storage/status', (_req: any, res: any) => {
+    const truthy = new Set(['1', 'true', 'yes', 'on']);
+    const megaEnabled = truthy.has(String(process.env.MEGA_BACKUP_ENABLED ?? '').toLowerCase());
+    const credentialsPresent = Boolean(process.env.MEGA_EMAIL && process.env.MEGA_PASSWORD);
+
+    res.json({
+      mega: {
+        enabled: megaEnabled,
+        credentialsPresent,
+        mode: megaEnabled ? 'runtime' : 'external-windows-agent',
+        folder: process.env.MEGA_FOLDER ?? '/TradingAI/backups',
+        note: 'MEGA is an archive/DR target; live trading state stays in the runtime database.',
+      },
+    });
+  });
+
   // Monte Carlo
   app.post('/api/montecarlo', async (req: any, res: any) => {
     try {
