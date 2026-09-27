@@ -1,3 +1,4 @@
+import { validateRiskReward } from '../risk/RiskManager';
 /**
  * UNIT TESTS — Risk Components
  */
@@ -83,6 +84,34 @@ console.log('\n═══ SpreadFilter ═══');
   assert(r3.ok,  'XAUUSD 2 pip spread: OK');
   const r4 = sf.check('XAUUSD', 2000.00, 2005.00); // 50 pips
   assert(!r4.ok, 'XAUUSD 50 pip spread: blocked');
+}
+
+// ??? Risk/Reward Gate ?????????????????????????????????????????????????????????
+console.log('\n??? Risk/Reward Gate ???');
+{
+  // Reproduce the bad ETHUSDT signal seen in Railway:
+  // entry=2689.05, SL=2667.4008, TP=2690.2151 => R:R?0.054
+  const weak = validateRiskReward(
+    { price: 2689.05, sl: 2667.4008, tp: 2690.2151 },
+    1.5,
+  );
+
+  assert(!weak.valid, 'R:R 0.054 is blocked');
+  assert(weak.rr < 0.1, 'Weak signal R:R is correctly calculated');
+
+  const valid = validateRiskReward(
+    { price: 100, sl: 99, tp: 101.5 },
+    1.5,
+  );
+
+  assert(valid.valid, 'R:R 1.50 is accepted');
+
+  const zeroRisk = validateRiskReward(
+    { price: 100, sl: 100, tp: 102 },
+    1.5,
+  );
+
+  assert(!zeroRisk.valid, 'Zero SL distance is blocked');
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

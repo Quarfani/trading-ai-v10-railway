@@ -26,6 +26,46 @@ import { TelegramBot }       from '../notifications/TelegramBot';
 import { Logger }            from '../utils/Logger';
 import { getSymbolSpec }     from '../config/symbolConfig';
 
+/**
+ * Central R:R validation used by the risk gate.
+ * Kept structurally typed so no extra import is required.
+ */
+export function validateRiskReward(
+  signal: { price: number; sl: number; tp: number },
+  minRR = 1.5,
+): { valid: boolean; rr: number; reason: string } {
+  const risk = Math.abs(signal.price - signal.sl);
+  const reward = Math.abs(signal.tp - signal.price);
+
+  if (!Number.isFinite(risk) || risk <= 0) {
+    return { valid: false, rr: 0, reason: 'Invalid SL distance' };
+  }
+
+  if (!Number.isFinite(reward) || reward <= 0) {
+    return { valid: false, rr: 0, reason: 'Invalid TP distance' };
+  }
+
+  const rr = reward / risk;
+
+  if (!Number.isFinite(rr)) {
+    return { valid: false, rr: 0, reason: 'Invalid R:R' };
+  }
+
+  if (rr < minRR) {
+    return {
+      valid: false,
+      rr,
+      reason: `R:R ${rr.toFixed(3)} < minimum ${minRR.toFixed(2)}`,
+    };
+  }
+
+  return {
+    valid: true,
+    rr,
+    reason: `R:R ${rr.toFixed(3)} OK`,
+  };
+}
+
 export class RiskManager {
   private logger = new Logger('RiskManager');
   private breaker:      CircuitBreaker;
@@ -80,6 +120,22 @@ export class RiskManager {
     const minConf = this.config.minConfidence ?? 0.55;
     if (signal.confidence < minConf)
       return this.block('low_confidence', [`Confidence ${signal.confidence.toFixed(3)} < ${minConf}`]);
+
+
+  // ?? 4. Minimum risk/reward gate ????????????????????????????????
+  // Prevent weak signals from reaching sizing or execution.
+  // MIN_RR is the authoritative minimum economic requirement.
+  const rrCheck = validateRiskReward(
+    signal,
+    this.config.minRR ?? 1.5,
+  );
+
+  if (!rrCheck.valid)
+    return this.block('min_rr', [rrCheck.reason]);
+
+  reasons.push(
+    `[R:R] ${rrCheck.rr.toFixed(2)} >= ${(this.config.minRR ?? 1.5).toFixed(2)}`,
+  );
 
     // ── 4. [FIX CRITICAL] SL/TP direction validation ───────────────
     // Prevents inverted orders from reaching the broker
