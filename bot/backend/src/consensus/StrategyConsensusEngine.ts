@@ -110,11 +110,15 @@ export class StrategyConsensusEngine {
       if (ss.signal === 'SELL') sellSignals.push(ss);
     }
 
-    // ── Step 4: ABSOLUTE conflict check ──────────────────────────────────
-    if (buySignals.length > 0 && sellSignals.length > 0) {
-      reasoning.push(`[CONFLICT_BLOCKED] BUY(${buySignals.map(s => s.strategy_name).join(',')}) vs SELL(${sellSignals.map(s => s.strategy_name).join(',')})`);
-      return this.noTrade('CONFLICT_BLOCKED', 0, 0, votes, disabledSummary, reasoning, t0);
-    }
+   // ── Step 4: Weighted conflict resolution ──────────────────────────────
+// BUY and SELL may coexist. The consensus decision is determined by
+// weighted support + dominance, rather than an automatic hard block.
+
+if (buySignals.length > 0 && sellSignals.length > 0) {
+  reasoning.push(
+    `[CONFLICT_DETECTED] BUY=${buySignals.length} SELL=${sellSignals.length} -> weighted resolution`
+  );
+}
 
     // ── Step 5: Weighted totals ───────────────────────────────────────────
     const total_buy_weight  = votes.filter(v => v.vote === 'BUY').reduce((s, v) => s + v.weight, 0);
@@ -123,12 +127,7 @@ export class StrategyConsensusEngine {
 
     reasoning.push(`[WEIGHTS] buy=${total_buy_weight.toFixed(6)} sell=${total_sell_weight.toFixed(6)} total=${total_weight.toFixed(6)}`);
 
-    // Defensive double-check
-    if (total_buy_weight > 0 && total_sell_weight > 0) {
-      reasoning.push('[CONFLICT_BLOCKED] Defensive block');
-      return this.noTrade('CONFLICT_BLOCKED', total_buy_weight, total_sell_weight, votes, disabledSummary, reasoning, t0);
-    }
-
+   
     // ── Step 6: Minimum weight ────────────────────────────────────────────
     if (total_weight < this.cfg.minimum_total_weight) {
       reasoning.push(`[INSUFFICIENT_WEIGHT] total=${total_weight.toFixed(4)} < min=${this.cfg.minimum_total_weight}`);
