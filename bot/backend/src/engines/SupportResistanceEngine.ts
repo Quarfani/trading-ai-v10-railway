@@ -60,6 +60,8 @@ export class SupportResistanceEngine {
       const wasAbove     = prev5closes.some(c => c > strongest.price + atr * 0.3);
       const nowNear      = Math.abs(last.close - strongest.price) < atr * 0.8;
       if (!wasAbove || !nowNear) return null;
+    // The support must remain BELOW the entry price.
+    if (strongest.price >= last.close) return null;
 
       // Confirm: bullish candle pattern at support
       if (last.close < last.open) return null; // bearish candle at support → wait
@@ -73,6 +75,8 @@ export class SupportResistanceEngine {
       const wasBelow     = prev5closes.some(c => c < strongest.price - atr * 0.3);
       const nowNear      = Math.abs(last.close - strongest.price) < atr * 0.8;
       if (!wasBelow || !nowNear) return null;
+    // The resistance must remain ABOVE the entry price.
+    if (strongest.price <= last.close) return null;
 
       if (last.close > last.open) return null; // bullish candle at resistance → wait
 
@@ -86,10 +90,28 @@ export class SupportResistanceEngine {
     confidence       = Math.min(0.85, confidence);
 
     const spec = getSymbolSpec(symbol);
-    const sl   = side === 'BUY'
+    const sl = side === 'BUY'
       ? strongest.price - atr * 0.5  // SL below support
       : strongest.price + atr * 0.5; // SL above resistance
-    const tp   = dynamicTakeProfit(side, last.close, atr, spec.atrMult * spec.tpRatio, candles, sl);
+
+    const tp = dynamicTakeProfit(
+      side,
+      last.close,
+      atr,
+      spec.atrMult * spec.tpRatio,
+      candles,
+      sl,
+    );
+
+    // Final signal geometry guard.
+    // BUY:  SL < Entry < TP
+    // SELL: SL > Entry > TP
+    const geometryValid =
+      side === 'BUY'
+        ? sl < last.close && tp > last.close
+        : sl > last.close && tp < last.close;
+
+    if (!geometryValid) return null;
 
     return {
       symbol, side, price: last.close, confidence, sl, tp,
