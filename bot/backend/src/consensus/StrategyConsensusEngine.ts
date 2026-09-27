@@ -170,12 +170,18 @@ export class StrategyConsensusEngine {
       ss.metrics = entry.metrics;
 
       if (ss.signal === 'NONE') {
-        reasoning.push(
-          `[VOTE_NONE] ${ss.strategy_name}: no signal`,
-        );
+  reasoning.push(
+    `[VOTE_NONE] ${ss.strategy_name}: no signal`,
+  );
 
-        continue;
-      }
+  this.logger.info(
+    `[CONSENSUS_NONE] ${ctx.symbol} ` +
+    `strategy=${ss.strategy_name} ` +
+    `reason=no_signal`
+  );
+
+  continue;
+}
 
       // Determine whether this strategy is still in bootstrap mode.
       const isNew =
