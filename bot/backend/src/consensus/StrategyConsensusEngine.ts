@@ -1,246 +1,648 @@
-/**
- * STRATEGY CONSENSUS ENGINE — v7.0
- * ══════════════════════════════════════════════════════════════════════════
- * الإصلاحات في هذا الإصدار:
+﻿/**
+ * STRATEGY CONSENSUS ENGINE â€” v7.1
  *
- * [FIX-1] WEIGHT BOOTSTRAPPING:
- *   الإصدار السابق: weight = sharpe × rolling_wr × confidence
- *   إذا sharpe=0 (استراتيجية جديدة) → weight=0 → لا تصويت أبداً
- *   الإصلاح: weight = (sharpe + ε) × rolling_wr × confidence
- *   حيث ε = 0.5 للاستراتيجيات الجديدة (< min_trades_for_gate)
- *   هذا يسمح للاستراتيجيات الجديدة بالمشاركة بوزن محدود.
+ * Main fixes:
  *
- * [FIX-2] WEIGHT COMPUTED ONCE:
- *   الإصدار السابق: computeWeight() يُستدعى مرتين لكل استراتيجية
- *   الإصلاح: يُحسب مرة واحدة ويُخزَّن في VoteDetail.
+ * [FIX-1] WEIGHT BOOTSTRAPPING
+ *   New strategies must be able to participate before they have trade history.
+ *   A neutral bootstrap win-rate prior is used instead of treating unknown
+ *   performance as a 10% win-rate floor.
  *
- * [FIX-3] MINIMUM VOTERS CHECK:
- *   إضافة: إذا الاستراتيجيات الناخبة أقل من threshold → NO_TRADE
- *   هذا يمنع استراتيجية واحدة ضعيفة من التحكم بالقرار.
- * ══════════════════════════════════════════════════════════════════════════
+ * [FIX-2] WEIGHT COMPUTED ONCE
+ *   Each strategy weight is computed once and stored in VoteDetail.
+ *
+ * [FIX-3] MINIMUM VOTERS / ACTIVE STRATEGIES
+ *   The engine requires the configured minimum number of active strategies.
+ *
+ * [FIX-4] WEIGHTED CONFLICT RESOLUTION
+ *   BUY and SELL may coexist. The winning side is selected by weighted support
+ *   and dominance instead of an automatic conflict block.
+ *
+ * [FIX-5] CONSENSUS DIAGNOSTICS
+ *   Railway logs now expose:
+ *   - total BUY weight
+ *   - total SELL weight
+ *   - total weight
+ *   - minimum required weight
+ *   - vote count
+ *   - per-strategy confidence
+ *   - per-strategy weight
+ *   - trade history
+ *   - rolling win rate
+ *   - Sharpe ratio
  */
-import {
-  ConsensusResult, ConsensusOutcome, BlockReason,
-  VoteDetail, StrategySignal, StrategyContext,
-  ConsensusConfig, DEFAULT_CONSENSUS_CONFIG,
-} from './types';
-import { StrategyRegistry }  from './StrategyRegistry';
-import { PerformanceGate }   from './PerformanceGate';
-import { Signal }            from '../types/trading.types';
-import { Logger }            from '../utils/Logger';
 
-// Bootstrap sharpe for new strategies with < min_trades_for_gate
+import {
+  ConsensusResult,
+  ConsensusOutcome,
+  BlockReason,
+  VoteDetail,
+  StrategySignal,
+  StrategyContext,
+  ConsensusConfig,
+  DEFAULT_CONSENSUS_CONFIG,
+} from './types';
+
+import { StrategyRegistry } from './StrategyRegistry';
+import { PerformanceGate } from './PerformanceGate';
+import { Signal } from '../types/trading.types';
+import { Logger } from '../utils/Logger';
+
+// Neutral bootstrap Sharpe for new strategies.
+// It allows participation without pretending the strategy already
+// has a proven historical Sharpe ratio.
 const BOOTSTRAP_SHARPE = 0.5;
+
+// Neutral bootstrap win-rate prior for strategies without history.
+const BOOTSTRAP_WIN_RATE = 0.5;
+
+// Conservative maximum contribution of one fresh strategy.
+const NEW_STRATEGY_MAX_WEIGHT = 0.20;
 
 export class StrategyConsensusEngine {
   private readonly logger = new Logger('ConsensusEngine');
-  private readonly gate:  PerformanceGate;
-  private readonly cfg:   ConsensusConfig;
+  private readonly gate: PerformanceGate;
+  private readonly cfg: ConsensusConfig;
 
   constructor(
     private readonly registry: StrategyRegistry,
     cfg: Partial<ConsensusConfig> = {},
   ) {
-    this.cfg  = { ...DEFAULT_CONSENSUS_CONFIG, ...cfg, gate: { ...DEFAULT_CONSENSUS_CONFIG.gate, ...(cfg.gate ?? {}) } };
+    this.cfg = {
+      ...DEFAULT_CONSENSUS_CONFIG,
+      ...cfg,
+      gate: {
+        ...DEFAULT_CONSENSUS_CONFIG.gate,
+        ...(cfg.gate ?? {}),
+      },
+    };
+
     this.gate = new PerformanceGate(registry, this.cfg);
   }
 
   run(ctx: StrategyContext): ConsensusResult {
-    const t0        = Date.now();
+    const t0 = Date.now();
     const reasoning: string[] = [];
 
-    // ── Step 1: Performance gate ──────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 1: Performance gate
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
     const gateResult = this.gate.evaluate();
-    for (const d of gateResult.disabled)  reasoning.push(`[GATE_DISABLED] ${d.strategy}: ${d.failures.join(', ')}`);
-    for (const r of gateResult.reenabled) reasoning.push(`[GATE_RECOVERED] ${r}`);
-    for (const s of gateResult.skipped)   reasoning.push(`[GATE_SKIPPED] ${s}: insufficient history`);
 
-    // ── Step 2: Active strategies ─────────────────────────────────────────
-    const activeEntries  = this.registry.getActive();
-    const disabledSummary = this.registry.getDisabled().map(d => ({ name: d.name, reason: d.reason }));
-
-    if (activeEntries.length < this.cfg.minimum_active_strategies) {
-      reasoning.push(`[NO_ACTIVE] Active=${activeEntries.length} < min=${this.cfg.minimum_active_strategies}`);
-      return this.noTrade('NO_ACTIVE_STRATEGIES', 0, 0, [], disabledSummary, reasoning, t0);
+    for (const d of gateResult.disabled) {
+      reasoning.push(
+        `[GATE_DISABLED] ${d.strategy}: ${d.failures.join(', ')}`,
+      );
     }
 
-    reasoning.push(`[ACTIVE] count=${activeEntries.length}: ${activeEntries.map(e => e.strategy.name).join(', ')}`);
+    for (const r of gateResult.reenabled) {
+      reasoning.push(`[GATE_RECOVERED] ${r}`);
+    }
 
-    // ── Step 3: Generate signals ──────────────────────────────────────────
-    const votes: VoteDetail[]        = [];
-    const buySignals:  StrategySignal[] = [];
+    for (const s of gateResult.skipped) {
+      reasoning.push(`[GATE_SKIPPED] ${s}: insufficient history`);
+    }
+
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 2: Active strategies
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    const activeEntries = this.registry.getActive();
+
+    const disabledSummary = this.registry
+      .getDisabled()
+      .map(d => ({
+        name: d.name,
+        reason: d.reason,
+      }));
+
+    if (activeEntries.length < this.cfg.minimum_active_strategies) {
+      reasoning.push(
+        `[NO_ACTIVE] Active=${activeEntries.length} ` +
+        `< min=${this.cfg.minimum_active_strategies}`,
+      );
+
+      this.logger.info(
+        `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
+        `reason=NO_ACTIVE_STRATEGIES ` +
+        `active=${activeEntries.length} ` +
+        `minimum=${this.cfg.minimum_active_strategies}`,
+      );
+
+      return this.noTrade(
+        'NO_ACTIVE_STRATEGIES',
+        0,
+        0,
+        [],
+        disabledSummary,
+        reasoning,
+        t0,
+      );
+    }
+
+    reasoning.push(
+      `[ACTIVE] count=${activeEntries.length}: ` +
+      `${activeEntries.map(e => e.strategy.name).join(', ')}`,
+    );
+
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 3: Generate signals
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    const votes: VoteDetail[] = [];
+    const buySignals: StrategySignal[] = [];
     const sellSignals: StrategySignal[] = [];
 
     for (const entry of activeEntries) {
       let ss: StrategySignal;
+
       try {
         ss = entry.strategy.generate_signal(ctx);
       } catch (e: any) {
-        this.logger.error(`Strategy ${entry.strategy.name} threw: ${e.message}`);
+        this.logger.error(
+          `Strategy ${entry.strategy.name} threw: ${e?.message ?? String(e)}`,
+        );
         continue;
       }
 
+      // Attach current strategy metrics to the generated signal.
       ss.metrics = entry.metrics;
 
       if (ss.signal === 'NONE') {
-        reasoning.push(`[VOTE_NONE] ${ss.strategy_name}: no signal`);
+        reasoning.push(
+          `[VOTE_NONE] ${ss.strategy_name}: no signal`,
+        );
+
         continue;
       }
 
-      // [FIX-1] Bootstrap weight for new strategies
-      const isNew   = entry.metrics.total_trades < this.cfg.gate.min_trades_for_gate;
-      const weight  = this.computeWeight(ss, isNew);
+      // Determine whether this strategy is still in bootstrap mode.
+      const isNew =
+        entry.metrics.total_trades <
+        this.cfg.gate.min_trades_for_gate;
+
+      // Compute the weight once.
+      const weight = this.computeWeight(ss, isNew);
 
       votes.push({
         strategy_name: ss.strategy_name,
-        vote:          ss.signal,
-        confidence:    ss.confidence,
+        vote: ss.signal,
+        confidence: ss.confidence,
         weight,
-        metrics:       ss.metrics,
+        metrics: ss.metrics,
       });
 
-      reasoning.push(JSON.stringify({
-        event: 'VOTE_CAST', strategy: ss.strategy_name, vote: ss.signal,
-        confidence: ss.confidence.toFixed(4), weight: weight.toFixed(6),
-        new: isNew,
-        metrics: { sharpe: ss.metrics.sharpe_ratio.toFixed(3), rolling_wr: ss.metrics.rolling_win_rate.toFixed(3) },
-      }));
+      reasoning.push(
+        JSON.stringify({
+          event: 'VOTE_CAST',
+          strategy: ss.strategy_name,
+          vote: ss.signal,
+          confidence: Number(ss.confidence).toFixed(4),
+          weight: weight.toFixed(6),
+          new: isNew,
+          metrics: {
+            sharpe: Number(ss.metrics.sharpe_ratio).toFixed(3),
+            rolling_wr: Number(
+              ss.metrics.rolling_win_rate,
+            ).toFixed(3),
+            total_trades: ss.metrics.total_trades,
+          },
+        }),
+      );
 
-      if (ss.signal === 'BUY')  buySignals.push(ss);
-      if (ss.signal === 'SELL') sellSignals.push(ss);
+      if (ss.signal === 'BUY') {
+        buySignals.push(ss);
+      }
+
+      if (ss.signal === 'SELL') {
+        sellSignals.push(ss);
+      }
     }
 
-   // ── Step 4: Weighted conflict resolution ──────────────────────────────
-// BUY and SELL may coexist. The consensus decision is determined by
-// weighted support + dominance, rather than an automatic hard block.
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 4: Weighted conflict resolution
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-if (buySignals.length > 0 && sellSignals.length > 0) {
-  reasoning.push(
-    `[CONFLICT_DETECTED] BUY=${buySignals.length} SELL=${sellSignals.length} -> weighted resolution`
-  );
-}
+    if (buySignals.length > 0 && sellSignals.length > 0) {
+      reasoning.push(
+        `[CONFLICT_DETECTED] ` +
+        `BUY=${buySignals.length} ` +
+        `SELL=${sellSignals.length} -> weighted resolution`,
+      );
+    }
 
-    // ── Step 5: Weighted totals ───────────────────────────────────────────
-    const total_buy_weight  = votes.filter(v => v.vote === 'BUY').reduce((s, v) => s + v.weight, 0);
-    const total_sell_weight = votes.filter(v => v.vote === 'SELL').reduce((s, v) => s + v.weight, 0);
-    const total_weight      = total_buy_weight + total_sell_weight;
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 5: Weighted totals
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    reasoning.push(`[WEIGHTS] buy=${total_buy_weight.toFixed(6)} sell=${total_sell_weight.toFixed(6)} total=${total_weight.toFixed(6)}`);
+    const total_buy_weight = votes
+      .filter(v => v.vote === 'BUY')
+      .reduce((sum, v) => sum + v.weight, 0);
 
-   
-    // ── Step 6: Minimum weight ────────────────────────────────────────────
+    const total_sell_weight = votes
+      .filter(v => v.vote === 'SELL')
+      .reduce((sum, v) => sum + v.weight, 0);
+
+    const total_weight =
+      total_buy_weight + total_sell_weight;
+
+    reasoning.push(
+      `[WEIGHTS] ` +
+      `buy=${total_buy_weight.toFixed(6)} ` +
+      `sell=${total_sell_weight.toFixed(6)} ` +
+      `total=${total_weight.toFixed(6)}`,
+    );
+
+    // Railway diagnostic log.
+    this.logger.info(
+      `[CONSENSUS_DEBUG] ${ctx.symbol} ` +
+      `buy=${total_buy_weight.toFixed(6)} ` +
+      `sell=${total_sell_weight.toFixed(6)} ` +
+      `total=${total_weight.toFixed(6)} ` +
+      `minimum=${this.cfg.minimum_total_weight.toFixed(6)} ` +
+      `votes=${votes.length} ` +
+      `active=${activeEntries.length}`,
+    );
+
+    // Per-strategy diagnostic logs.
+    for (const vote of votes) {
+      this.logger.info(
+        `[CONSENSUS_VOTE] ` +
+        `${ctx.symbol} ` +
+        `strategy=${vote.strategy_name} ` +
+        `side=${vote.vote} ` +
+        `confidence=${Number(vote.confidence).toFixed(4)} ` +
+        `weight=${vote.weight.toFixed(6)} ` +
+        `trades=${vote.metrics.total_trades} ` +
+        `rollingWR=${Number(
+          vote.metrics.rolling_win_rate,
+        ).toFixed(4)} ` +
+        `sharpe=${Number(
+          vote.metrics.sharpe_ratio,
+        ).toFixed(4)}`,
+      );
+    }
+
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 6: Minimum total weight
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
     if (total_weight < this.cfg.minimum_total_weight) {
-      reasoning.push(`[INSUFFICIENT_WEIGHT] total=${total_weight.toFixed(4)} < min=${this.cfg.minimum_total_weight}`);
-      return this.noTrade('INSUFFICIENT_WEIGHT', total_buy_weight, total_sell_weight, votes, disabledSummary, reasoning, t0);
+      reasoning.push(
+        `[INSUFFICIENT_WEIGHT] ` +
+        `total=${total_weight.toFixed(4)} ` +
+        `< min=${this.cfg.minimum_total_weight}`,
+      );
+
+      this.logger.info(
+        `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
+        `reason=INSUFFICIENT_WEIGHT ` +
+        `total=${total_weight.toFixed(6)} ` +
+        `minimum=${this.cfg.minimum_total_weight.toFixed(6)} ` +
+        `buy=${total_buy_weight.toFixed(6)} ` +
+        `sell=${total_sell_weight.toFixed(6)} ` +
+        `votes=${votes.length}`,
+      );
+
+      return this.noTrade(
+        'INSUFFICIENT_WEIGHT',
+        total_buy_weight,
+        total_sell_weight,
+        votes,
+        disabledSummary,
+        reasoning,
+        t0,
+      );
     }
 
-    // ── Step 7: Dominance ─────────────────────────────────────────────────
-    const winningSide:   'BUY' | 'SELL' = total_buy_weight >= total_sell_weight ? 'BUY' : 'SELL';
-    const winningWeight  = winningSide === 'BUY' ? total_buy_weight : total_sell_weight;
-    const dominance_ratio = total_weight > 0 ? winningWeight / total_weight : 0;
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 7: Dominance
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    reasoning.push(`[DOMINANCE] side=${winningSide} ratio=${dominance_ratio.toFixed(4)} threshold=${this.cfg.dominance_ratio}`);
+    const winningSide: 'BUY' | 'SELL' =
+      total_buy_weight >= total_sell_weight
+        ? 'BUY'
+        : 'SELL';
 
-    if (dominance_ratio < this.cfg.dominance_ratio) {
-      reasoning.push(`[LOW_DOMINANCE] ${(dominance_ratio * 100).toFixed(1)}% < ${(this.cfg.dominance_ratio * 100).toFixed(1)}%`);
-      return this.noTrade('LOW_DOMINANCE', total_buy_weight, total_sell_weight, votes, disabledSummary, reasoning, t0);
+    const winningWeight =
+      winningSide === 'BUY'
+        ? total_buy_weight
+        : total_sell_weight;
+
+    const dominance_ratio =
+      total_weight > 0
+        ? winningWeight / total_weight
+        : 0;
+
+    reasoning.push(
+      `[DOMINANCE] ` +
+      `side=${winningSide} ` +
+      `ratio=${dominance_ratio.toFixed(4)} ` +
+      `threshold=${this.cfg.dominance_ratio}`,
+    );
+
+    if (
+      dominance_ratio <
+      this.cfg.dominance_ratio
+    ) {
+      reasoning.push(
+        `[LOW_DOMINANCE] ` +
+        `${(dominance_ratio * 100).toFixed(1)}% ` +
+        `< ${(this.cfg.dominance_ratio * 100).toFixed(1)}%`,
+      );
+
+      this.logger.info(
+        `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
+        `reason=LOW_DOMINANCE ` +
+        `side=${winningSide} ` +
+        `dominance=${dominance_ratio.toFixed(6)} ` +
+        `threshold=${this.cfg.dominance_ratio.toFixed(6)} ` +
+        `buy=${total_buy_weight.toFixed(6)} ` +
+        `sell=${total_sell_weight.toFixed(6)}`,
+      );
+
+      return this.noTrade(
+        'LOW_DOMINANCE',
+        total_buy_weight,
+        total_sell_weight,
+        votes,
+        disabledSummary,
+        reasoning,
+        t0,
+      );
     }
 
-    // ── Step 8: Single-strategy high-confidence gate ──────────────────────
-    const winnersVotes = votes.filter(v => v.vote === winningSide);
-    if (winnersVotes.length === 1 && winnersVotes[0].confidence < 0.72) {
-      reasoning.push(`[SINGLE_LOW_CONF] single strategy conf ${winnersVotes[0].confidence.toFixed(3)} < 0.72`);
-      return this.noTrade('SINGLE_STRATEGY_LOW_CONFIDENCE', total_buy_weight, total_sell_weight, votes, disabledSummary, reasoning, t0);
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 8: Single-strategy high-confidence gate
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    const winnersVotes = votes.filter(
+      v => v.vote === winningSide,
+    );
+
+    if (
+      winnersVotes.length === 1 &&
+      winnersVotes[0].confidence < 0.72
+    ) {
+      reasoning.push(
+        `[SINGLE_LOW_CONF] ` +
+        `single strategy conf ` +
+        `${winnersVotes[0].confidence.toFixed(3)} < 0.72`,
+      );
+
+      this.logger.info(
+        `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
+        `reason=SINGLE_STRATEGY_LOW_CONFIDENCE ` +
+        `strategy=${winnersVotes[0].strategy_name} ` +
+        `confidence=${winnersVotes[0].confidence.toFixed(4)}`,
+      );
+
+      return this.noTrade(
+        'SINGLE_STRATEGY_LOW_CONFIDENCE',
+        total_buy_weight,
+        total_sell_weight,
+        votes,
+        disabledSummary,
+        reasoning,
+        t0,
+      );
     }
 
-    // ── Step 9: Select best signal ────────────────────────────────────────
-    const winnerSignals = (winningSide === 'BUY' ? buySignals : sellSignals)
-      .filter(s => s.raw_signal !== null);
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 9: Select best signal
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    const winnerSignals = (
+      winningSide === 'BUY'
+        ? buySignals
+        : sellSignals
+    ).filter(
+      s => s.raw_signal !== null,
+    );
 
     if (!winnerSignals.length) {
-      reasoning.push('[NO_VALID_SIGNAL] no raw signal from winning strategies');
-      return this.noTrade('INSUFFICIENT_WEIGHT', total_buy_weight, total_sell_weight, votes, disabledSummary, reasoning, t0);
+      reasoning.push(
+        '[NO_VALID_SIGNAL] no raw signal from winning strategies',
+      );
+
+      this.logger.info(
+        `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
+        `reason=NO_VALID_SIGNAL ` +
+        `side=${winningSide}`,
+      );
+
+      return this.noTrade(
+        'INSUFFICIENT_WEIGHT',
+        total_buy_weight,
+        total_sell_weight,
+        votes,
+        disabledSummary,
+        reasoning,
+        t0,
+      );
     }
 
-    // [FIX-2] Use pre-computed weights from votes array
-    const best = winnerSignals.reduce((a, b) => {
-      const wa = winnersVotes.find(v => v.strategy_name === a.strategy_name)?.weight ?? 0;
-      const wb = winnersVotes.find(v => v.strategy_name === b.strategy_name)?.weight ?? 0;
-      return wa * a.confidence > wb * b.confidence ? a : b;
-    });
+    // Use the precomputed weights.
+    const best = winnerSignals.reduce(
+      (a, b) => {
+        const wa =
+          winnersVotes.find(
+            v => v.strategy_name === a.strategy_name,
+          )?.weight ?? 0;
+
+        const wb =
+          winnersVotes.find(
+            v => v.strategy_name === b.strategy_name,
+          )?.weight ?? 0;
+
+        return wa * a.confidence >
+          wb * b.confidence
+          ? a
+          : b;
+      },
+    );
+
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Step 10: Build merged consensus signal
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     const mergedSignal: Signal = {
       ...best.raw_signal!,
-      source:     winnersVotes.map(v => v.strategy_name).join('+'),
-      reason:     `[CONSENSUS:${winningSide}] ` + winnersVotes.map(v => `${v.strategy_name}(w=${v.weight.toFixed(4)})`).join(' | '),
-      confidence: Math.min(0.95, best.confidence),
+      source: winnersVotes
+        .map(v => v.strategy_name)
+        .join('+'),
+
+      reason:
+        `[CONSENSUS:${winningSide}] ` +
+        winnersVotes
+          .map(
+            v =>
+              `${v.strategy_name}` +
+              `(w=${v.weight.toFixed(4)})`,
+          )
+          .join(' | '),
+
+      confidence: Math.min(
+        0.95,
+        best.confidence,
+      ),
     };
 
-    reasoning.push(`[APPROVED] ${winningSide} ${ctx.symbol} weight=${total_weight.toFixed(4)} dom=${dominance_ratio.toFixed(3)} voters=${winnersVotes.length}`);
-    this.logger.info(JSON.stringify({
-      event: 'CONSENSUS_APPROVED', symbol: ctx.symbol, side: winningSide,
-      total_weight: total_weight.toFixed(4), dominance: dominance_ratio.toFixed(4),
-      voters: winnersVotes.length,
-    }));
+    reasoning.push(
+      `[APPROVED] ` +
+      `${winningSide} ${ctx.symbol} ` +
+      `weight=${total_weight.toFixed(4)} ` +
+      `dom=${dominance_ratio.toFixed(3)} ` +
+      `voters=${winnersVotes.length}`,
+    );
+
+    this.logger.info(
+      JSON.stringify({
+        event: 'CONSENSUS_APPROVED',
+        symbol: ctx.symbol,
+        side: winningSide,
+        total_weight: total_weight.toFixed(4),
+        buy_weight: total_buy_weight.toFixed(4),
+        sell_weight: total_sell_weight.toFixed(4),
+        dominance: dominance_ratio.toFixed(4),
+        voters: winnersVotes.length,
+        active_strategies: activeEntries.length,
+      }),
+    );
 
     return {
-      outcome:           winningSide,
-      block_reason:      'APPROVED',
-      signal:            mergedSignal,
+      outcome: winningSide,
+      block_reason: 'APPROVED',
+      signal: mergedSignal,
+
       total_buy_weight,
       total_sell_weight,
       dominance_ratio,
+
       active_strategies: activeEntries.length,
+
       votes,
-      disabled_strategies: disabledSummary,
+
+      disabled_strategies:
+        disabledSummary,
+
       reasoning,
-      timestamp:         ctx.timestamp,
-      duration_ms:       Date.now() - t0,
+
+      timestamp: ctx.timestamp,
+
+      duration_ms:
+        Date.now() - t0,
     };
   }
 
-  // ─── Weight formula ───────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Weight formula
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /**
-   * [FIX-1] Weight formula with bootstrap for new strategies.
+   * Compute strategy vote weight.
    *
-   * Established strategies (enough trade history):
-   *   weight = max(0, sharpe) × rolling_win_rate × confidence
+   * Established strategy:
    *
-   * New strategies (< min_trades_for_gate):
-   *   weight = BOOTSTRAP_SHARPE × rolling_win_rate × confidence
-   *   This gives them a non-zero vote weight while they build history.
-   *   The weight is capped at 50% of max possible to not overpower veterans.
+   *   weight =
+   *     max(0, sharpe)
+   *     Ã— rolling_win_rate
+   *     Ã— confidence
+   *
+   * New strategy:
+   *
+   *   weight =
+   *     BOOTSTRAP_SHARPE
+   *     Ã— BOOTSTRAP_WIN_RATE
+   *     Ã— confidence
+   *
+   * New strategies are capped so that one fresh strategy
+   * cannot dominate the whole consensus.
    */
-  private computeWeight(ss: StrategySignal, isNew: boolean): number {
-    const sharpe  = isNew ? BOOTSTRAP_SHARPE : Math.max(0, ss.metrics.sharpe_ratio);
-    const rollWR  = Math.max(0.1, ss.metrics.rolling_win_rate); // floor at 0.1
-    const conf    = Math.max(0, ss.confidence);
-    const weight  = sharpe * rollWR * conf;
+  private computeWeight(
+    ss: StrategySignal,
+    isNew: boolean,
+  ): number {
+    const conf = Math.max(
+      0,
+      Math.min(1, ss.confidence),
+    );
 
-    // New strategies capped at 50% to prevent them from dominating
-    if (isNew) return Math.min(weight, 0.5 * BOOTSTRAP_SHARPE * 1.0 * 1.0);
-    return weight;
+    // Fresh strategy:
+    // use neutral priors instead of the old 10% win-rate floor.
+    if (isNew) {
+      const weight =
+        BOOTSTRAP_SHARPE *
+        BOOTSTRAP_WIN_RATE *
+        conf;
+
+      return Math.min(
+        weight,
+        NEW_STRATEGY_MAX_WEIGHT,
+      );
+    }
+
+    // Established strategy:
+    // use actual historical performance.
+    const sharpe = Math.max(
+      0,
+      ss.metrics.sharpe_ratio,
+    );
+
+    const rollWR = Math.max(
+      0.10,
+      Math.min(
+        1,
+        ss.metrics.rolling_win_rate,
+      ),
+    );
+
+    return sharpe * rollWR * conf;
   }
 
-  // ─── NO_TRADE factory ─────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // NO_TRADE factory
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private noTrade(
-    reason: BlockReason, buyW: number, sellW: number,
-    votes: VoteDetail[], disabled: Array<{ name: string; reason: string }>,
-    reasoning: string[], t0: number,
+    reason: BlockReason,
+    buyW: number,
+    sellW: number,
+    votes: VoteDetail[],
+    disabled: Array<{
+      name: string;
+      reason: string;
+    }>,
+    reasoning: string[],
+    t0: number,
   ): ConsensusResult {
     return {
-      outcome:           'NO_TRADE',
-      block_reason:      reason,
-      signal:            null,
-      total_buy_weight:  buyW,
+      outcome: 'NO_TRADE',
+
+      block_reason: reason,
+
+      signal: null,
+
+      total_buy_weight: buyW,
+
       total_sell_weight: sellW,
-      dominance_ratio:   0,
-      active_strategies: this.registry.getActive().length,
-      votes, disabled_strategies: disabled, reasoning,
-      timestamp:  Date.now(),
-      duration_ms: Date.now() - t0,
+
+      dominance_ratio: 0,
+
+      active_strategies:
+        this.registry.getActive().length,
+
+      votes,
+
+      disabled_strategies: disabled,
+
+      reasoning,
+
+      timestamp: Date.now(),
+
+      duration_ms:
+        Date.now() - t0,
     };
   }
 }
