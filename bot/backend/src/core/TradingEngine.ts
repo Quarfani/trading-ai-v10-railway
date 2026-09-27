@@ -597,6 +597,40 @@ export class TradingEngine extends EventEmitter {
           return;
         }
 
+        // H4 context cache
+        // Fetch H4 once per symbol/cycle for higher-timeframe confirmation.
+        // H4 failure does not block the symbol because not every strategy requires H4 data.
+        try {
+          const h4 = await this.scanner.fetchCandles(
+            symbol,
+            'H4',
+            250,
+          );
+
+          if (h4.length >= 50) {
+            this.h4Cache[symbol] = h4;
+
+            this.logger.info(
+              `[PIPELINE_DATA] ${symbol} H4 cache=${h4.length}`,
+            );
+          } else {
+            delete this.h4Cache[symbol];
+
+            this.logger.warn(
+              `[PIPELINE_DATA] ${symbol} H4 insufficient candles=${h4.length}`,
+            );
+          }
+        } catch (e: any) {
+          // Never keep stale H4 data after a failed refresh.
+          delete this.h4Cache[symbol];
+
+          this.logger.warn(
+            `[PIPELINE_DATA] ${symbol} H4 unavailable: ${
+              e?.message ?? String(e)
+            }`,
+          );
+        }
+
         for (const tf of this.config.timeframes) {
           if (
             !this.isRunning ||

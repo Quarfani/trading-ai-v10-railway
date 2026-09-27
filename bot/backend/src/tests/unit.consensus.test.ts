@@ -124,7 +124,7 @@ describe('StrategyConsensusEngine', () => {
     expect(r.signal).not.toBeNull();
   });
 
-  test('CONFLICT_BLOCKED when BUY + SELL present', () => {
+  test('LOW_DOMINANCE when BUY + SELL conflict lacks dominance', () => {
     const reg = new StrategyRegistry(mockDb);
     reg.register(mockStrategy('TREND', 'BUY',  0.80));
     reg.register(mockStrategy('RSI',   'SELL', 0.75));
@@ -135,7 +135,7 @@ describe('StrategyConsensusEngine', () => {
     const eng = new StrategyConsensusEngine(reg);
     const r   = eng.run(testCtx);
     expect(r.outcome).toBe('NO_TRADE');
-    expect(r.block_reason).toBe('CONFLICT_BLOCKED');
+    expect(r.block_reason).toBe('LOW_DOMINANCE');
     expect(r.signal).toBeNull();
   });
 
