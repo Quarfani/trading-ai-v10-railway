@@ -93,17 +93,46 @@ try {
   Write-Host "     SHA256: $hash"
 
   Write-Host "[3/5] Uploading to MEGA..."
-  & mega-mkdir -p $megaFolder | Out-Null
-  & mega-put $dbFile "$megaFolder/"
-  if ($LASTEXITCODE -ne 0) { throw 'mega-put failed for SQLite backup.' }
-  & mega-put $shaFile "$megaFolder/"
-  if ($LASTEXITCODE -ne 0) { throw 'mega-put failed for SHA-256 sidecar.' }
+  # Create the remote folder only if it does not already exist.
+$__megaEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& mega-ls $megaFolder 2>$null | Out-Null
+$__megaFolderLsExit = $LASTEXITCODE
+
+if ($__megaFolderLsExit -ne 0) {
+  & mega-mkdir -p $megaFolder 2>$null | Out-Null
+  $__megaMkdirExit = $LASTEXITCODE
+} else {
+  $__megaMkdirExit = 0
+}
+
+$ErrorActionPreference = $__megaEap
+
+if ($__megaMkdirExit -ne 0) {
+  throw "mega-mkdir failed for $megaFolder."
+}
+  $__megaEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & mega-put $dbFile "$megaFolder/" 2>$null
+  $__megaPutDbExit = $LASTEXITCODE
+  $ErrorActionPreference = $__megaEap
+  if ($__megaPutDbExit -ne 0) { throw 'mega-put failed for SQLite backup.' }
+  $__megaEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & mega-put $shaFile "$megaFolder/" 2>$null
+  $__megaPutShaExit = $LASTEXITCODE
+  $ErrorActionPreference = $__megaEap
+  if ($__megaPutShaExit -ne 0) { throw 'mega-put failed for SHA-256 sidecar.' }
 
   if ($verifyRemote) {
     Write-Host "[4/5] Verifying remote copy by downloading it once..."
     Get-ChildItem -LiteralPath $verifyDir -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
-    & mega-get "$megaFolder/$fileName" $verifyDir
-    if ($LASTEXITCODE -ne 0) { throw 'mega-get failed during remote verification.' }
+    $__megaEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & mega-get "$megaFolder/$fileName" $verifyDir 2>$null
+    $__megaGetExit = $LASTEXITCODE
+    $ErrorActionPreference = $__megaEap
+    if ($__megaGetExit -ne 0) { throw 'mega-get failed during remote verification.' }
     $remote = Get-ChildItem -LiteralPath $verifyDir -File | Select-Object -First 1
     if (-not $remote) { throw 'Remote verification returned no file.' }
     $remoteHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $remote.FullName).Hash.ToLowerInvariant()
@@ -116,8 +145,12 @@ try {
   }
 
   Write-Host "[5/5] Listing MEGA backup folder..."
+  $__megaEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   & mega-ls $megaFolder
-  if ($LASTEXITCODE -ne 0) { throw 'mega-ls failed.' }
+  $__megaListExit = $LASTEXITCODE
+  $ErrorActionPreference = $__megaEap
+  if ($__megaListExit -ne 0) { throw 'mega-ls failed.' }
 
   Write-Host "`nBACKUP OK"
   Write-Host "Remote: $megaFolder/$fileName"
