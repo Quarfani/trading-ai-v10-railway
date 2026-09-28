@@ -25,6 +25,7 @@ api.interceptors.response.use(
 export const API = {
   health: () => api.get('/api/health'),
   status: () => api.get('/api/status'),
+  paperStats: () => api.get('/api/paper/stats'),
   consensus: () => api.get('/api/consensus'),
   consensusLog: (n = 50) => api.get(`/api/consensus/log?n=${n}`),
   positions: () => api.get('/api/positions'),
@@ -32,67 +33,6 @@ export const API = {
   openTrades: () => api.get('/api/trades/open'),
   equity: () => api.get('/api/equity'),
   signals: (n = 50) => api.get(`/api/signals?limit=${n}`),
-  paperStats: async () => {
-    const [statusRes, tradesRes] = await Promise.all([
-      api.get('/api/status'),
-      api.get('/api/trades?limit=500'),
-    ]);
-
-    const performance = statusRes.data?.performance ?? {};
-    const rows = Array.isArray(tradesRes.data?.trades)
-      ? tradesRes.data.trades
-      : [];
-
-    const closed = rows.filter((t: any) =>
-      String(t?.status ?? '').toLowerCase() === 'closed' ||
-      t?.closedAt != null
-    );
-
-    const profits = closed.map((t: any) => Number(t?.profit ?? 0))
-      .filter((v: number) => Number.isFinite(v));
-
-    const wins = profits.filter((v: number) => v > 0);
-    const losses = profits.filter((v: number) => v <= 0);
-
-    const grossWin = wins.reduce((s: number, v: number) => s + v, 0);
-    const grossLoss = Math.abs(
-      losses.reduce((s: number, v: number) => s + v, 0)
-    );
-
-    const avgWin = wins.length ? grossWin / wins.length : 0;
-    const avgLoss = losses.length ? grossLoss / losses.length : 0;
-
-    const totalPnl = profits.reduce((s: number, v: number) => s + v, 0);
-
-    const stats = {
-      trades: closed.length,
-      wins: wins.length,
-      losses: losses.length,
-      winRate: closed.length ? wins.length / closed.length : 0,
-      profitFactor:
-        grossLoss > 0
-          ? grossWin / grossLoss
-          : grossWin > 0
-            ? Infinity
-            : 0,
-      avgWin,
-      avgLoss,
-      riskReward: avgLoss > 0 ? avgWin / avgLoss : 0,
-      totalPnl,
-      roi: 0,
-      maxDrawdownPct: 0,
-      balance:
-        Number.isFinite(Number(performance?.equity))
-          ? Number(performance.equity)
-          : undefined,
-      equityCurve: [],
-    };
-
-    return {
-      ...statusRes,
-      data: stats,
-    };
-  },
   recovery: () => api.get('/api/recovery'),
   journal: (n = 50) => api.get(`/api/journal?limit=${n}`),
   journalGrades: () => api.get('/api/journal/grades'),
