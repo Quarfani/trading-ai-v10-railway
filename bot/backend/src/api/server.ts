@@ -7,6 +7,9 @@
  * [NEW] /api/backtest   — يدعم async backtesting
  */
 import express, { Express, Request, Response, NextFunction } from 'express';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import cors    from 'cors';
 import { z }   from 'zod';
 import { TradingEngine }       from '../core/TradingEngine';
@@ -104,6 +107,56 @@ export function createApi(engine: TradingEngine) {
     res.json({ trades: engine['db'].getRecentTrades(limit) });
   });
 
+  // â”€â”€ Railway -> Windows backup bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Creates a consistent SQLite snapshot without exposing the live DB path.
+  app.get('/api/backup/sqlite', requireRole('admin'), (_req: Request, res: Response) => {
+    const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trading-ai-db-'));
+    const snapshotName = `trading-db-${Date.now()}.sqlite`;
+    const snapshotPath = path.join(tmpDir, snapshotName);
+    const cleanup = () => {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    };
+
+    try {
+      const db = engine['db']?.raw?.();
+      if (!db) {
+        cleanup();
+        return res.status(503).json({ error: 'Database is not ready' });
+      }
+
+      // VACUUM INTO creates a consistent SQLite snapshot while the live DB remains online.
+      const escapedPath = snapshotPath.replace(/'/g, "''");
+      db.exec(`VACUUM INTO '${escapedPath}'`);
+
+      const size = fs.statSync(snapshotPath).size;
+      if (!Number.isFinite(size) || size <= 0) {
+        cleanup();
+        return res.status(500).json({ error: 'Backup snapshot is empty' });
+      }
+      if (size > MAX_BACKUP_BYTES) {
+        cleanup();
+        return res.status(413).json({ error: 'Backup snapshot exceeds 256 MB safety limit' });
+      }
+
+      res.setHeader('Content-Type', 'application/x-sqlite3');
+      res.setHeader('Content-Length', String(size));
+      res.setHeader('Content-Disposition', `attachment; filename="${snapshotName}"`);
+      res.setHeader('X-Backup-Method', 'sqlite-vacuum-into');
+      res.setHeader('X-Backup-Size', String(size));
+      res.on('finish', cleanup);
+      res.on('close', cleanup);
+
+      return res.sendFile(snapshotPath, (err) => {
+        if (err) log.error(`[BackupAPI] SQLite download failed: ${err.message}`);
+        cleanup();
+      });
+    } catch (e: any) {
+      cleanup();
+      log.error(`[BackupAPI] Snapshot failed: ${e?.message ?? String(e)}`);
+      return res.status(500).json({ error: 'Database backup failed' });
+    }
+  });
   app.get('/api/trades/open', (_: Request, res: Response) =>
     res.json({ trades: engine['db'].getOpenTrades() })
   );

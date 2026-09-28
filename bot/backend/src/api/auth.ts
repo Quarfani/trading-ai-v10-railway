@@ -42,6 +42,17 @@ if (liveMode) {
 }
 
 const EFFECTIVE_SECRET = SECRET;
+const BACKUP_API_TOKEN = process.env.BACKUP_API_TOKEN ?? '';
+if (BACKUP_API_TOKEN && BACKUP_API_TOKEN.length < 32) {
+  throw new Error('[Auth] BACKUP_API_TOKEN must be at least 32 characters when configured.');
+}
+
+function safeTokenEquals(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 10;
 const WINDOW_MS = 15 * 60_000;
@@ -105,6 +116,11 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   const PUBLIC = ['/', '/api/auth/login', '/api/health', '/health', '/ready', '/liveness'];
   if (PUBLIC.includes(req.path)) return next();
 
+  const backupHeader = req.header('x-backup-token') ?? '';
+  if (req.path === '/api/backup/sqlite' && safeTokenEquals(backupHeader, BACKUP_API_TOKEN)) {
+    req.user = { role: 'admin' };
+    return next();
+  }
   const auth = req.header('authorization') ?? '';
   const token = auth.replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'No token provided' });
