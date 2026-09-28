@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CONSENSUS ENGINE — UNIT TESTS
  * Tests for: StrategyRegistry, PerformanceGate, StrategyConsensusEngine
  */
@@ -168,6 +168,30 @@ describe('StrategyConsensusEngine', () => {
     const r   = eng.run(testCtx);
     expect(r.outcome).toBe('NO_TRADE');
     expect(r.block_reason).toBe('SINGLE_STRATEGY_LOW_CONFIDENCE');
+  });
+
+  test('allows a single high-confidence strategy through the weight gate', () => {
+    const reg = new StrategyRegistry(mockDb);
+
+    reg.register(mockStrategy('ICHIMOKU', 'SELL', 0.80));
+
+    const e = reg.getAll().get('ICHIMOKU')!;
+    e.metrics = {
+      ...EMPTY_METRICS_DEFAULT,
+      total_trades: 0,
+      rolling_trades: 0,
+    };
+
+    const eng = new StrategyConsensusEngine(reg, {
+      minimum_total_weight: 0.25,
+      dominance_ratio: 0.60,
+    });
+
+    const r = eng.run(testCtx);
+
+    expect(r.outcome).toBe('SELL');
+    expect(r.block_reason).toBe('APPROVED');
+    expect(r.signal).not.toBeNull();
   });
 
   test('reasoning array is non-empty and structured', () => {

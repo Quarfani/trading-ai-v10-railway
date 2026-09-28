@@ -294,7 +294,40 @@ export class StrategyConsensusEngine {
     // Step 6: Minimum total weight
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    if (total_weight < this.cfg.minimum_total_weight) {
+    const singleHighConfidence =
+      votes.length === 1 &&
+      Number.isFinite(Number(votes[0].confidence)) &&
+      Number(votes[0].confidence) >= 0.72;
+
+    const bypassWeightGateForSingle =
+      singleHighConfidence &&
+      total_weight < this.cfg.minimum_total_weight;
+
+    if (bypassWeightGateForSingle) {
+      const singleVote = votes[0];
+
+      reasoning.push(
+        `[SINGLE_STRATEGY_PASS] ` +
+        `${singleVote.strategy_name} ` +
+        `confidence=${Number(singleVote.confidence).toFixed(4)} ` +
+        `weight=${singleVote.weight.toFixed(6)} ` +
+        `bypasses minimum total weight=${this.cfg.minimum_total_weight.toFixed(6)} ` +
+        `because no competing vote exists`,
+      );
+
+      this.logger.info(
+        `[CONSENSUS_SINGLE_PASS] ${ctx.symbol} ` +
+        `strategy=${singleVote.strategy_name} ` +
+        `confidence=${Number(singleVote.confidence).toFixed(4)} ` +
+        `weight=${singleVote.weight.toFixed(6)} ` +
+        `minimum=${this.cfg.minimum_total_weight.toFixed(6)}`,
+      );
+    }
+
+    if (
+      total_weight < this.cfg.minimum_total_weight &&
+      !bypassWeightGateForSingle
+    ) {
       reasoning.push(
         `[INSUFFICIENT_WEIGHT] ` +
         `total=${total_weight.toFixed(4)} ` +
