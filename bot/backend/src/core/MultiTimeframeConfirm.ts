@@ -13,6 +13,7 @@
  * [NEW]   يُرجع QualityBonus بدلاً من boolean جزئي لتغذية ConsensusEngine
  */
 import { EMA, RSI, MACD } from 'technicalindicators';
+import { calculateATR } from '../utils/ATR';
 import { Candle, Side }   from '../types/trading.types';
 import { MarketScanner }  from './MarketScanner';
 import { Logger }         from '../utils/Logger';
@@ -26,6 +27,7 @@ export interface MTFResult {
 
 // [FIX-1] MACD histogram dead-zone (don't reject if within ±threshold)
 const MACD_HIST_THRESHOLD = 0.0005;
+const MACD_HIST_ATR_MULT = 0.30;
 
 export class MultiTimeframeConfirm {
   private logger = new Logger('MTF');
@@ -96,12 +98,26 @@ export class MultiTimeframeConfirm {
       });
       const hist = macdR[macdR.length - 1]?.histogram;
       if (hist !== undefined && hist !== null) {
-        const neutral = Math.abs(hist) < MACD_HIST_THRESHOLD;
+        const atr = calculateATR(candles.slice(-50), 14);
+        const macdNeutralThreshold = Math.max(
+          MACD_HIST_THRESHOLD,
+          atr > 0 ? atr * MACD_HIST_ATR_MULT : 0,
+        );
+
+        const neutral = Math.abs(hist) < macdNeutralThreshold;
+
         if (!neutral) {
-          if (side === 'BUY'  && hist < -MACD_HIST_THRESHOLD)
-            return { ok: false, reason: `${label} MACD histogram bearish (${hist.toFixed(6)})` };
-          if (side === 'SELL' && hist > MACD_HIST_THRESHOLD)
-            return { ok: false, reason: `${label} MACD histogram bullish (${hist.toFixed(6)})` };
+          if (side === 'BUY' && hist < -macdNeutralThreshold)
+            return {
+              ok: false,
+              reason: `${label} MACD histogram bearish (${hist.toFixed(6)}) threshold=${macdNeutralThreshold.toFixed(6)}`,
+            };
+
+          if (side === 'SELL' && hist > macdNeutralThreshold)
+            return {
+              ok: false,
+              reason: `${label} MACD histogram bullish (${hist.toFixed(6)}) threshold=${macdNeutralThreshold.toFixed(6)}`,
+            };
         }
       }
     } catch { /* pass */ }
