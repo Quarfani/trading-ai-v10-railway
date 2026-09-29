@@ -34,7 +34,7 @@ export function loadConfig(): SystemConfig {
   }
 
   const mode = env('MODE', deploymentProfile === 'railway-paper' ? 'paper' : 'paper') as Mode;
-  const dataSource = env('DATA_SOURCE', deploymentProfile === 'railway-paper' ? 'binance' : (mode === 'mt5' ? 'mt5' : mode === 'binance' ? 'binance' : 'auto')) as DataSource;
+  const dataSource = env('DATA_SOURCE', deploymentProfile === 'railway-paper' ? 'auto' : (mode === 'mt5' ? 'mt5' : mode === 'binance' ? 'binance' : 'auto')) as DataSource;
   if (!VALID_DATA_SOURCES.includes(dataSource)) throw new Error(`[Config] DATA_SOURCE must be one of ${VALID_DATA_SOURCES.join(', ')}`);
 
   if (!VALID_MODES.includes(mode)) {
@@ -63,9 +63,9 @@ export function loadConfig(): SystemConfig {
 
   if (deploymentProfile === 'railway-paper') {
     if (mode !== 'paper') throw new Error('[Config] railway-paper profile only permits MODE=paper');
-    if (dataSource !== 'binance') throw new Error('[Config] railway-paper profile requires DATA_SOURCE=binance');
-    if (!symbols.every(s => /(USDT|USDC|BUSD)$/.test(s.toUpperCase().replace(/[^A-Z0-9]/g, '')))) {
-      throw new Error('[Config] railway-paper profile only supports Binance quote symbols (USDT/USDC/BUSD)');
+    if (dataSource !== 'binance' && dataSource !== 'auto') throw new Error('[Config] railway-paper profile requires DATA_SOURCE=binance or DATA_SOURCE=auto');
+    if (dataSource === 'binance' && !symbols.every(s => /(USDT|USDC|BUSD)$/.test(s.toUpperCase().replace(/[^A-Z0-9]/g, '')))) {
+      throw new Error('[Config] railway-paper profile with DATA_SOURCE=binance only supports Binance quote symbols (USDT/USDC/BUSD)');
     }
     if (process.env.ML_ENABLED === 'true') throw new Error('[Config] railway-paper keeps ML_ENABLED=false to protect the 1GB trial resource budget');
     if (process.env.ML_AUTO_TRAIN_ENABLED === 'true') throw new Error('[Config] railway-paper forbids automatic ML training');
@@ -90,7 +90,8 @@ export function loadConfig(): SystemConfig {
 
   // Mode-specific required vars
   const mt5Server=env('MT5_SERVER_NAME',env('MT5_SERVER'));
-  if (mode === 'mt5' || (mode === 'paper' && dataSource === 'mt5')) {
+  const hasMt5Symbols = symbols.some(s => !/(USDT|USDC|BUSD)$/.test(s.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+  if (mode === 'mt5' || (mode === 'paper' && (dataSource === 'mt5' || (dataSource === 'auto' && hasMt5Symbols)))) {
     if (!num('MT5_LOGIN', 0)) throw new Error('[Config] MT5_LOGIN required for MT5-backed mode');
     requireEnv('MT5_PASSWORD','MT5-backed mode');
     requireEnv('MT5_BRIDGE_API_KEY','MT5-backed mode');

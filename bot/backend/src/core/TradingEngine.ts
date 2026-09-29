@@ -1336,12 +1336,12 @@ export class TradingEngine extends EventEmitter {
     ask: number;
   } | null> {
     try {
+      const normalizedSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const isBinanceSymbol = /(USDT|USDC|BUSD)$/.test(normalizedSymbol);
       const useMt5 =
         this.config.mode === 'mt5' ||
-        (
-          this.config.mode === 'paper' &&
-          this.config.dataSource === 'mt5'
-        );
+        this.config.dataSource === 'mt5' ||
+        (this.config.mode === 'paper' && this.config.dataSource === 'auto' && !isBinanceSymbol);
 
       if (useMt5) {
         const r =

@@ -90,7 +90,7 @@ export class MarketRegimeDetector {
     const atrPct = last > 0 ? atr / last : 0;
 
     // [FIX-2] ATR expansion detection
-    const atr20avg = this.avgATR(candles.slice(-30), 14, 20);
+    const atr20avg = this.avgATR(candles.slice(-50), 14, 20);
     const atrExpanded = atr20avg > 0 && atr > atr20avg * 2.0;
 
     // ── 3. Bollinger Band width ──────────────────────────────────────
