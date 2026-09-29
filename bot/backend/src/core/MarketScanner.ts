@@ -11,7 +11,7 @@ import { Logger } from '../utils/Logger';
 // Cache TTL per timeframe (ms) — بيانات M1 تتغير كل دقيقة، H4 كل 4 ساعات
 const CACHE_TTL: Record<string, number> = {
   M1: 55_000, M5: 270_000, M15: 800_000,
-  M30: 1_700_000, H1: 3_500_000, H4: 14_000_000, D1: 82_000_000,
+  M30: 1_700_000, H1: 55_000, H4: 14_000_000, D1: 82_000_000,
 };
 
 interface CacheEntry { candles: Candle[]; fetchedAt: number; requestedCount: number; }

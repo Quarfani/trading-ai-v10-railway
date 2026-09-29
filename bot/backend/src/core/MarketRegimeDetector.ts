@@ -38,7 +38,7 @@ export interface RegimeResult {
 
 const CACHE_TTL: Record<string, number> = {
   M1: 60_000, M5: 300_000, M15: 900_000,
-  M30: 1_800_000, H1: 3_600_000, H4: 14_400_000, D1: 86_400_000,
+  M30: 1_800_000, H1: 55_000, H4: 14_400_000, D1: 86_400_000,
 };
 
 export class MarketRegimeDetector {
