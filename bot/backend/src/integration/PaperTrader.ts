@@ -2,7 +2,8 @@ import { Signal, Trade, Candle } from '../types/trading.types';
 import { getSymbolSpec } from '../config/symbolConfig';
 import { Logger } from '../utils/Logger';
 
-const COMMISSION_PER_LOT = 7; // round-trip USD/lot; paper simulation setting
+const COMMISSION_PER_LOT = 7; // round-trip USD/lot for non-crypto paper trades
+const PAPER_CRYPTO_FEE_RATE = Number(process.env.PAPER_CRYPTO_FEE_RATE ?? '0.001'); // 0.10% per side
 const MAX_TRADE_AGE_MS = 48 * 3_600_000;
 
 export class PaperTrader {
@@ -70,12 +71,30 @@ export class PaperTrader {
     return true;
   }
 
+  private calculateCommission(
+    symbol: string,
+    entry: number,
+    exit: number,
+    volume: number,
+    contractSize: number,
+  ): number {
+    const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const isCrypto = /(USDT|USDC|BUSD)$/.test(normalized);
+
+    if (isCrypto) {
+      const entryNotional = Math.abs(entry * volume * contractSize);
+      const exitNotional = Math.abs(exit * volume * contractSize);
+      return (entryNotional + exitNotional) * PAPER_CRYPTO_FEE_RATE;
+    }
+
+    return COMMISSION_PER_LOT * volume * 2;
+  }
   partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL'): {ok:boolean;profit:number;remainingVolume:number}{
     const t=this.openTrades.get(ticket); if(!t || !(volume>0) || volume>=t.volume) return {ok:false,profit:0,remainingVolume:t?.volume??0};
     const spec=getSymbolSpec(t.symbol);
     const closedVolume=Math.min(volume,t.volume);
     const raw=(exitPrice-t.entry)*(t.side==='BUY'?1:-1)*closedVolume*spec.contractSize;
-    const commission=COMMISSION_PER_LOT*closedVolume*2;
+    const commission=this.calculateCommission(t.symbol,t.entry,exitPrice,closedVolume,spec.contractSize);
     const profit=raw-commission;
     t.volume=+(t.volume-closedVolume).toFixed(8);
     t.realizedProfit=(t.realizedProfit??0)+profit;
@@ -92,7 +111,7 @@ export class PaperTrader {
     const spec=getSymbolSpec(t.symbol); let fill=exitPrice;
     if(reason==='SL'){const slip=Math.random()*0.5;fill+=t.side==='BUY'?-slip*spec.pip:slip*spec.pip;}
     const raw=(fill-t.entry)*(t.side==='BUY'?1:-1)*t.volume*spec.contractSize;
-    const commission=COMMISSION_PER_LOT*t.volume*2;
+    const commission=this.calculateCommission(t.symbol,t.entry,fill,t.volume,spec.contractSize);
     const finalProfit=raw-commission;
     const profit=(t.realizedProfit??0)+finalProfit;
     this.balance+=finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
