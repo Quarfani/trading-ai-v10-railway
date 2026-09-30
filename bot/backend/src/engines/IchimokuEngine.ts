@@ -74,7 +74,10 @@ export class IchimokuEngine {
 
       const spec = getSymbolSpec(symbol);
       const sl   = Math.min(ich.kijun, ich.cloudTop) - atr * 0.3;
-      const tp   = dynamicTakeProfit('BUY', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const candidateTp = dynamicTakeProfit('BUY', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const tp = this.enforceMinimumRR(symbol, 'BUY', price, sl, candidateTp);
+
+      if (tp === null) return null;
 
       return {
         symbol, side: 'BUY', price, confidence, sl, tp,
@@ -97,7 +100,10 @@ export class IchimokuEngine {
 
       const spec = getSymbolSpec(symbol);
       const sl   = Math.max(ich.kijun, ich.cloudBot) + atr * 0.3;
-      const tp   = dynamicTakeProfit('SELL', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const candidateTp = dynamicTakeProfit('SELL', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const tp = this.enforceMinimumRR(symbol, 'SELL', price, sl, candidateTp);
+
+      if (tp === null) return null;
 
       return {
         symbol, side: 'SELL', price, confidence, sl, tp,
@@ -114,7 +120,9 @@ export class IchimokuEngine {
     if (bullScore === 3 && aboveCloud && tkBullish) {
       const spec = getSymbolSpec(symbol);
       const sl   = ich.kijun - atr * 0.5;
-      const tp   = dynamicTakeProfit('BUY', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const candidateTp = dynamicTakeProfit('BUY', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const tp = this.enforceMinimumRR(symbol, 'BUY', price, sl, candidateTp);
+      if (tp === null) return null;
       return {
         symbol, side: 'BUY', price, confidence: 0.56, sl, tp,
         source:    this.name,
@@ -126,7 +134,9 @@ export class IchimokuEngine {
     if (bearScore === 3 && belowCloud && tkBearish) {
       const spec = getSymbolSpec(symbol);
       const sl   = ich.kijun + atr * 0.5;
-      const tp   = dynamicTakeProfit('SELL', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const candidateTp = dynamicTakeProfit('SELL', price, atr, spec.atrMult * spec.tpRatio, candles);
+      const tp = this.enforceMinimumRR(symbol, 'SELL', price, sl, candidateTp);
+      if (tp === null) return null;
       return {
         symbol, side: 'SELL', price, confidence: 0.56, sl, tp,
         source:    this.name,
@@ -136,6 +146,34 @@ export class IchimokuEngine {
     }
 
     return null;
+  }
+
+  private enforceMinimumRR(
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    price: number,
+    sl: number,
+    candidateTp: number,
+  ): number | null {
+    const minRR = 1.5;
+    const risk = Math.abs(price - sl);
+
+    if (!(risk > 0) || !Number.isFinite(candidateTp)) {
+      return null;
+    }
+
+    const reward =
+      side === 'BUY'
+        ? candidateTp - price
+        : price - candidateTp;
+
+    const rr = reward / risk;
+
+    if (!(reward > 0) || rr < minRR) {
+      return null;
+    }
+
+    return candidateTp;
   }
 
   private compute(candles: Candle[]): IchimokuValues | null {
