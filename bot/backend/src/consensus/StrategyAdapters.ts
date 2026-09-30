@@ -74,10 +74,27 @@ function toStrategySignal(
     signal.tp - signal.price,
   );
 
-  const rrRatio =
+   const rrRatio =
     slDist > 0
       ? tpDist / slDist
       : 0;
+
+  if (rrRatio < 1.5) {
+    logger.info(
+      `[PIPELINE_BLOCK] ` +
+      `strategy=${name} ` +
+      `reason=low_rr ` +
+      `rr=${rrRatio.toFixed(2)}`
+    );
+
+    return {
+      signal: 'NONE',
+      confidence: 0,
+      risk_score: 1,
+      strategy_name: name,
+      raw_signal: null,
+    };
+  }
 
   const risk_score = Math.max(
     0,
@@ -87,7 +104,6 @@ function toStrategySignal(
         (1 - signal.confidence),
     ),
   );
-
   return {
     signal: signal.side as 'BUY' | 'SELL',
     confidence: signal.confidence,
