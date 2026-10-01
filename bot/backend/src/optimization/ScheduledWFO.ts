@@ -29,7 +29,8 @@ import { TelegramBot }          from '../notifications/TelegramBot';
 import { MarketScanner }        from '../core/MarketScanner';
 import { getMarketDefinition }  from '../market/MarketCatalog';
 import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeriesLoader';
-import { Logger }               from '../utils/Logger';
+import { Logger } from '../utils/Logger';
+import { EvidenceSnapshotStore } from '../analytics/EvidenceSnapshotStore';
 
 const WFO_HOUR_UTC   = 3;   // run at 03:00 UTC
 const WFO_DAY_OF_MONTH = 1; // run on the 1st of each month
@@ -42,6 +43,7 @@ export class ScheduledWFO {
   private running  = false;
 
   private wfo: WalkForwardOptimizer;
+  private readonly evidenceSnapshots: EvidenceSnapshotStore;
 
   constructor(
     private config:   SystemConfig,
@@ -50,6 +52,7 @@ export class ScheduledWFO {
     private telegram: TelegramBot,
   ) {
     this.wfo = new WalkForwardOptimizer(db.path);
+    this.evidenceSnapshots = new EvidenceSnapshotStore(db);
   }
 
   start(): void {
@@ -151,6 +154,24 @@ export class ScheduledWFO {
           );
 
           const p = result.finalParams;
+
+          const scopeKey = `${symbol}_${timeframe}_WFO`;
+          const promoted =
+            result.valid &&
+            result.recommendation === 'TRADE';
+
+          this.evidenceSnapshots.save({
+            scopeKey,
+            symbol,
+            timeframe,
+            source: 'WFO',
+            evidence: result.evidence,
+            promoted,
+            promotionReason: promoted
+              ? 'valid WFO evidence and promotion threshold passed'
+              : result.reason,
+          });
+
           results.push(
             `${symbol}/${timeframe}: ATR×${p.atrMult.toFixed(2)} TP×${p.tpRatio.toFixed(2)} ` +
             `conf=${p.minConfidence.toFixed(2)} OOS_WR=${(result.oos_winRate * 100).toFixed(1)}%`,
