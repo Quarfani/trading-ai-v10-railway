@@ -84,6 +84,7 @@ import { DataQualityGate } from './DataQualityGate';
 
 import { ConsensusOrchestrator } from '../consensus/ConsensusOrchestrator';
 import { ConsensusConfig } from '../consensus/types';
+import { DEFAULT_EVIDENCE_PROMOTION_POLICY } from '../consensus/EvidencePromotionPolicy';
 
 import { CandlestickPatternEngine } from '../engines/CandlestickPatternEngine';
 import { AdaptiveATRManager } from '../optimization/AdaptiveATRManager';
@@ -222,15 +223,7 @@ export class TradingEngine extends EventEmitter {
       config.accountBalance,
     );
 
-    const evidencePolicy = this.config.evidencePromotion ?? {
-      minSampleSize: 1,
-      minOutOfSampleTrades: 1,
-      minOutOfSampleProfitFactor: 1,
-      minWalkForwardStability: 0,
-      minParameterSensitivity: 0,
-      minRegimeCoverage: 0,
-      maxAgeMs: 30 * 24 * 3_600_000,
-    };
+    const evidencePolicy = this.config.evidencePromotion ?? DEFAULT_EVIDENCE_PROMOTION_POLICY;
 
     const consensusCfg: Partial<ConsensusConfig> = {
       minimum_total_weight:
