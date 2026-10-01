@@ -61,6 +61,8 @@ export class StartupReconciler {
       requestJson?: string | null;
     }>;
 
+    const resolvedTrades = new Set<number>();
+
     for (const row of rows) {
       if (!row.requestJson) continue;
 
@@ -73,6 +75,13 @@ export class StartupReconciler {
 
       const tradeId = Number(request?.tradeId);
       if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+
+      if (resolvedTrades.has(tradeId)) {
+        this.logger.warn(
+          `[MT5] Multiple unresolved close operations for trade id=${tradeId}; leaving additional operations blocked`,
+        );
+        continue;
+      }
 
       const trade = this.db.raw().prepare(
         `SELECT * FROM trades WHERE id=? LIMIT 1`,
@@ -92,7 +101,7 @@ export class StartupReconciler {
         if (!changed) continue;
       }
 
-      this.db.resolveExecutionLedger(
+      const resolved = this.db.resolveExecutionLedger(
         String(row.executionId),
         {
           broker: 'mt5',
@@ -104,6 +113,7 @@ export class StartupReconciler {
         },
         Number(trade.ticket),
       );
+      if (resolved) resolvedTrades.add(tradeId);
     }
   }
 
