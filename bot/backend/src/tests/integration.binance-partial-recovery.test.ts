@@ -301,7 +301,66 @@ async function main() {
   );
   assert(nullFull.ok === false, "full close must fail closed when position verification is unavailable");
 
-  console.log("Result: 11 passed, 0 failed");
+  const multiSide = new BinanceExecutor(config());
+  (multiSide as any).signedGet = async () => ([
+    { symbol: "BTCUSDT", positionAmt: "1", entryPrice: "50000", unRealizedProfit: "0" },
+    { symbol: "BTCUSDT", positionAmt: "-0.2", entryPrice: "51000", unRealizedProfit: "0" },
+  ]);
+  let multiSideBlocked = false;
+  try {
+    await multiSide.getPosition("BTCUSDT");
+  } catch {
+    multiSideBlocked = true;
+  }
+  assert(multiSideBlocked, "multiple live Binance position sides must fail closed");
+
+  const qtyMismatchDb = new DatabaseManager(":memory:");
+  await qtyMismatchDb.initialize();
+  const qtyMismatchTradeId = qtyMismatchDb.insertTrade({
+    ticket: 9400, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 1,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "BINANCE_QTY_MISMATCH",
+  } as any);
+  qtyMismatchDb.createExecutionLedger({
+    executionId: "qty-mismatch-full",
+    operationKey: "qty-mismatch-full-op",
+    action: "CLOSE",
+    status: "UNKNOWN",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 1,
+    request: { tradeId: qtyMismatchTradeId },
+  });
+  const qtyMismatchExec = {
+    getBinancePosition: async () => null,
+    reconcileBinanceFullClose: async () => ({
+      ok: true,
+      orderId: 70100,
+      executedQty: 0.4,
+      remainingVolume: 0,
+      realizedProfit: 10,
+    }),
+  } as any;
+  const qtyMismatchReconciler = new Reconciler(
+    config(), qtyMismatchDb, qtyMismatchExec,
+    { sendMessage: async () => {} } as any,
+    { recordClose: () => {} } as any,
+    {} as any,
+    { activate: async () => {} } as any,
+    () => {},
+  );
+  let qtyMismatchBlocked = false;
+  try {
+    await (qtyMismatchReconciler as any).reconcileOne(qtyMismatchDb.getOpenTrades()[0]);
+  } catch {
+    qtyMismatchBlocked = true;
+  }
+  assert(qtyMismatchBlocked, "Binance full-close recovery must reject a partial historical fill");
+  assert(qtyMismatchDb.getOpenTrades()[0].status === "open", "quantity-mismatch recovery must not mutate trade");
+  assert(qtyMismatchDb.getExecutionByOperationKey("qty-mismatch-full-op").status === "UNKNOWN", "quantity-mismatch recovery must preserve UNKNOWN");
+  qtyMismatchDb.raw().close();
+
+  console.log("Result: 13 passed, 0 failed");
 }
 
 main().catch(error => {
