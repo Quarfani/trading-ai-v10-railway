@@ -99,7 +99,7 @@ export class Backtester {
     });
 
     marketRegimeDetector.invalidate(symbol);
-    const spec = getSymbolSpec(symbol);
+    const spec = getSymbolSpec(symbol, timeframe);
     const costProfile = getCostProfile(symbol);
     const market = getMarketDefinition(symbol);
     const accountCurrency = (this.config.accountCurrency ?? 'USD').toUpperCase();
