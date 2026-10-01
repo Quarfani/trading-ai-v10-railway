@@ -316,6 +316,94 @@ export class Reconciler {
       }
   }
 
+  private async tryReconcileBinanceAuthoritativeClose(t: Trade): Promise<boolean> {
+    if (!t.id) return false;
+
+    const operation = this.db.getLatestUnresolvedExecutionForTrade(
+      t.id,
+      ['CLOSE', 'CLOSE_AT_MARKET'],
+    );
+    if (!operation) return false;
+
+    const result = await this.exec.reconcileBinanceCloseByOperation(
+      t.symbol,
+      String(operation.operationKey),
+    );
+    if (!result.found) return false;
+
+    const status = String(result.status ?? '').toUpperCase();
+    if (['CANCELED', 'REJECTED', 'EXPIRED'].includes(status)) {
+      this.db.updateExecutionLedger(String(operation.executionId), {
+        status: 'FAILED',
+        error: 'Binance close order ' + String(operation.operationKey) + ' was ' + status,
+      });
+      return false;
+    }
+    if (status !== 'FILLED') return false;
+
+    const expectedQty = Number(t.volume);
+    const executedQty = Number(result.executedQty ?? 0);
+    if (!(expectedQty > 0) || !(executedQty > 0) ||
+        !Number.isFinite(expectedQty) || !Number.isFinite(executedQty) ||
+        executedQty + Math.max(1e-12, expectedQty * 1e-8) < expectedQty) {
+      return false;
+    }
+
+    const position = await this.exec.getBinancePosition(t.symbol);
+    if (position && Math.abs(Number(position.positionAmt)) > Math.max(1e-12, expectedQty * 1e-8)) {
+      return false;
+    }
+
+    const profitCurrency = String(result.realizedProfitCurrency ?? '').trim().toUpperCase();
+    const accountCurrency = String(this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+    const stable = new Set(['USD', 'USDT', 'USDC', 'BUSD']);
+    const brokerProfit = Number(result.realizedProfit);
+    if (!Number.isFinite(brokerProfit) ||
+        !(profitCurrency === accountCurrency || (stable.has(profitCurrency) && stable.has(accountCurrency)))) {
+      return false;
+    }
+
+    const cumulativeProfit = Number(t.realizedProfit ?? 0) + brokerProfit;
+    if (!Number.isFinite(cumulativeProfit)) return false;
+
+    let reason = 'MANUAL';
+    if (operation.requestJson) {
+      try {
+        reason = String(JSON.parse(operation.requestJson)?.reason ?? 'MANUAL');
+      } catch {
+        return false;
+      }
+    }
+
+    const closedAt = Number(result.updatedAt ?? 0) > 0 ? Number(result.updatedAt) : Date.now();
+    const resolved = this.db.resolveReconciledFullClose(
+      t.id,
+      String(operation.executionId),
+      cumulativeProfit,
+      closedAt,
+      reason,
+      {
+        broker: 'binance',
+        ticket: Number(t.ticket),
+        operationKey: String(operation.operationKey),
+        orderId: result.orderId,
+        executedQty,
+        brokerProfit,
+        realizedProfitCurrency: result.realizedProfitCurrency,
+        cumulativeProfit,
+        runtimeReconciliation: true,
+      },
+      result.orderId,
+    );
+    if (!resolved) return false;
+
+    this.tracker.recordClose(cumulativeProfit);
+    await this.telegram.sendMessage(
+      `✅ <b>Binance close reconciled</b>: ${t.symbol} ${t.side}\nP/L: ${cumulativeProfit > 0 ? '+' : ''}$${cumulativeProfit.toFixed(2)}`
+    ).catch(() => {});
+    this.onClose({ ...t, status: 'closed', profit: cumulativeProfit, closedAt });
+    return true;
+  }
   // ─── Common close + record ─────────────────────────────────────────
 
   private async closeAndRecord(
