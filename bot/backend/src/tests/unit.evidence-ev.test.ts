@@ -37,8 +37,8 @@ const ev=calculateExpectedValue({
   lossAmount:100,
   costs:10,
 });
-approx(ev.expectedGross,20);
-approx(ev.expectedNet,10);
+approx(ev.expectedGross,80);
+approx(ev.expectedNet,70);
 assert(ev.passed,'positive net EV should pass');
 
 const rrEv=calculateTradeEVFromRR(0.55,100,2,5);

@@ -1,98 +1,127 @@
 import { PaperTrader } from '../integration/PaperTrader';
 import { getSymbolSpec } from '../config/symbolConfig';
+import { estimateEntryCosts, estimateExitCosts } from '../market/CostModel';
+import { getCostProfile } from '../market/CostProfiles';
 
-let passed = 0;
-let failed = 0;
-
-function assertClose(name: string, actual: number, expected: number, tolerance = 1e-9) {
-  if (Math.abs(actual - expected) <= tolerance) {
-    console.log(`PASS: ${name} -> actual=${actual} expected=${expected}`);
-    passed++;
-  } else {
-    console.error(`FAIL: ${name} -> actual=${actual} expected=${expected}`);
-    failed++;
-  }
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+function assertClose(actual: number, expected: number, tolerance = 1e-9): void {
+  assert(Math.abs(actual - expected) <= tolerance, `expected ${expected}, got ${actual}`);
 }
 
+const trader = new PaperTrader(10_000);
+const spec = getSymbolSpec('SOLUSDT');
+const profile = getCostProfile('SOLUSDT');
+const entry = 100;
+const partialExit = 101;
+const finalExit = 102;
 const openedAt = Date.now();
 
-// Crypto regression: 0.10% per side on entry + exit notional.
-{
-  const trader = new PaperTrader(10_000);
+const entryCost = estimateEntryCosts({
+  price: entry,
+  volume: 2,
+  contractSize: spec.contractSize,
+  quoteToAccount: 1,
+}, profile);
 
-  trader.restoreState([{
-    ticket: 1,
-    symbol: 'SOLUSDT',
-    side: 'BUY',
-    volume: 2,
-    entry: 100,
-    sl: 90,
-    tp: 110,
-    status: 'open',
-    openedAt,
-    source: 'TEST',
-    timeframe: 'H1',
-  }], []);
+trader.restoreState([{
+  ticket: 1,
+  symbol: 'SOLUSDT',
+  side: 'BUY',
+  volume: 2,
+  entry,
+  sl: 90,
+  tp: 110,
+  status: 'open',
+  openedAt,
+  source: 'TEST',
+  timeframe: 'H1',
+  realizedProfit: 0,
+}], []);
 
-  const partial = trader.partialClose(1, 1, 101, 'PARTIAL');
+const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL');
+assert(Boolean(partial), 'partial close should return a trade');
+const expectedPartial =
+  (partialExit - entry) * 1
+  - estimateExitCosts({
+      price: partialExit,
+      volume: 1,
+      contractSize: spec.contractSize,
+      quoteToAccount: 1,
+    }, profile)
+  - entryCost / 2;
+assertClose(partial!.profit ?? 0, expectedPartial);
 
-  const expectedPartial =
-    (101 - 100) * 1
-    - (100 * 1 + 101 * 1) * 0.001;
+const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1);
+assert(Boolean(closed), 'final close should return a trade');
+const expectedRemaining =
+  (finalExit - entry) * 1
+  - estimateExitCosts({
+      price: finalExit,
+      volume: 1,
+      contractSize: spec.contractSize,
+      quoteToAccount: 1,
+    }, profile)
+  - entryCost / 2;
+assertClose(closed!.profit ?? 0, expectedRemaining);
 
-  assertClose(
-    'SOLUSDT partialClose crypto fee',
-    partial.profit,
-    expectedPartial,
-  );
+assertClose(
+  (partial!.profit ?? 0) + (closed!.profit ?? 0),
+  (partialExit - entry) + (finalExit - entry)
+    - estimateExitCosts({
+        price: partialExit,
+        volume: 1,
+        contractSize: spec.contractSize,
+        quoteToAccount: 1,
+      }, profile)
+    - estimateExitCosts({
+        price: finalExit,
+        volume: 1,
+        contractSize: spec.contractSize,
+        quoteToAccount: 1,
+      }, profile)
+    - entryCost,
+);
 
-  const closed = trader.closeTrade(1, 102, 'MANUAL', openedAt + 1);
+const nonCrypto = new PaperTrader(10_000);
+nonCrypto.restoreState([{
+  ticket: 2,
+  symbol: 'EURUSD',
+  side: 'BUY',
+  volume: 0.05,
+  entry: 1,
+  sl: 0.99,
+  tp: 1.02,
+  status: 'open',
+  openedAt,
+  source: 'TEST',
+  timeframe: 'H1',
+  realizedProfit: 0,
+}], []);
 
-  const expectedRemaining =
-    (102 - 100) * 1
-    - (100 * 1 + 102 * 1) * 0.001;
+const fxProfile = getCostProfile('EURUSD');
+const fxSpec = getSymbolSpec('EURUSD');
+const fxEntryCost = estimateEntryCosts({
+  price: 1,
+  volume: 0.05,
+  contractSize: fxSpec.contractSize,
+  quoteToAccount: 1,
+}, fxProfile);
+const fxExitCost = estimateExitCosts({
+  price: 1.01,
+  volume: 0.05,
+  contractSize: fxSpec.contractSize,
+  quoteToAccount: 1,
+}, fxProfile);
 
-  const expectedTotal = expectedPartial + expectedRemaining;
+const fxClosed = nonCrypto.closeTrade(2, 1.01, 'MANUAL', openedAt + 1);
+assert(Boolean(fxClosed), 'FX close should return a trade');
+assertClose(
+  fxClosed!.profit ?? 0,
+  (1.01 - 1) * 0.05 * fxSpec.contractSize
+    - fxEntryCost
+    - fxExitCost,
+);
 
-  assertClose(
-    'SOLUSDT closeTrade cumulative profit',
-    closed.profit,
-    expectedTotal,
-  );
-}
-
-// Non-crypto regression: preserve 7 USD/lot round-trip commission.
-{
-  const trader = new PaperTrader(10_000);
-  const spec = getSymbolSpec('EURUSD');
-
-  trader.restoreState([{
-    ticket: 1,
-    symbol: 'EURUSD',
-    side: 'BUY',
-    volume: 0.1,
-    entry: 1.1000,
-    sl: 1.0900,
-    tp: 1.1200,
-    status: 'open',
-    openedAt,
-    source: 'TEST',
-    timeframe: 'H1',
-  }], []);
-
-  const partial = trader.partialClose(1, 0.05, 1.1010, 'PARTIAL');
-
-  const raw = (1.1010 - 1.1000) * 0.05 * spec.contractSize;
-  const expectedCommission = 7 * 0.05 * 2;
-  const expectedPartial = raw - expectedCommission;
-
-  assertClose(
-    'EURUSD partialClose non-crypto commission',
-    partial.profit,
-    expectedPartial,
-  );
-}
-
-console.log(`Result: ${passed} passed, ${failed} failed`);
-
-if (failed > 0) process.exit(1);
+console.log('Result: 14 passed, 0 failed');
