@@ -1242,6 +1242,32 @@ export class TradingEngine extends EventEmitter {
       }
     }
 
+    // Exposure is a mark-to-market control. Populate current prices for every
+    // already-open position before evaluating the new order.
+    if (this.config.mode !== 'paper') {
+      const missingOpenSymbols = openTrades
+        .map(trade => trade.symbol)
+        .filter(openSymbol => livePrices[openSymbol] == null);
+
+      const openTickerResults = await Promise.all(
+        missingOpenSymbols.map(async openSymbol => ({
+          symbol: openSymbol,
+          ticker: await this.fetchTicker(openSymbol),
+        })),
+      );
+
+      for (const { symbol: openSymbol, ticker: openTicker } of openTickerResults) {
+        if (
+          openTicker &&
+          Number.isFinite(openTicker.bid) &&
+          Number.isFinite(openTicker.ask) &&
+          openTicker.ask > openTicker.bid
+        ) {
+          livePrices[openSymbol] = (openTicker.bid + openTicker.ask) / 2;
+        }
+      }
+    }
+
     if (!marketDefinition) {
       this.logger.info(
         `[PIPELINE_BLOCK] ${symbol}/${tf} stage=MARKET_DEFINITION reason=missing_or_unverified`,
