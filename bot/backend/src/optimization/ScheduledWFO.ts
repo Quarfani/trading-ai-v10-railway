@@ -122,65 +122,70 @@ export class ScheduledWFO {
     const results: string[] = [];
     let successCount = 0;
 
+    const timeframes = (this.config.timeframes ?? ['H1']).filter(Boolean);
+
     for (const symbol of symbols) {
-      try {
-        // Fetch historical candles for WFO
-        const candles = await this.scanner
-          .fetchCandles(symbol, 'H1', 2000)
-          .catch(() => []);
+      for (const timeframe of timeframes) {
+        try {
+          const candles = await this.scanner
+            .fetchCandles(symbol, timeframe, 2000)
+            .catch(() => []);
 
-        if (candles.length < 500) {
-          this.logger.warn(`WFO skip ${symbol}: only ${candles.length} candles`);
-          continue;
+          if (candles.length < 500) {
+            this.logger.warn(
+              `WFO skip ${symbol}/${timeframe}: only ${candles.length} candles`,
+            );
+            continue;
+          }
+
+          const historicalRates = await this.loadHistoricalRates(
+            symbol,
+            candles.length,
+          );
+
+          const result = await this.wfo.run(
+            symbol,
+            candles,
+            timeframe,
+            historicalRates,
+          );
+
+          const p = result.finalParams;
+          results.push(
+            `${symbol}/${timeframe}: ATR×${p.atrMult.toFixed(2)} TP×${p.tpRatio.toFixed(2)} ` +
+            `conf=${p.minConfidence.toFixed(2)} OOS_WR=${(result.oos_winRate * 100).toFixed(1)}%`,
+          );
+
+          if (result.valid && result.recommendation === 'TRADE') {
+            this.db.setSetting(
+              `wfo_params_${symbol}_${timeframe}`,
+              JSON.stringify({
+                ...p,
+                updatedAt: Date.now(),
+                timeframe,
+                wfoValid: true,
+              }),
+            );
+            successCount++;
+            this.logger.info(
+              `WFO ${symbol}/${timeframe}: params promoted after valid OOS evaluation`,
+            );
+          } else {
+            this.logger.warn(
+              `WFO ${symbol}/${timeframe}: params NOT promoted valid=${result.valid} recommendation=${result.recommendation} reason=${result.reason}`,
+            );
+          }
+
+        } catch (e: any) {
+          this.logger.error(`WFO failed for ${symbol}/${timeframe}: ${e.message}`);
+          results.push(`${symbol}/${timeframe}: ❌ ${e.message}`);
         }
-
-        const historicalRates = await this.loadHistoricalRates(
-          symbol,
-          candles.length,
-        );
-
-        // Run walk-forward optimization with timestamp-aware FX economics.
-        const result = await this.wfo.run(
-          symbol,
-          candles,
-          'H1',
-          historicalRates,
-        );
-
-        const p = result.finalParams;
-        results.push(
-          `${symbol}: ATR×${p.atrMult.toFixed(2)} TP×${p.tpRatio.toFixed(2)} ` +
-          `conf=${p.minConfidence.toFixed(2)} OOS_WR=${(result.oos_winRate * 100).toFixed(1)}%`
-        );
-
-        if (result.valid && result.recommendation === 'TRADE') {
-          // Persist only a fully valid WFO result that passed the live promotion
-          // threshold. CAUTION/DO_NOT_TRADE results never mutate active params.
-          this.db.setSetting(
-            `wfo_params_${symbol}_H1`,
-            JSON.stringify({ ...p, updatedAt: Date.now(), wfoValid: true }),
-          );
-          successCount++;
-          this.logger.info(
-            `WFO ${symbol}: params promoted after valid OOS evaluation`,
-          );
-        } else {
-          this.logger.warn(
-            `WFO ${symbol}: params NOT promoted valid=${result.valid} recommendation=${result.recommendation} reason=${result.reason}`,
-          );
-        }
-
-        this.logger.info(`WFO ${symbol}: ${results[results.length - 1]}`);
-
-      } catch (e: any) {
-        this.logger.error(`WFO failed for ${symbol}: ${e.message}`);
-        results.push(`${symbol}: ❌ ${e.message}`);
       }
     }
 
     const report =
       `✅ <b>Monthly WFO Complete</b>\n` +
-      `${successCount}/${symbols.length} symbols optimized\n\n` +
+      `${successCount}/${symbols.length * timeframes.length} symbol/timeframe runs promoted\n\n` +
       `<b>New params:</b>\n` +
       results.map(r => `  ${r}`).join('\n');
 
