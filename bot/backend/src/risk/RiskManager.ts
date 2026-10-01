@@ -317,6 +317,7 @@ export class RiskManager {
       ticker.bid,
       ticker.ask,
       signal.timeframe ?? 'H1',
+      this.mode === 'mt5',
     );
 
     if (!sc.ok) {
