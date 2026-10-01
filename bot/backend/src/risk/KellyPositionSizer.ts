@@ -18,7 +18,7 @@
  * ══════════════════════════════════════════════════════════════════════════
  */
 import { SystemConfig, Side, Timeframe } from '../types/trading.types';
-import { getSymbolSpec }      from '../config/symbolConfig';
+import { MarketEconomics } from '../market/market.types';
 import { Logger }             from '../utils/Logger';
 
 export interface KellyStats {
@@ -51,15 +51,25 @@ export class KellyPositionSizer {
     currentEquity?: number,
     quoteToAccount = 1,
     timeframe: Timeframe = 'H1',
+    economics?: MarketEconomics,
   ): { volume: number; stats: KellyStats } {
-    const spec = getSymbolSpec(symbol, timeframe);
+    if (
+      !economics ||
+      !Number.isFinite(economics.contractSize) || economics.contractSize <= 0 ||
+      !Number.isFinite(economics.minVolume) || economics.minVolume <= 0 ||
+      !Number.isFinite(economics.maxVolume) || economics.maxVolume < economics.minVolume ||
+      !Number.isFinite(economics.volumeStep) || economics.volumeStep <= 0
+    ) {
+      this.logger.warn(`[${symbol}] Missing/invalid market economics — sizing blocked`);
+      return { volume: 0, stats: this.fixedStats(config.riskPerTrade) };
+    }
     const base = currentEquity && config.compounding.enabled
       ? currentEquity
       : config.accountBalance;
 
     const slDist = Math.abs(entry - sl);
     if (slDist === 0) {
-      return { volume: spec.minVolume, stats: this.fixedStats(config.riskPerTrade) };
+      return { volume: economics.minVolume, stats: this.fixedStats(config.riskPerTrade) };
     }
 
     // ── Kelly computation ────────────────────────────────────────────────
@@ -76,17 +86,17 @@ export class KellyPositionSizer {
       return { volume: 0, stats: { ...stats, source: 'fixed' } };
     }
 
-    let raw             = riskUsd / (slDist * spec.contractSize * quoteToAccount);
+    let raw             = riskUsd / (slDist * economics.contractSize * quoteToAccount);
 
     // ── Safety clamps ────────────────────────────────────────────────────
     // Never exceed 2× the configured max risk per trade
-    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * spec.contractSize * quoteToAccount);
-    raw = Math.min(raw, maxVolume, spec.maxVolume);
-    raw = Math.max(raw, spec.minVolume);
+    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * economics.contractSize * quoteToAccount);
+    raw = Math.min(raw, maxVolume, economics.maxVolume);
 
     // Round to volume step
-    const steps  = Math.floor(raw / spec.volumeStep);
-    const volume = Math.max(spec.minVolume, +(steps * spec.volumeStep).toFixed(8));
+    const steps  = Math.floor(raw / economics.volumeStep + 1e-12);
+    const volume = +(steps * economics.volumeStep).toFixed(8);
+    if (volume < economics.minVolume) return { volume: 0, stats };
 
     this.logger.debug(
       `[${symbol}] Kelly=${(stats.kelly * 100).toFixed(1)}% ` +

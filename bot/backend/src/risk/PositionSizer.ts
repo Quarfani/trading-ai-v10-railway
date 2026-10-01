@@ -22,7 +22,6 @@
  */
 import { SystemConfig, Side, Timeframe } from '../types/trading.types';
 import { DatabaseManager }      from '../database/DatabaseManager';
-import { getSymbolSpec }        from '../config/symbolConfig';
 import { getMarketDefinition }  from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
 import { KellyPositionSizer, SymbolTradeStats } from './KellyPositionSizer';
@@ -51,7 +50,6 @@ export class PositionSizer {
     livePrices:     Record<string, number> = {},
     timeframe:      Timeframe = 'H1',
   ): number {
-    const spec   = getSymbolSpec(symbol, timeframe);
     const equity = currentEquity ?? this.config.accountBalance;
 
     const market = getMarketDefinition(symbol);
@@ -91,6 +89,7 @@ export class PositionSizer {
       equity,
       quoteToAccount,
       timeframe,
+      market.economics,
     );
 
     // ── 4. Drawdown scale ─────────────────────────────────────────────
@@ -113,18 +112,17 @@ export class PositionSizer {
     // The previous implementation multiplied by pipValue and then divided
     // by lotSize, which could make the 2% cap orders of magnitude too large.
     const slDistance = Math.abs(entry - sl);
-    const riskPerUnit = slDistance * spec.contractSize * quoteToAccount;
+    const riskPerUnit = slDistance * market.economics.contractSize * quoteToAccount;
     const maxVolByRisk = riskPerUnit > 0
       ? (equity * MAX_RISK_PER_TRADE) / riskPerUnit
       : 0;
-    vol = Math.min(vol, maxVolByRisk);
+    vol = Math.min(vol, maxVolByRisk, market.economics.maxVolume);
 
-    // ── 8. Symbol constraints ─────────────────────────────────────────
+    // ── 8. Broker/static market constraints ────────────────────────────
     if (!(vol > 0) || !Number.isFinite(vol)) return 0;
-    vol = Math.min(spec.maxVolume, vol);
-    const steps = Math.floor(vol / spec.volumeStep + 1e-12);
-    vol = +(steps * spec.volumeStep).toFixed(8);
-    if (vol < spec.minVolume) return 0;
+    const steps = Math.floor(vol / market.economics.volumeStep + 1e-12);
+    vol = +(steps * market.economics.volumeStep).toFixed(8);
+    if (vol < market.economics.minVolume) return 0;
 
     this.logger.debug(
       `[${symbol}] kelly=${kellyVolume.toFixed(4)} dd=${ddStatus.volumeScale.toFixed(2)} ` +
@@ -203,13 +201,13 @@ export class PositionSizer {
       livePrices,
     );
     if (quoteToAccount == null) return 0;
-    const riskPerUnit = Math.abs(entry - sl) * spec.contractSize * quoteToAccount;
+    const riskPerUnit = Math.abs(entry - sl) * market.economics.contractSize * quoteToAccount;
     if (!(riskPerUnit > 0)) return 0;
     const maxVolume = (equity * MAX_RISK_PER_TRADE) / riskPerUnit;
-    const capped = Math.min(volume, maxVolume, spec.maxVolume);
-    const steps = Math.floor(capped / spec.volumeStep + 1e-12);
-    const rounded = +(steps * spec.volumeStep).toFixed(8);
-    return rounded >= spec.minVolume ? rounded : 0;
+    const capped = Math.min(volume, maxVolume, market.economics.maxVolume);
+    const steps = Math.floor(capped / market.economics.volumeStep + 1e-12);
+    const rounded = +(steps * market.economics.volumeStep).toFixed(8);
+    return rounded >= market.economics.minVolume ? rounded : 0;
   }
 
   getDrawdownStatus(equity: number) { return this.ddScaler.getStatus(equity); }

@@ -1,6 +1,7 @@
 import { DatabaseManager } from "../database/DatabaseManager";
 import { PositionSizer } from "../risk/PositionSizer";
 import { SystemConfig } from "../types/trading.types";
+import { clearBrokerContracts, registerBrokerContract } from "../market/MarketCatalog";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -58,7 +59,37 @@ async function main() {
   );
   assert(missingFx === 0, "missing FX conversion must fail closed in PositionSizer");
 
-  console.log("Result: 4 passed, 0 failed");
+  // Broker economics intentionally differ from static symbolConfig.
+  clearBrokerContracts();
+  registerBrokerContract({
+    symbol: "EURUSD",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 1,
+    priceIncrement: 0.00001,
+    minVolume: 0.03,
+    maxVolume: 0.09,
+    volumeStep: 0.03,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:test-eur-account",
+    observedAt: Date.now(),
+    verified: true,
+  });
+
+  const brokerVolume = sizer.size(
+    "EURUSD", "BUY", 1.1000, 1.0990, 70, 10_000, 1.1040,
+    { EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    brokerVolume === 0.09,
+    `broker economics must control max volume/step; got ${brokerVolume}`,
+  );
+
+  clearBrokerContracts();
+  console.log("Result: 5 passed, 0 failed");
 }
 
 main().catch(error => {
