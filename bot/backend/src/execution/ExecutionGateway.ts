@@ -682,6 +682,55 @@ export class ExecutionGateway {
 
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
 
+  async reconcileBinancePartialClose(
+    operationKey: string,
+    symbol: string,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    remainingVolume: number;
+    realizedProfit: number;
+  }> {
+    if (this.config.mode !== 'binance') {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        remainingVolume: 0,
+        realizedProfit: 0,
+      };
+    }
+
+    const recovered = await this.binance.reconcilePartialCloseByClientOrderId(
+      symbol,
+      makeBinanceClientOrderId(operationKey),
+    );
+    if (!recovered.ok) {
+      throw new Error(
+        `Binance partial-close recovery unavailable for operation=${operationKey}`,
+      );
+    }
+
+    const realizedProfit = await this.convertBrokerProfitToAccount(
+      recovered.realizedProfit,
+      recovered.realizedProfitCurrency,
+    );
+    if (!Number.isFinite(realizedProfit)) {
+      throw new Error(
+        `Binance partial-close recovered PnL is invalid for operation=${operationKey}`,
+      );
+    }
+
+    return {
+      ok: true,
+      orderId: recovered.orderId,
+      executedQty: recovered.executedQty,
+      remainingVolume: recovered.remainingVolume,
+      realizedProfit,
+    };
+  }
+
   private beginDestructive(operationKey: string, action: string, trade: Trade, request: Record<string, unknown>) {
     const existing = this.db.getExecutionByOperationKey(operationKey);
     if (existing) return { executionId: String(existing.executionId), existing };
