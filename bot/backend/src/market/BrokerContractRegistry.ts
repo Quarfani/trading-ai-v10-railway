@@ -181,6 +181,22 @@ export class BrokerContractRegistry {
     return definition ? toMarketDefinition(definition) : null;
   }
 
+  findSymbolsByCurrencies(baseCurrency: string, quoteCurrency: string): string[] {
+    const base = baseCurrency.trim().toUpperCase();
+    const quote = quoteCurrency.trim().toUpperCase();
+    if (!base || !quote) return [];
+
+    return [...this.definitions.values()]
+      .filter(definition =>
+        definition.verified &&
+        definition.baseAsset.trim().toUpperCase() === base &&
+        definition.quoteCurrency.trim().toUpperCase() === quote &&
+        (definition.expiresAt == null || definition.expiresAt > Date.now())
+      )
+      .sort((a, b) => b.observedAt - a.observedAt)
+      .map(definition => definition.symbol);
+  }
+
   hasVerified(symbol: string): boolean {
     return this.get(symbol)?.verified === true;
   }

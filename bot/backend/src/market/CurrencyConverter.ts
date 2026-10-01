@@ -16,7 +16,17 @@ function readPrice(prices: Record<string, number>, symbol: string): number | nul
   const normalized = normalizeSymbol(symbol);
 
   for (const [key, value] of Object.entries(prices)) {
-    if (normalizeSymbol(key) === normalized && Number.isFinite(value) && value > 0) {
+    const keyNormalized = normalizeSymbol(key);
+    const sameCanonicalPair =
+      keyNormalized === normalized ||
+      keyNormalized.startsWith(normalized) &&
+      normalized.length === 6;
+
+    if (
+      sameCanonicalPair &&
+      Number.isFinite(value) &&
+      value > 0
+    ) {
       return value;
     }
   }

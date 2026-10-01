@@ -8,6 +8,7 @@
 import { MarketScanner } from '../core/MarketScanner';
 import { normalizeSymbol } from './market.types';
 import { resolveQuoteToAccount } from './CurrencyConverter';
+import { getBrokerConversionSymbols } from './MarketCatalog';
 
 interface CacheEntry {
   rates: Record<string, number>;
@@ -44,6 +45,8 @@ export class CurrencyConversionProvider {
     }
 
     const candidates = [
+      ...getBrokerConversionSymbols(quote, account),
+      ...getBrokerConversionSymbols(account, quote),
       normalizeSymbol(quote + account),
       normalizeSymbol(account + quote),
     ];

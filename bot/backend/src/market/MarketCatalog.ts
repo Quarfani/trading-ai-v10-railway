@@ -71,6 +71,16 @@ export function clearBrokerContracts(): void {
   BROKER_CONTRACTS.clear();
 }
 
+export function getBrokerConversionSymbols(
+  baseCurrency: string,
+  quoteCurrency: string,
+): string[] {
+  return BROKER_CONTRACTS.findSymbolsByCurrencies(
+    baseCurrency,
+    quoteCurrency,
+  );
+}
+
 export function getMarketDefinition(symbol: string): MarketDefinition | null {
   const raw = symbol.trim().toUpperCase();
 

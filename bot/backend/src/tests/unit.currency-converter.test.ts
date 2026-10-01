@@ -20,5 +20,9 @@ assert(Math.abs((resolveQuoteToAccount("EUR", "GBP", {
   GBPUSD: 1.25,
 }) ?? 0) - 0.86) < 1e-12, "direct cross has priority over USD bridge");
 assert(resolveQuoteToAccount("EUR", "USD", { EURUSD: 0 }) === null, "zero quote must fail closed");
+assert(
+  Math.abs((resolveQuoteToAccount("USD", "EUR", { "EURUSD.a": 1.10 }) ?? 0) - 1 / 1.10) < 1e-12,
+  "broker-suffixed EURUSD must resolve as an inverse USD->EUR quote",
+);
 
-console.log("Result: 9 passed, 0 failed");
+console.log("Result: 10 passed, 0 failed");
