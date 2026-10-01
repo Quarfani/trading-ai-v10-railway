@@ -2,6 +2,7 @@ import { DatabaseManager } from "../database/DatabaseManager";
 import { DailyProfitTarget } from "../risk/DailyProfitTarget";
 import { TelegramBot } from "../notifications/TelegramBot";
 import { ExecutionGateway } from "../execution/ExecutionGateway";
+import { DailyLossGuard } from "../risk/DailyLossGuard";
 import { SystemConfig } from "../types/trading.types";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -76,6 +77,28 @@ async function main() {
     "partial PnL attached to a closed trade must not be double-counted",
   );
 
+  const lossDb = new DatabaseManager(":memory:");
+  await lossDb.initialize();
+  const lossCfg = config("paper");
+  lossCfg.maxDailyLoss = 0.02;
+  const lossGuard = new DailyLossGuard(lossCfg, lossDb, new TelegramBot(lossCfg));
+  const lossTradeId = lossDb.insertTrade({
+    ticket: 7010, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 1,
+    entry: 1.1000, sl: 1.0900, tp: 1.1200, status: "open", openedAt: Date.now(), source: "DAILY_LOSS_PARTIAL_TEST",
+  } as any);
+  lossDb.createExecutionLedger({
+    executionId: "loss-partial-1", operationKey: "loss-partial-op", action: "PARTIAL_CLOSE",
+    status: "EXECUTED", symbol: "EURUSD", side: "BUY", volume: 0.5,
+    request: { tradeId: lossTradeId, volume: 0.5 },
+  });
+  lossDb.updateExecutionLedger("loss-partial-1", {
+    result: { remainingVolume: 0.5, profit: -210 }, status: "EXECUTED",
+  });
+  assert(
+    await lossGuard.canTrade({ EURUSD: 1.0999 }) === false,
+    "paper daily loss guard must include realized loss from an open partial close",
+  );
+  lossDb.raw().close();
   const liveDb = new DatabaseManager(":memory:");
   await liveDb.initialize();
   const liveCfg = config("mt5", 0.05);

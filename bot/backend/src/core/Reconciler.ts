@@ -153,21 +153,51 @@ export class Reconciler {
       );
 
       if (!live) {
-        // Position closed on broker side
+        const unresolvedAny = t.id != null
+          ? this.db.getLatestUnresolvedExecutionForTrade(Number(t.id))
+          : null;
+        const unresolvedClose = t.id != null
+          ? this.db.getLatestUnresolvedExecutionForTrade(
+              Number(t.id),
+              ['CLOSE', 'CLOSE_AT_MARKET'],
+            )
+          : null;
+        if (unresolvedAny && !unresolvedClose) {
+          throw new Error(
+            `MT5 position ${t.ticket} is absent while unresolved execution=${unresolvedAny.executionId} is not an attributable close`,
+          );
+        }
         const hist = await this.getMT5History(t.ticket);
         if (!hist) throw new Error(`MT5 position ${t.ticket} is absent but authoritative close history is unavailable`);
-        await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
-        this.resolveReconciledLedger(
-          t.id,
-          ['CLOSE', 'CLOSE_AT_MARKET'],
-          {
-            broker: 'mt5',
-            ticket: t.ticket,
-            profit: hist.profit,
-            reason: hist.reason,
-            closePrice: hist.price,
-          },
-        );
+
+        if (unresolvedClose) {
+          const cumulativeProfit = Number(t.realizedProfit ?? 0) + Number(hist.profit);
+          if (!Number.isFinite(cumulativeProfit)) {
+            throw new Error(`MT5 authoritative cumulative PnL is invalid for ticket=${t.ticket}`);
+          }
+          const resolved = this.db.resolveReconciledFullClose(
+            Number(t.id),
+            String(unresolvedClose.executionId),
+            cumulativeProfit,
+            Date.now(),
+            hist.reason,
+            {
+              broker: 'mt5',
+              ticket: t.ticket,
+              profit: hist.profit,
+              cumulativeProfit,
+              reason: hist.reason,
+              closePrice: hist.price,
+              runtimeReconciliation: true,
+            },
+            Number(t.ticket),
+          );
+          if (!resolved) throw new Error(`Could not atomically reconcile MT5 close ticket=${t.ticket}`);
+          this.tracker.recordClose(cumulativeProfit);
+          this.onClose({ ...t, status: 'closed', profit: cumulativeProfit });
+        } else {
+          await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
+        }
       } else {
         // Handle partial close: volume reduced on broker side
         const brokerVolume = Number(live.volume);
@@ -186,16 +216,33 @@ export class Reconciler {
             ? Number(cumulative.profit)
             : Number.NaN;
 
-          if (Number.isFinite(cumulativeRealized)) {
+          const unresolvedPartial = t.id != null
+            ? this.db.getLatestUnresolvedExecutionForTrade(Number(t.id), ['PARTIAL_CLOSE'])
+            : null;
+
+          if (unresolvedPartial && Number.isFinite(cumulativeRealized)) {
+            const resolved = this.db.resolveReconciledPartialClose(
+              Number(t.id),
+              String(unresolvedPartial.executionId),
+              brokerVolume,
+              cumulativeRealized,
+              {
+                broker: 'mt5',
+                ticket: t.ticket,
+                closedVolume: volumeDelta,
+                remainingVolume: brokerVolume,
+                cumulativeRealizedProfit: cumulativeRealized,
+                runtimeReconciliation: true,
+              },
+              undefined,
+            );
+            if (!resolved) throw new Error(`Could not atomically reconcile MT5 partial close ticket=${t.ticket}`);
+          } else if (Number.isFinite(cumulativeRealized)) {
             this.db.raw()
               .prepare(
                 'UPDATE trades SET volume=?, realizedProfit=? WHERE id=? AND status=\'open\'',
               )
-              .run(
-                brokerVolume,
-                cumulativeRealized,
-                t.id!,
-              );
+              .run(brokerVolume, cumulativeRealized, t.id!);
           } else {
             this.db.raw()
               .prepare('UPDATE trades SET volume=? WHERE id=? AND status=\'open\'')
@@ -297,24 +344,126 @@ export class Reconciler {
 
   private async reconcileBinance(t: Trade): Promise<void> {
     if (!t.ticket) return;
-      const pos  = await this.exec.getBinancePosition(t.symbol);
+    const pos = await this.exec.getBinancePosition(t.symbol);
 
-      if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
-        // Binance has disappeared from the live position set, but this reconciler
-        // does not yet fetch authoritative account-trade fills/PnL. Never infer a
-        // profitable/losing close from market candles; stop and require reconciliation.
-        throw new Error(`Binance position ${t.symbol} is absent but authoritative fill/PnL history is unavailable`);
+    if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
+      const recovered = await this.tryReconcileBinanceAuthoritativeClose(t);
+      if (recovered) return;
 
-      } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
-        // Partial close
-        const remaining = Math.abs(pos.positionAmt);
-        this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
-        this.db.raw()
-          .prepare('UPDATE trades SET volume=? WHERE id=?')
-          .run(remaining, t.id!);
+      throw new Error(
+        `Binance position ${t.symbol} is absent but authoritative close reconciliation is unresolved`,
+      );
+    } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
+      const unresolvedClose =
+        t.id != null &&
+        this.db.hasUnresolvedExecutionForTrade(
+          Number(t.id),
+          ['CLOSE', 'CLOSE_AT_MARKET'],
+        );
+      if (unresolvedClose) {
+        throw new Error(
+          `Binance close operation is unresolved for ${t.symbol}; refusing to mutate internal volume until authoritative fill state is available`,
+        );
       }
+
+      // No unresolved destructive close exists: retain the historical
+      // partial-position reconciliation behavior.
+      const remaining = Math.abs(pos.positionAmt);
+      this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
+      this.db.raw()
+        .prepare('UPDATE trades SET volume=? WHERE id=?')
+        .run(remaining, t.id!);
+    }
   }
 
+  private async tryReconcileBinanceAuthoritativeClose(t: Trade): Promise<boolean> {
+    if (!t.id) return false;
+
+    const operation = this.db.getLatestUnresolvedExecutionForTrade(
+      t.id,
+      ['CLOSE', 'CLOSE_AT_MARKET'],
+    );
+    if (!operation) return false;
+
+    const result = await this.exec.reconcileBinanceCloseByOperation(
+      t.symbol,
+      String(operation.operationKey),
+    );
+    if (!result.found) return false;
+
+    const status = String(result.status ?? '').toUpperCase();
+    if (['CANCELED', 'REJECTED', 'EXPIRED'].includes(status)) {
+      this.db.updateExecutionLedger(String(operation.executionId), {
+        status: 'FAILED',
+        error: 'Binance close order ' + String(operation.operationKey) + ' was ' + status,
+      });
+      return false;
+    }
+    if (status !== 'FILLED') return false;
+
+    const expectedQty = Number(t.volume);
+    const executedQty = Number(result.executedQty ?? 0);
+    if (!(expectedQty > 0) || !(executedQty > 0) ||
+        !Number.isFinite(expectedQty) || !Number.isFinite(executedQty) ||
+        executedQty + Math.max(1e-12, expectedQty * 1e-8) < expectedQty) {
+      return false;
+    }
+
+    const position = await this.exec.getBinancePosition(t.symbol);
+    if (position && Math.abs(Number(position.positionAmt)) > Math.max(1e-12, expectedQty * 1e-8)) {
+      return false;
+    }
+
+    const profitCurrency = String(result.realizedProfitCurrency ?? '').trim().toUpperCase();
+    const accountCurrency = String(this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+    const stable = new Set(['USD', 'USDT', 'USDC', 'BUSD']);
+    const brokerProfit = Number(result.realizedProfit);
+    if (!Number.isFinite(brokerProfit) ||
+        !(profitCurrency === accountCurrency || (stable.has(profitCurrency) && stable.has(accountCurrency)))) {
+      return false;
+    }
+
+    const cumulativeProfit = Number(t.realizedProfit ?? 0) + brokerProfit;
+    if (!Number.isFinite(cumulativeProfit)) return false;
+
+    let reason = 'MANUAL';
+    if (operation.requestJson) {
+      try {
+        reason = String(JSON.parse(operation.requestJson)?.reason ?? 'MANUAL');
+      } catch {
+        return false;
+      }
+    }
+
+    const closedAt = Number(result.updatedAt ?? 0) > 0 ? Number(result.updatedAt) : Date.now();
+    const resolved = this.db.resolveReconciledFullClose(
+      t.id,
+      String(operation.executionId),
+      cumulativeProfit,
+      closedAt,
+      reason,
+      {
+        broker: 'binance',
+        ticket: Number(t.ticket),
+        operationKey: String(operation.operationKey),
+        orderId: result.orderId,
+        executedQty,
+        brokerProfit,
+        realizedProfitCurrency: result.realizedProfitCurrency,
+        cumulativeProfit,
+        runtimeReconciliation: true,
+      },
+      result.orderId,
+    );
+    if (!resolved) return false;
+
+    this.tracker.recordClose(cumulativeProfit);
+    await this.telegram.sendMessage(
+      `✅ <b>Binance close reconciled</b>: ${t.symbol} ${t.side}\nP/L: ${cumulativeProfit > 0 ? '+' : ''}$${cumulativeProfit.toFixed(2)}`
+    ).catch(() => {});
+    this.onClose({ ...t, status: 'closed', profit: cumulativeProfit, closedAt });
+    return true;
+  }
   // ─── Common close + record ─────────────────────────────────────────
 
   private async closeAndRecord(

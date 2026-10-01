@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as crypto from 'crypto';
 import { SystemConfig, Signal, Trade, Timeframe } from '../types/trading.types';
 import { DatabaseManager } from '../database/DatabaseManager';
-import { BinanceExecutor } from './BinanceExecutor';
+import { BinanceExecutor, makeBinanceClientOrderId } from './BinanceExecutor';
 import { PaperTrader } from '../integration/PaperTrader';
 import { Logger } from '../utils/Logger';
 import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
@@ -191,8 +191,7 @@ export class ExecutionGateway {
   }
 
   private makeClientOrderId(operationKey: string): string {
-    const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
-    return `ta_${digest}`.slice(0, 36);
+    return makeBinanceClientOrderId(operationKey);
   }
 
   async getMT5PositionMode(): Promise<'HEDGING' | 'NETTING_OR_EXCHANGE' | 'UNKNOWN' | null> {
@@ -244,6 +243,19 @@ export class ExecutionGateway {
     }
   }
 
+
+  async reconcileBinanceCloseByOperation(
+    symbol: string,
+    operationKey: string,
+  ) {
+    if (this.config.mode !== 'binance') {
+      return { found: false as const };
+    }
+    return this.binance.reconcileFuturesCloseByClientOrderId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+    );
+  }
 
   getPaperStats() { return this.config.mode === 'paper' ? this.paper.getStats() : null; }
 
@@ -363,6 +375,7 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        this.makeClientOrderId(operationKey),
       );
 
       if (!result.ok) throw new Error('Binance close rejected');

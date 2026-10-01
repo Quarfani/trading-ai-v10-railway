@@ -4,8 +4,12 @@ name: trading-ai-ci
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
 
 # Prevent obsolete runs from consuming Actions minutes after a newer commit lands.
 concurrency:
