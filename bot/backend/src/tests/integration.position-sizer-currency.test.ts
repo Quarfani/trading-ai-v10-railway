@@ -155,6 +155,7 @@ async function main() {
     "PositionSizer must fail closed for broker-declared unsupported timeframe",
   );
 
+  clearBrokerContracts();
   registerBrokerContract({
     symbol: "EURUSD",
     baseAsset: "EUR",
