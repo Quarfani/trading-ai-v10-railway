@@ -877,6 +877,10 @@ def modify():
         return err("Unauthorized", 401)
 
     data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return err("JSON object required", 422)
+
+    idempotency_key = str(data.get("idempotency_key", "")).strip()
     try:
         ticket = int(data.get("ticket", 0))
         sl = float(data.get("sl", 0))
@@ -886,6 +890,19 @@ def modify():
 
     if ticket <= 0:
         return err("ticket must be positive", 422)
+    if BRIDGE_MODE == 'live' and not idempotency_key:
+        return err("idempotency_key is required in live mode", 422)
+
+    cached = _idempotency_lookup(idempotency_key)
+    if cached:
+        _, cached_status, cached_payload = cached
+        if cached_status == "SUCCESS":
+            return jsonify(cached_payload)
+        if cached_status == "UNKNOWN":
+            return err(
+                "Previous modify execution with this idempotency_key is unresolved; reconciliation is required",
+                503,
+            )
     if not all(map(lambda value: value == value and abs(value) != float("inf"), (sl, tp))):
         return err("sl and tp must be finite", 422)
 
@@ -898,6 +915,17 @@ def modify():
         return jsonify({"ok": True, "ticket": ticket, "sl": sl, "tp": tp})
 
     with _lock:
+        cached = _idempotency_lookup(idempotency_key)
+        if cached:
+            _, cached_status, cached_payload = cached
+            if cached_status == "SUCCESS":
+                return jsonify(cached_payload)
+            if cached_status == "UNKNOWN":
+                return err(
+                    "Previous modify execution with this idempotency_key is unresolved; reconciliation is required",
+                    503,
+                )
+
         if not ensure_connected():
             return err("MT5 not connected", 503)
 
@@ -953,10 +981,17 @@ def modify():
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Modify failed: {result.retcode if result else mt5.last_error()}")
 
+        response_payload = {
+            "ok": True,
+            "ticket": ticket,
+            "sl": sl,
+            "tp": tp,
+        }
+        _idempotency_record(idempotency_key, "SUCCESS", response_payload)
         log.info(
             f"[LIVE] Modified {ticket} {pos.symbol} side={side} SL={sl} TP={tp}"
         )
-        return jsonify({"ok": True, "ticket": ticket, "sl": sl, "tp": tp})
+        return jsonify(response_payload)
 
 
 @app.route("/close", methods=["POST"])
