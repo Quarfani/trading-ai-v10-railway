@@ -62,7 +62,19 @@ export class StartupReconciler {
       createdAt: number;
     }>;
 
-    const selectedByTrade = new Set<number>();
+    const selectedExecutionByTrade = new Map<number, string>();
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      try {
+        const request = JSON.parse(row.requestJson);
+        const tradeId = Number(request?.tradeId);
+        if (Number.isInteger(tradeId) && tradeId > 0 && !selectedExecutionByTrade.has(tradeId)) {
+          selectedExecutionByTrade.set(tradeId, String(row.executionId));
+        }
+      } catch {
+        // malformed requestJson remains unresolved and blocks startup
+      }
+    }
 
     for (const row of rows) {
       if (!row.requestJson) continue;
@@ -78,7 +90,7 @@ export class StartupReconciler {
       if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
 
       if (
-        selectedByTrade.has(tradeId) ||
+        selectedExecutionByTrade.get(tradeId) !== String(row.executionId) ||
         this.db.hasResolvedExecutionForTrade(tradeId, ['CLOSE', 'CLOSE_AT_MARKET'])
       ) {
         this.logger.warn(
@@ -120,8 +132,6 @@ export class StartupReconciler {
         },
         Number(trade.ticket),
       );
-      selectedByTrade.add(tradeId);
-
       if (!resolved) {
         this.logger.warn(
           `[MT5] Could not resolve close operation=${row.executionId}; leaving it unresolved`,
