@@ -98,15 +98,20 @@ const MAP: Record<string, Partial<SymbolSpec>> = {
   GER40:  { pip: 1, contractSize: 1, spreadMaxPips: 3, atrMult: 2.0, tpRatio: 2.5, pipValue: 1, lotSize: 1 },
 };
 
-function envOverride(symbol: string): Partial<SymbolSpec> {
+function envOverride(symbol: string, timeframe: Timeframe = 'H1'): Partial<SymbolSpec> {
   const o: Partial<SymbolSpec> = {};
-  const get = (k: string) => process.env[`SPEC_${symbol}_${k}`];
+  const get = (k: string) => {
+    const scoped = process.env[`SPEC_${symbol}_${timeframe}_${k}`];
+    return scoped ?? process.env[`SPEC_${symbol}_${k}`];
+  };
+
   if (get('SPREAD_MAX_PIPS')) o.spreadMaxPips = Number(get('SPREAD_MAX_PIPS'));
   if (get('ATR_MULT'))        o.atrMult       = Number(get('ATR_MULT'));
   if (get('TP_RATIO'))        o.tpRatio       = Number(get('TP_RATIO'));
   if (get('MIN_VOLUME'))      o.minVolume     = Number(get('MIN_VOLUME'));
   if (get('PIP_VALUE'))       o.pipValue      = Number(get('PIP_VALUE'));
   if (get('LOT_SIZE'))        o.lotSize       = Number(get('LOT_SIZE'));
+
   return o;
 }
 
@@ -120,7 +125,7 @@ export function getBaseSymbolSpec(symbol: string): SymbolSpec {
   return base;
 }
 
-export function getSymbolSpec(symbol: string): SymbolSpec {
+export function getSymbolSpec(symbol: string, timeframe: Timeframe = 'H1'): SymbolSpec {
   const base = getBaseSymbolSpec(symbol);
-  return { ...base, ...envOverride(symbol.toUpperCase()) };
+  return { ...base, ...envOverride(symbol.toUpperCase(), timeframe) };
 }
