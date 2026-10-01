@@ -122,6 +122,48 @@ async function main() {
     assert(mt5CloseDb.getOpenTrades().length === 0, 'authoritative MT5 close must close the internal trade before startup completes');
     mt5CloseDb.raw().close();
 
+    const mt5PartialDb = await newDb();
+    const partialTradeId = mt5PartialDb.insertTrade({
+      ticket: 79, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 1.0,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5PartialDb.createExecutionLedger({
+      executionId: 'mt5-partial-unknown', operationKey: 'mt5-partial-op',
+      action: 'PARTIAL_CLOSE', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.4,
+      request: { tradeId: partialTradeId, volume: 0.4, exitPrice: 1.105, reason: 'PARTIAL' },
+    });
+
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) {
+        return {
+          data: {
+            ok: true,
+            positions: [{
+              ticket: 79, symbol: 'EURUSD', type: 'BUY', volume: 0.6,
+              sl: 1.09, tp: 1.12,
+            }],
+          },
+        };
+      }
+      if (url.endsWith('/history')) {
+        return {
+          data: {
+            closed: false, remaining_volume: 0.6, close_price: 1.105,
+            net_profit: 4.25, close_reason: 'manual', close_deal_ticket: 12345,
+          },
+        };
+      }
+      throw new Error('unexpected URL');
+    };
+
+    await new StartupReconciler(mt5Cfg, mt5PartialDb, new TelegramBot(mt5Cfg)).run();
+    const partialLedger = mt5PartialDb.getExecutionByOperationKey('mt5-partial-op');
+    const partialTrade = mt5PartialDb.getOpenTrades()[0];
+    assert(partialLedger.status === 'EXECUTED', 'authoritative MT5 partial close must clear UNKNOWN before startup completes');
+    assert(partialTrade.volume === 0.6, 'authoritative MT5 partial close must restore broker remaining volume');
+    assert(partialTrade.realizedProfit === 4.25, 'authoritative MT5 partial close must preserve cumulative realized PnL');
+    mt5PartialDb.raw().close();
+
     const mt5DuplicateDb = await newDb();
     const duplicateTradeId = mt5DuplicateDb.insertTrade({
       ticket: 78, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
@@ -202,7 +244,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 12 passed, 0 failed');
+  console.log('Result: 15 passed, 0 failed');
 }
 
 main().catch(error => {
