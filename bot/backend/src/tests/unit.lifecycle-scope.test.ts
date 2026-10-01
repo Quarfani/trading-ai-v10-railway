@@ -1,6 +1,7 @@
 import { DatabaseManager } from "../database/DatabaseManager";
 import { StrategyDefinitionStore } from "../consensus/StrategyDefinitionStore";
 import { ConsensusOrchestrator } from "../consensus/ConsensusOrchestrator";
+import { clearBrokerContracts, registerBrokerContract } from "../market/MarketCatalog";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -9,6 +10,25 @@ function assert(condition: unknown, message: string): asserts condition {
 async function main() {
   const db = new DatabaseManager(":memory:");
   await db.initialize();
+
+  clearBrokerContracts();
+  registerBrokerContract({
+    symbol: "EURUSD.a",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "lifecycle-scope-test",
+    observedAt: Date.now(),
+    verified: true,
+  });
 
   const store = new StrategyDefinitionStore(db);
   store.save({
@@ -82,10 +102,12 @@ async function main() {
   );
   assert(brokerSuffix.allowed, "broker suffix should normalize to the canonical symbol");
 
+  clearBrokerContracts();
   console.log("Result: 5 passed, 0 failed");
 }
 
 main().catch(error => {
+  clearBrokerContracts();
   console.error(error);
   process.exitCode = 1;
 });
