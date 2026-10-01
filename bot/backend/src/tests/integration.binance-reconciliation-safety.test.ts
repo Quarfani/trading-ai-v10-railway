@@ -65,8 +65,47 @@ async function main() {
   assert(resolved.brokerOrderId === '9001', 'runtime Binance recovery must keep broker order identity');
   assert(closed.status === 'closed' && closed.profit === 125, 'runtime Binance recovery must persist authoritative PnL');
 
+
+  const ambiguousDb = new DatabaseManager(':memory:');
+  await ambiguousDb.initialize();
+  const ambiguousTradeId = ambiguousDb.insertTrade({
+    ticket: 6002, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: 'open', openedAt: Date.now(), source: 'BINANCE_RUNTIME_AMBIGUOUS',
+  } as any);
+  ambiguousDb.createExecutionLedger({
+    executionId: 'runtime-close-partial-1', operationKey: 'runtime-close-partial-op',
+    action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'BTCUSDT', side: 'BUY', volume: 0.01,
+    request: { tradeId: ambiguousTradeId, reason: 'MANUAL' },
+  });
+  const ambiguousExec = {
+    getBinancePosition: async () => ({ positionAmt: 0.006, entryPrice: 50_000, unrealizedProfit: 0 }),
+    reconcileBinanceCloseByOperation: async () => ({
+      found: true, status: 'PARTIALLY_FILLED', orderId: 9002, executedQty: 0.004,
+      realizedProfit: 50, realizedProfitCurrency: 'USDT',
+    }),
+  } as any;
+  const ambiguousReconciler = new Reconciler(
+    cfg, ambiguousDb, ambiguousExec,
+    { sendMessage: async () => {} } as any,
+    { recordClose: () => {} } as any,
+    {} as any,
+    { activate: async () => {} } as any,
+    () => {},
+  );
+  let ambiguousBlocked = false;
+  try {
+    await (ambiguousReconciler as any).reconcileOne(ambiguousDb.getOpenTrades()[0]);
+  } catch {
+    ambiguousBlocked = true;
+  }
+  assert(ambiguousBlocked, 'unresolved Binance close with reduced broker position must block runtime reconciliation');
+  assert(
+    ambiguousDb.getOpenTrades()[0].volume === 0.01,
+    'ambiguous Binance close must not mutate internal volume',
+  );
+  ambiguousDb.raw().close();
   db.raw().close();
-  console.log('Result: 1 passed, 0 failed');
+  console.log('Result: 2 passed, 0 failed');
 }
 
 main().catch(error => {
