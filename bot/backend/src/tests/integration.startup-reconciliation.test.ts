@@ -3,7 +3,7 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { StartupReconciler } from '../integration/StartupReconciler';
 import { TelegramBot } from '../notifications/TelegramBot';
 import { SystemConfig } from '../types/trading.types';
-import { BinanceExecutor } from '../execution/BinanceExecutor';
+import { BinanceExecutor, makeBinanceClientOrderId } from '../execution/BinanceExecutor';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -468,7 +468,96 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 24 passed, 0 failed');
+  const binanceCfg = {
+    ...config(),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...config().binance, futures: true },
+  } as SystemConfig;
+
+  const binanceRecoverDb = await newDb();
+  const binanceRecoverTradeId = binanceRecoverDb.insertTrade({
+    ticket: 501, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_RECOVERY_TEST',
+  });
+  binanceRecoverDb.createExecutionLedger({
+    executionId: 'binance-close-unknown-1', operationKey: 'binance-close-op-1',
+    action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'BTCUSDT', side: 'BUY', volume: 0.01,
+    request: { tradeId: binanceRecoverTradeId, exitPrice: 51000, reason: 'MANUAL' },
+  });
+  const fakeFilledExecutor = {
+    reconcileFuturesCloseByClientOrderId: async () => ({
+      found: true, status: 'FILLED', orderId: 9001, executedQty: 0.01,
+      realizedProfit: 125, realizedProfitCurrency: 'USDT',
+    }),
+    getPosition: async () => null,
+  } as any;
+  const binanceRecover = new StartupReconciler(binanceCfg, binanceRecoverDb, new TelegramBot(binanceCfg));
+  assert(
+    makeBinanceClientOrderId('binance-close-unknown-1').startsWith('ta_'),
+    'Binance recovery must derive the deterministic client order id from the ledger execution id',
+  );
+  await (binanceRecover as any).resolveAuthoritativeBinanceCloseLedgers(fakeFilledExecutor);
+  assert(
+    binanceRecoverDb.getExecutionByOperationKey('binance-close-op-1').status === 'EXECUTED',
+    'FILLED Binance close must resolve the UNKNOWN ledger',
+  );
+  assert(binanceRecoverDb.getOpenTrades().length === 0, 'FILLED Binance close must settle the internal trade atomically');
+  assert(
+    binanceRecoverDb.getExecutionByOperationKey('binance-close-op-1').brokerOrderId === '9001',
+    'Binance recovery must preserve the broker order id',
+  );
+  binanceRecoverDb.raw().close();
+
+  const binanceCanceledDb = await newDb();
+  const canceledTradeId = binanceCanceledDb.insertTrade({
+    ticket: 502, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_RECOVERY_CANCEL_TEST',
+  });
+  binanceCanceledDb.createExecutionLedger({
+    executionId: 'binance-close-canceled', operationKey: 'binance-close-canceled-op',
+    action: 'CLOSE', status: 'UNKNOWN', symbol: 'BTCUSDT', side: 'BUY', volume: 0.01,
+    request: { tradeId: canceledTradeId },
+  });
+  const fakeCanceledExecutor = {
+    reconcileFuturesCloseByClientOrderId: async () => ({ found: true, status: 'CANCELED', orderId: 9002, executedQty: 0 }),
+  } as any;
+  const canceledRecover = new StartupReconciler(binanceCfg, binanceCanceledDb, new TelegramBot(binanceCfg));
+  await (canceledRecover as any).resolveAuthoritativeBinanceCloseLedgers(fakeCanceledExecutor);
+  assert(
+    binanceCanceledDb.getExecutionByOperationKey('binance-close-canceled-op').status === 'FAILED',
+    'authoritative Binance CANCELED close must become FAILED instead of remaining UNKNOWN',
+  );
+  assert(binanceCanceledDb.getOpenTrades().length === 1, 'canceled Binance close must not close the internal trade');
+  binanceCanceledDb.raw().close();
+
+  const binancePartialDb = await newDb();
+  const partialCloseTradeId = binancePartialDb.insertTrade({
+    ticket: 503, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_RECOVERY_PARTIAL_TEST',
+  });
+  binancePartialDb.createExecutionLedger({
+    executionId: 'binance-close-partial', operationKey: 'binance-close-partial-op',
+    action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'BTCUSDT', side: 'BUY', volume: 0.01,
+    request: { tradeId: partialCloseTradeId },
+  });
+  const fakePartialExecutor = {
+    reconcileFuturesCloseByClientOrderId: async () => ({
+      found: true, status: 'PARTIALLY_FILLED', orderId: 9003, executedQty: 0.004,
+      realizedProfit: 50, realizedProfitCurrency: 'USDT',
+    }),
+    getPosition: async () => ({ positionAmt: 0.006, entryPrice: 50000, unrealizedProfit: 0 }),
+  } as any;
+  const partialRecover = new StartupReconciler(binanceCfg, binancePartialDb, new TelegramBot(binanceCfg));
+  await (partialRecover as any).resolveAuthoritativeBinanceCloseLedgers(fakePartialExecutor);
+  assert(
+    binancePartialDb.getExecutionByOperationKey('binance-close-partial-op').status === 'UNKNOWN',
+    'PARTIALLY_FILLED Binance close must remain UNKNOWN until final broker state is authoritative',
+  );
+  assert(binancePartialDb.getOpenTrades().length === 1, 'partial Binance close must not pretend the trade is fully closed');
+  binancePartialDb.raw().close();
+  console.log('Result: 27 passed, 0 failed');
 }
 
 main().catch(error => {
