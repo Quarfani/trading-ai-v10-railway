@@ -478,7 +478,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; realizedProfit: number | null }> {
     try {
       // Cancel SL/TP first
       const ids = this.orderMap.get(ticket);
@@ -495,22 +495,42 @@ export class BinanceExecutor {
       }
 
       if (this.isFutures) {
-        const pos=await this.getPosition(symbol); if(!pos||pos.positionAmt===0)return true;
+        const pos=await this.getPosition(symbol);
+        if(!pos||pos.positionAmt===0) {
+          return { ok:true, realizedProfit:0 };
+        }
         const closeQty=volume??Math.abs(pos.positionAmt); const closeSide=pos.positionAmt>0?'SELL':'BUY';
-        await this.signedPost('/fapi/v1/order',{symbol,side:closeSide,type:'MARKET',quantity:this.formatQty(Math.abs(closeQty),getSymbolSpec(symbol).volumeStep),reduceOnly:'true'});
+        const closeOrder = await this.signedPost('/fapi/v1/order',{
+          symbol,
+          side:closeSide,
+          type:'MARKET',
+          quantity:this.formatQty(Math.abs(closeQty),getSymbolSpec(symbol).volumeStep),
+          reduceOnly:'true',
+        });
+        const closeOrderId = Number(closeOrder?.orderId);
+        if (!(closeOrderId > 0) || !Number.isFinite(closeOrderId)) {
+          throw new Error('Binance full close returned invalid orderId');
+        }
+        const realizedProfit = await this.getFuturesOrderNetPnl(symbol, closeOrderId);
+        if (realizedProfit == null) {
+          throw new Error(
+            `Binance full close ${symbol} executed but authoritative fills/PnL are unavailable`,
+          );
+        }
       } else {
         const closeSide = ids?.closeSide ?? (
           side === 'BUY' ? 'SELL' : side === 'SELL' ? 'BUY' : undefined
         );
         const closeQty = volume ?? ids?.quantity;
-        if (!closeSide || !(closeQty > 0)) return false;
+        if (!closeSide || !(closeQty > 0)) return { ok:false, realizedProfit:null };
         await this.signedPost('/api/v3/order',{symbol,side:closeSide,type:'MARKET',quantity:this.formatQty(closeQty,getSymbolSpec(symbol).volumeStep)});
       }
-      this.logger.info(`[Binance] Closed position ${symbol} ticket=${ticket}`); return true;
+      this.logger.info(`[Binance] Closed position ${symbol} ticket=${ticket}`);
+      return { ok:true, realizedProfit:this.isFutures ? realizedProfit : null };
 
     } catch (e: any) {
       this.logger.error(`closePosition failed: ${e.message}`);
-      return false;
+      return { ok:false, realizedProfit:null };
     }
   }
 
