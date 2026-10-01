@@ -117,6 +117,14 @@ async function main() {
     };
 
     await new StartupReconciler(mt5Cfg, mt5CloseDb, new TelegramBot(mt5Cfg)).run();
+    const settledTrade = mt5CloseDb.raw().prepare(
+      'SELECT closedAt, profit FROM trades WHERE id=?',
+    ).get(tradeId) as any;
+    assert(
+      Number.isFinite(Number(settledTrade.closedAt)) &&
+      Number(settledTrade.closedAt) > 0,
+      'reconciled MT5 close must persist a broker-derived close timestamp',
+    );
     const resolvedLedger = mt5CloseDb.getExecutionByOperationKey('mt5-close-op');
     assert(resolvedLedger.status === 'EXECUTED', 'authoritative MT5 close must clear UNKNOWN before startup completes');
     assert(mt5CloseDb.getOpenTrades().length === 0, 'authoritative MT5 close must close the internal trade before startup completes');
