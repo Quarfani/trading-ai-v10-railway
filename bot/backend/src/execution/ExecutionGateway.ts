@@ -74,11 +74,28 @@ export class ExecutionGateway {
     }
 
     const executionId = crypto.randomUUID();
-    this.db.createExecutionLedger({
+    const claimed = this.db.createExecutionLedger({
       executionId, operationKey, action: 'OPEN', status: 'PENDING',
       symbol: signal.symbol, side: signal.side, volume,
       request: { timeframe, signal, volume },
     });
+    if (!claimed) {
+      const raced = this.db.getExecutionByOperationKey(operationKey);
+      if (raced?.status === 'EXECUTED' && raced.resultJson) {
+        return {
+          success: true,
+          trade: JSON.parse(raced.resultJson) as Trade,
+          retries: raced.retryCount ?? 0,
+        };
+      }
+      return {
+        success: false,
+        error: raced
+          ? `Execution ${operationKey} already exists with status=${raced.status}; automatic retry is forbidden until reconciliation`
+          : 'Execution ledger claim raced but no owner row is visible; no broker request was sent',
+        retries: raced?.retryCount ?? 0,
+      };
+    }
 
     const started = Date.now();
     const clientOrderId = this.config.mode === 'binance'
@@ -586,11 +603,19 @@ export class ExecutionGateway {
     const existing = this.db.getExecutionByOperationKey(operationKey);
     if (existing) return { executionId: String(existing.executionId), existing };
     const executionId = crypto.randomUUID();
-    this.db.createExecutionLedger({
+    const claimed = this.db.createExecutionLedger({
       executionId, operationKey, action, status: 'PENDING', symbol: trade.symbol,
       side: trade.side, volume: trade.volume, request: { tradeId: trade.id, ...request },
     });
-    return { executionId, existing: null };
+    if (claimed) return { executionId, existing: null };
+
+    const raced = this.db.getExecutionByOperationKey(operationKey);
+    if (raced) {
+      return { executionId: String(raced.executionId), existing: raced };
+    }
+    throw new Error(
+      `Execution ledger claim failed for ${action}; no broker request was sent`,
+    );
   }
 
   private stableKey(action: string, payload: Record<string, unknown>): string {
