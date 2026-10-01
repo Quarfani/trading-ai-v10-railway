@@ -559,6 +559,57 @@ export class ExecutionGateway {
   }
 
 
+  private settleLivePartialClose(
+    t: Trade,
+    executionId: string,
+    remainingVolume: number,
+    realizedProfit: number,
+    result: unknown,
+    brokerOrderId?: string | number,
+  ): number {
+    if (!t.id) throw new Error('Live partial close requires a persisted trade id');
+    if (!Number.isFinite(remainingVolume) || remainingVolume < 0) {
+      throw new Error('Live partial close returned invalid remaining volume');
+    }
+    if (!Number.isFinite(realizedProfit)) {
+      throw new Error('Live partial close returned invalid realized PnL');
+    }
+
+    const row = this.db.raw().prepare(
+      `SELECT realizedProfit, status FROM trades WHERE id=? LIMIT 1`,
+    ).get(t.id) as { realizedProfit?: number; status?: string } | undefined;
+    if (!row || row.status !== 'open') {
+      throw new Error(`Cannot settle partial close for trade id=${t.id}: trade is missing or not open`);
+    }
+
+    const priorRealized = Number(row.realizedProfit ?? 0);
+    if (!Number.isFinite(priorRealized)) {
+      throw new Error(`Persisted realized PnL is invalid for trade id=${t.id}`);
+    }
+    const cumulativeRealized = priorRealized + realizedProfit;
+    if (!Number.isFinite(cumulativeRealized)) {
+      throw new Error(`Cumulative realized PnL is invalid for trade id=${t.id}`);
+    }
+
+    const settled = this.db.resolveReconciledPartialClose(
+      t.id,
+      executionId,
+      remainingVolume,
+      cumulativeRealized,
+      {
+        ...((result && typeof result === 'object') ? result : { brokerResult: result }),
+        cumulativeRealizedProfit: cumulativeRealized,
+      },
+      brokerOrderId,
+    );
+    if (!settled) {
+      throw new Error(`Atomic partial trade/ledger settlement failed for id=${t.id}`);
+    }
+
+    t.volume = remainingVolume;
+    t.realizedProfit = cumulativeRealized;
+    return realizedProfit;
+  }
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
     if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
 
@@ -649,9 +700,22 @@ export class ExecutionGateway {
         realizedProfit = result.profit;
       }
 
-      if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=COALESCE(realizedProfit,0)+?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(remaining, realizedProfit, `\npartial_volume=${volume}\npartial_pnl=${realizedProfit.toFixed(8)}`, t.id);
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result: { remainingVolume: remaining, profit: realizedProfit } });
-      return { ok: true, profit: realizedProfit, remainingVolume: remaining };
+      if (this.config.mode === 'paper') {
+        throw new Error('Paper partial close reached an invalid live-settlement path');
+      }
+
+      const brokerOrderId = this.config.mode === 'binance'
+        ? (await this.getBinancePartialOrderIdForOperation(key, t.symbol)).orderId
+        : undefined;
+      const returnedProfit = this.settleLivePartialClose(
+        t,
+        op.executionId,
+        remaining,
+        realizedProfit,
+        { remainingVolume: remaining, profit: realizedProfit },
+        brokerOrderId,
+      );
+      return { ok: true, profit: returnedProfit, remainingVolume: remaining };
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
       this.logger.error(`closePartial: ${e?.message ?? e}`);
