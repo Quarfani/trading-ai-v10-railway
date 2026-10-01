@@ -591,6 +591,11 @@ export class ExecutionGateway {
           { ticket: t.ticket, fraction, idempotency_key: key },
           { timeout: 8_000, headers: this.mt5Headers() },
         );
+        if (r.data?.ok !== true) {
+          throw new Error(
+            `MT5 partial close returned non-success response: ${JSON.stringify(r.data)}`,
+          );
+        }
         const brokerRemaining = Number(r.data?.remaining_volume);
         const brokerProfit = Number(r.data?.profit ?? 0);
         if (!Number.isFinite(brokerRemaining) || brokerRemaining < 0 || brokerRemaining > t.volume) {
