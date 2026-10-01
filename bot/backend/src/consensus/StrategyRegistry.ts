@@ -20,6 +20,7 @@ import {
 import { DatabaseManager } from '../database/DatabaseManager';
 import { Logger }          from '../utils/Logger';
 import { StrategyDefinitionStore } from './StrategyDefinitionStore';
+import { EvidencePromotionPolicy, DEFAULT_EVIDENCE_PROMOTION_POLICY } from './EvidencePromotionPolicy';
 
 const EMPTY_METRICS: StrategyMetrics = {
   win_rate: 0.50, sharpe_ratio: 0, max_drawdown: 0,
@@ -36,9 +37,10 @@ export class StrategyRegistry {
   constructor(
     private readonly db: DatabaseManager,
     cfg: Partial<ConsensusConfig> = {},
+    evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
   ) {
     this.cfg = { ...DEFAULT_CONSENSUS_CONFIG, ...cfg, gate: { ...DEFAULT_CONSENSUS_CONFIG.gate, ...(cfg.gate ?? {}) } };
-    this.definitionStore = new StrategyDefinitionStore(db);
+    this.definitionStore = new StrategyDefinitionStore(db, evidencePolicy);
   }
 
   // ─── Registration ─────────────────────────────────────────────────────────
