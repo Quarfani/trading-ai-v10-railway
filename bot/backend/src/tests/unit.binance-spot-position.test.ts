@@ -1,4 +1,4 @@
-import { BinanceExecutor } from "../execution/BinanceExecutor";
+const { BinanceExecutor } = require("../execution/BinanceExecutor");
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
