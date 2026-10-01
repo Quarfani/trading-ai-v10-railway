@@ -32,6 +32,11 @@ interface OpenOrderIds {
   quantity?: number;
 }
 
+export function makeBinanceClientOrderId(operationKey: string): string {
+  const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
+  return `ta_${digest}`.slice(0, 32);
+}
+
 export class BinanceExecutor {
   private logger = new Logger('BinanceExecutor');
   private http:  AxiosInstance;
@@ -126,6 +131,197 @@ export class BinanceExecutor {
     return { profit: net, currency };
   }
 
+
+  private async findHistoricalOrderByClientId(
+    symbol: string,
+    clientOrderId: string,
+    createdAt?: number,
+  ): Promise<any | null> {
+    if (!this.isFutures) return null;
+    try {
+      const now = Date.now();
+      const historyFloor = Math.max(0, now - 7 * 24 * 60 * 60_000);
+      let startTime = Number.isFinite(Number(createdAt)) && Number(createdAt) > 0
+        ? Math.max(historyFloor, Number(createdAt) - 5 * 60_000)
+        : Math.max(historyFloor, now - 24 * 60 * 60_000);
+
+      for (let page = 0; page < 5; page += 1) {
+        const result = await this.signedGet('/fapi/v1/allOrders', {
+          symbol,
+          startTime,
+          endTime: now,
+          limit: 1000,
+        });
+        if (!Array.isArray(result)) return result ?? null;
+
+        const match = result.find(
+          (order: any) =>
+            String(order?.clientOrderId ?? order?.origClientOrderId ?? '') === clientOrderId,
+        );
+        if (match) return match;
+        if (result.length < 1000) return null;
+
+        const lastTime = Math.max(
+          ...result.map((order: any) =>
+            Number(order?.updateTime ?? order?.time ?? 0),
+          ),
+        );
+        if (!(lastTime >= startTime)) return null;
+        startTime = lastTime + 1;
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async reconcileFullCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+    createdAt?: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    realizedProfit: number;
+    realizedProfitCurrency: string | null;
+  }> {
+    if (!this.isFutures || !clientOrderId) {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId, createdAt);
+    if (!order) {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const orderId = Number(order?.orderId);
+    const status = String(order?.status ?? '').toUpperCase();
+    const executedQty = Number(order?.executedQty ?? 0);
+    if (!(orderId > 0) || !Number.isFinite(executedQty) || executedQty <= 0) {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    if (status && !['FILLED', 'PARTIALLY_FILLED', 'CANCELED', 'EXPIRED'].includes(status)) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+    if (!realized) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const positions = await this.getAllPositions();
+    const position = positions.find(
+      item => item.symbol === symbol && Math.abs(item.positionAmt) > 1e-12,
+    );
+    if (position) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: realized.profit,
+        realizedProfitCurrency: realized.currency,
+      };
+    }
+
+    return {
+      ok: true,
+      orderId,
+      executedQty,
+      realizedProfit: realized.profit,
+      realizedProfitCurrency: realized.currency,
+    };
+  }
+
+  async reconcilePartialCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+    createdAt?: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    remainingVolume: number;
+    realizedProfit: number;
+    realizedProfitCurrency: string | null;
+  }> {
+    if (!this.isFutures || !clientOrderId) {
+      return { ok: false, orderId: 0, executedQty: 0, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
+    }
+
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId, createdAt);
+    if (!order) {
+      return { ok: false, orderId: 0, executedQty: 0, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
+    }
+
+    const orderId = Number(order?.orderId);
+    const status = String(order?.status ?? '').toUpperCase();
+    const executedQty = Number(order?.executedQty ?? 0);
+    if (!(orderId > 0) || !Number.isFinite(executedQty) || executedQty <= 0) {
+      return { ok: false, orderId: 0, executedQty: 0, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
+    }
+    if (status && !['FILLED', 'PARTIALLY_FILLED', 'CANCELED', 'EXPIRED'].includes(status)) {
+      return { ok: false, orderId, executedQty, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
+    }
+
+    const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+    if (!realized) {
+      return { ok: false, orderId, executedQty, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
+    }
+
+    const position = await this.getPosition(symbol);
+    if (!position) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        remainingVolume: 0,
+        realizedProfit: realized.profit,
+        realizedProfitCurrency: realized.currency,
+      };
+    }
+
+    return {
+      ok: true,
+      orderId,
+      executedQty,
+      remainingVolume: Math.max(0, Math.abs(position.positionAmt)),
+      realizedProfit: realized.profit,
+      realizedProfitCurrency: realized.currency,
+    };
+  }
 
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
     try {
@@ -423,8 +619,10 @@ export class BinanceExecutor {
     ticket:number,
     symbol:string,
     volume:number,
+    clientOrderId?: string,
   ):Promise<{
     ok:boolean;
+    orderId?: number;
     remainingVolume:number;
     realizedProfit:number;
     realizedProfitCurrency:string|null;
@@ -466,6 +664,7 @@ export class BinanceExecutor {
         type:'MARKET',
         quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
         reduceOnly:'true',
+        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
       });
 
       const orderId=Number(order?.orderId);
@@ -474,7 +673,17 @@ export class BinanceExecutor {
       }
 
       const after=await this.getPosition(symbol);
-      const remainingVolume=Math.max(0,Math.abs(after?.positionAmt??0));
+      if (!after) {
+        throw new Error(
+          `Binance partial close position verification unavailable for ${symbol}`,
+        );
+      }
+      const remainingVolume=Math.max(0,Math.abs(after.positionAmt));
+      if (!(remainingVolume > 0 && remainingVolume < available)) {
+        throw new Error(
+          `Binance partial close returned invalid remaining position for ${symbol}: ${remainingVolume}`,
+        );
+      }
 
       const realized=await this.getFuturesOrderNetPnl(symbol,orderId);
       if(realized==null) {
@@ -488,6 +697,7 @@ export class BinanceExecutor {
 
       return {
         ok:true,
+        orderId,
         remainingVolume,
         realizedProfit:realized.profit,
         realizedProfitCurrency:realized.currency,
@@ -511,15 +721,33 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
+    orderId?: number;
     realizedProfit: number | null;
     realizedProfitCurrency: string | null;
   }> {
+    let brokerOrderId: number | undefined;
     let realizedProfit: number | null = null;
     let realizedProfitCurrency: string | null = null;
 
     try {
+      let verifiedPosition: { positionAmt: number; entryPrice: number; unrealizedProfit: number } | null = null;
+      if (this.isFutures) {
+        verifiedPosition = await this.getPosition(symbol);
+        if (!verifiedPosition) {
+          throw new Error(
+            `Binance full close position verification unavailable for ${symbol}`,
+          );
+        }
+        if (verifiedPosition.positionAmt === 0) {
+          throw new Error(
+            `Binance full close found no open position for ${symbol}`,
+          );
+        }
+      }
+
       const ids = this.orderMap.get(ticket);
       if (ids) {
         const oldOrderIds = [ids.slOrderId, ids.tpOrderId].filter(
@@ -549,13 +777,11 @@ export class BinanceExecutor {
       }
 
       if (this.isFutures) {
-        const pos = await this.getPosition(symbol);
-        if (!pos || pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+        const pos = verifiedPosition;
+        if (!pos) {
+          throw new Error(
+            `Binance full close position verification unavailable for ${symbol}`,
+          );
         }
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
@@ -570,12 +796,14 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
         if (!(closeOrderId > 0) || !Number.isFinite(closeOrderId)) {
           throw new Error('Binance full close returned invalid orderId');
         }
+        brokerOrderId = closeOrderId;
 
         const realized = await this.getFuturesOrderNetPnl(
           symbol,
@@ -620,6 +848,9 @@ export class BinanceExecutor {
 
       return {
         ok:true,
+        orderId: this.isFutures
+          ? brokerOrderId
+          : undefined,
         realizedProfit:this.isFutures ? realizedProfit : null,
         realizedProfitCurrency:this.isFutures
           ? realizedProfitCurrency
@@ -641,7 +872,19 @@ export class BinanceExecutor {
   async getPosition(symbol: string): Promise<{ positionAmt: number; entryPrice: number; unrealizedProfit: number } | null> {
     if (this.isFutures) {
       const res = await this.signedGet('/fapi/v2/positionRisk', { symbol });
-      const pos = Array.isArray(res) ? res.find((p: any) => p.symbol === symbol) : res;
+      const matches = Array.isArray(res)
+        ? res.filter((p: any) => p && p.symbol === symbol)
+        : res ? [res] : [];
+      const liveMatches = matches.filter(
+        (p: any) => Number.isFinite(Number(p.positionAmt)) &&
+          Math.abs(Number(p.positionAmt)) > 1e-12,
+      );
+      if (liveMatches.length > 1) {
+        throw new Error(
+          `Binance returned multiple live position sides for ${symbol}; reconciliation is unsafe`,
+        );
+      }
+      const pos = liveMatches[0] ?? matches[0];
       if (!pos) return null;
       const positionAmt = Number(pos.positionAmt);
       const entryPrice = Number(pos.entryPrice);
