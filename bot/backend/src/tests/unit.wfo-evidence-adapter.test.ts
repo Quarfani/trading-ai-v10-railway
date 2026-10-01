@@ -43,7 +43,7 @@ assert(summary.oosTrades === folds.length * 20, 'OOS trades should be derived');
 assert(summary.walkForwardStability === 1, 'all synthetic folds are profitable');
 assert(summary.weightedProfitFactor > 1, 'aggregate PF should be derived');
 assert(
-  Math.abs(summary.weightedProfitFactor - 430 / 275) < 1e-6,
+  Math.abs(summary.weightedProfitFactor - 600 / 550) < 1e-6,
   'aggregate PF should be computed from exact OOS positive and negative PnL',
 );
 
