@@ -13,6 +13,7 @@ import { ConsensusConfig, ConsensusResult, StrategyContext } from './types';
 import { ConsensusLogger } from './ConsensusLogger';
 import { Candle, Timeframe, Mode } from '../types/trading.types';
 import { EvidencePromotionPolicy, DEFAULT_EVIDENCE_PROMOTION_POLICY } from './EvidencePromotionPolicy';
+import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 
 export interface LogEntry extends ConsensusResult {
   symbol: string;
@@ -105,9 +106,26 @@ export class ConsensusOrchestrator {
     });
   }
 
-  isExecutionLifecycleEligible(source: string, mode: Mode): { allowed: boolean; reason: string } {
+  isExecutionLifecycleEligible(
+    source: string,
+    mode: Mode,
+    symbol?: string,
+    timeframe: Timeframe = 'H1',
+    regime?: string,
+  ): { allowed: boolean; reason: string } {
     const names = source.split('+').map(s => s.trim()).filter(Boolean);
     if (!names.length) return { allowed: false, reason: 'empty strategy source' };
+
+    const canonicalSymbol = (value: string) =>
+      value.trim().toUpperCase().split(/[._:-]/, 1)[0].replace(/[^A-Z0-9]/g, '');
+
+    const requestedSymbol = symbol ? canonicalSymbol(symbol) : undefined;
+    const market =
+      symbol
+        ? (mode === 'paper'
+          ? getMarketDefinition(symbol, timeframe)
+          : getBrokerMarketDefinition(symbol, timeframe) ?? getMarketDefinition(symbol, timeframe))
+        : null;
 
     const required =
       mode === 'paper' ? 'PAPER' :
@@ -155,9 +173,52 @@ export class ConsensusOrchestrator {
           reason: `strategy ${name} lifecycle=${definition.lifecycle} requires >= ${required}`,
         };
       }
+
+      if (requestedSymbol) {
+        const scope = definition.scope;
+        if (
+          scope.symbols.length > 0 &&
+          !scope.symbols.some(scopedSymbol => canonicalSymbol(scopedSymbol) === requestedSymbol)
+        ) {
+          return {
+            allowed: false,
+            reason: `strategy ${name} scope does not include symbol ${symbol}`,
+          };
+        }
+
+        if (
+          scope.timeframes.length > 0 &&
+          !scope.timeframes.includes(timeframe)
+        ) {
+          return {
+            allowed: false,
+            reason: `strategy ${name} scope does not include timeframe ${timeframe}`,
+          };
+        }
+
+        if (
+          scope.assetClasses.length > 0 &&
+          (!market || !scope.assetClasses.includes(market.assetClass))
+        ) {
+          return {
+            allowed: false,
+            reason: `strategy ${name} scope does not include asset class ${market?.assetClass ?? 'UNKNOWN'}`,
+          };
+        }
+
+        if (
+          scope.regimes.length > 0 &&
+          (!regime || !scope.regimes.some(r => r.trim().toUpperCase() === regime.trim().toUpperCase()))
+        ) {
+          return {
+            allowed: false,
+            reason: `strategy ${name} scope does not include regime ${regime ?? 'UNKNOWN'}`,
+          };
+        }
+      }
     }
 
-    return { allowed: true, reason: 'strategy lifecycle eligible' };
+    return { allowed: true, reason: 'strategy lifecycle and scope eligible' };
   }
 
   getStatus() {
