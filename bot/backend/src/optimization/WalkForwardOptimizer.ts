@@ -126,6 +126,7 @@ export class WalkForwardOptimizer {
       );
       const testMetrics = await this.evaluateOnTest(
         symbol,
+        trainCandles.slice(-250),
         testCandles,
         bestParams,
         timeframe,
@@ -213,6 +214,7 @@ export class WalkForwardOptimizer {
     params: OptimParams,
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
+    evaluationStartTime?: number,
   ): Promise<{
     winRate: number;
     sharpe: number;
@@ -245,6 +247,7 @@ export class WalkForwardOptimizer {
         10_000,
         timeframe,
         historicalCurrencyRates,
+        evaluationStartTime,
       );
 
       if (!res.valid) {
@@ -292,12 +295,34 @@ export class WalkForwardOptimizer {
 
   private async evaluateOnTest(
     symbol: string,
-    candles: Candle[],
+    warmupCandles: Candle[],
+    validationCandles: Candle[],
     params: OptimParams,
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
   ): Promise<any> {
-    return this.quickBacktest(symbol, candles, params, timeframe, historicalCurrencyRates);
+    const combined = [...warmupCandles, ...validationCandles];
+    const evaluationStartTime = validationCandles[0]?.time;
+
+    if (evaluationStartTime == null || validationCandles.length === 0) {
+      return {
+        winRate: 0,
+        sharpe: 0,
+        profitFactor: 0,
+        totalReturn: 0,
+        maxDD: 1,
+        valid: false,
+      };
+    }
+
+    return this.quickBacktest(
+      symbol,
+      combined,
+      params,
+      timeframe,
+      historicalCurrencyRates,
+      evaluationStartTime,
+    );
   }
 
   // ─── Build final result ───────────────────────────────────────────────────
