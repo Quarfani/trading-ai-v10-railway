@@ -460,6 +460,7 @@ async function main() {
   atomicFullDb.raw().close();
 
   const stateDb = new DatabaseManager(":memory:");
+  await stateDb.initialize();
   const invalidStateCreated = stateDb.createExecutionLedger({
     executionId: "state-invalid",
     operationKey: "state-invalid-op",
@@ -470,7 +471,6 @@ async function main() {
     volume: 0.01,
   });
   assert(invalidStateCreated === false, "ledger creation must reject unknown execution states");
-  await stateDb.initialize();
   stateDb.createExecutionLedger({
     executionId: "state-1",
     operationKey: "state-op",
