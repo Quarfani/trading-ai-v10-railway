@@ -12,7 +12,7 @@ const normalized = (scanner as any).normalizeCandles([
   { time: 3_000, open: 100, high: 105, low: 110, close: 104, volume: 10 },
   { time: 4_000, open: 100, high: 105, low: 99, close: 104, volume: -1 },
   { time: 5_000, open: 100, high: 105, low: 99, close: 104, volume: 10 },
-  { time: now - 120_000, open: 100, high: 105, low: 99, close: 104, volume: 10 },
+  { time: now - 30_000, open: 100, high: 105, low: 99, close: 104, volume: 10 },
 ], 'mt5', 'M1');
 
 assert(normalized.length === 2, "invalid OHLC/volume candles must be rejected");
