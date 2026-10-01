@@ -11,6 +11,7 @@ import {
   AssetClass,
   MarketDefinition,
   MarketVenue,
+  Timeframe,
   normalizeSymbol,
 } from './market.types';
 import { getSymbolSpec, isConfiguredSymbol } from '../config/symbolConfig';
@@ -81,7 +82,7 @@ export function getBrokerConversionSymbols(
   );
 }
 
-export function getMarketDefinition(symbol: string): MarketDefinition | null {
+export function getMarketDefinition(symbol: string, timeframe: Timeframe = 'H1'): MarketDefinition | null {
   const raw = symbol.trim().toUpperCase();
 
   // Broker metadata must be looked up using the exact broker symbol first.
@@ -98,7 +99,7 @@ export function getMarketDefinition(symbol: string): MarketDefinition | null {
 
   if (!assetClass) return null;
 
-  const spec = getSymbolSpec(normalized);
+  const spec = getSymbolSpec(normalized, timeframe);
 
   if (
     !Number.isFinite(spec.contractSize) ||
@@ -158,8 +159,8 @@ export function getMarketDefinition(symbol: string): MarketDefinition | null {
   };
 }
 
-export function requireMarketDefinition(symbol: string): MarketDefinition {
-  const market = getMarketDefinition(symbol);
+export function requireMarketDefinition(symbol: string, timeframe: Timeframe = 'H1'): MarketDefinition {
+  const market = getMarketDefinition(symbol, timeframe);
   if (!market) {
     throw new Error(
       `[MarketCatalog] Unsupported or incomplete market definition for "${symbol}". ` +

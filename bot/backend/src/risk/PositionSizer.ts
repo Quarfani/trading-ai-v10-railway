@@ -52,7 +52,7 @@ export class PositionSizer {
   ): number {
     const equity = currentEquity ?? this.config.accountBalance;
 
-    const market = getMarketDefinition(symbol);
+    const market = getMarketDefinition(symbol, timeframe);
     if (!market) {
       this.logger.warn(`[${symbol}] No canonical market definition — sizing blocked`);
       return 0;
