@@ -16,6 +16,10 @@ export interface BacktestWfoMetrics {
   pnl: number;
   profitFactor: number;
   totalCost: number;
+  parameterSensitivity: number;
+  regimeCoverage: number;
+  datasetQuality: number;
+  sampleSize: number;
   leakagePassed: boolean;
 }
 
@@ -28,6 +32,10 @@ export interface WfoEvidenceSummary {
   walkForwardStability: number;
   weightedProfitFactor: number;
   totalCost: number;
+  averageParameterSensitivity: number;
+  averageRegimeCoverage: number;
+  averageDatasetQuality: number;
+  sampleSize: number;
   leakageChecksPassed: boolean;
   passed: boolean;
   reasons: string[];
@@ -56,6 +64,10 @@ export function summarizeWfoEvidence(
       walkForwardStability: 0,
       weightedProfitFactor: 0,
       totalCost: 0,
+      averageParameterSensitivity: 0,
+      averageRegimeCoverage: 0,
+      averageDatasetQuality: 0,
+      sampleSize: 0,
       leakageChecksPassed: false,
       passed: false,
       reasons: ['No WFO folds supplied'],
@@ -102,6 +114,23 @@ export function summarizeWfoEvidence(
         ) / totalWeightedTrades
       : 0;
 
+  const averageParameterSensitivity =
+    folds.reduce((sum, fold) => sum + Math.max(0, Math.min(1, fold.parameterSensitivity)), 0) /
+    folds.length;
+
+  const averageRegimeCoverage =
+    folds.reduce((sum, fold) => sum + Math.max(0, Math.min(1, fold.regimeCoverage)), 0) /
+    folds.length;
+
+  const averageDatasetQuality =
+    folds.reduce((sum, fold) => sum + Math.max(0, Math.min(1, fold.datasetQuality)), 0) /
+    folds.length;
+
+  const sampleSize = folds.reduce(
+    (sum, fold) => sum + Math.max(0, fold.sampleSize),
+    0,
+  );
+
   const totalCost = folds.reduce(
     (sum, fold) => sum + Math.max(0, fold.totalCost),
     0,
@@ -133,6 +162,10 @@ export function summarizeWfoEvidence(
     walkForwardStability: Number(walkForwardStability.toFixed(6)),
     weightedProfitFactor: Number(weightedProfitFactor.toFixed(6)),
     totalCost,
+    averageParameterSensitivity: Number(averageParameterSensitivity.toFixed(6)),
+    averageRegimeCoverage: Number(averageRegimeCoverage.toFixed(6)),
+    averageDatasetQuality: Number(averageDatasetQuality.toFixed(6)),
+    sampleSize,
     leakageChecksPassed: passed && leakageChecksPassed,
     passed,
     reasons,
@@ -141,18 +174,18 @@ export function summarizeWfoEvidence(
 
 export function evidenceInputFromWfo(
   folds: BacktestWfoMetrics[],
-  metadata: EvidenceMetadata,
+  metadata: Partial<EvidenceMetadata> = {},
 ): EvidenceInput {
   const summary = summarizeWfoEvidence(folds);
 
   return {
-    sampleSize: metadata.sampleSize,
+    sampleSize: metadata.sampleSize ?? summary.sampleSize,
     outOfSampleTrades: summary.oosTrades,
     walkForwardStability: summary.walkForwardStability,
-    regimeCoverage: metadata.regimeCoverage,
-    parameterSensitivity: metadata.parameterSensitivity,
+    regimeCoverage: metadata.regimeCoverage ?? summary.averageRegimeCoverage,
+    parameterSensitivity: metadata.parameterSensitivity ?? summary.averageParameterSensitivity,
     costAdjustedProfitFactor: summary.weightedProfitFactor,
-    datasetQuality: metadata.datasetQuality,
+    datasetQuality: metadata.datasetQuality ?? summary.averageDatasetQuality,
     leakageChecksPassed:
       summary.leakageChecksPassed && summary.passed,
   };
@@ -165,6 +198,10 @@ export function metricsFromPurgedWfoFold<T>(
     trades: number;
     profitFactor: number;
     totalCost: number;
+    parameterSensitivity?: number;
+    regimeCoverage?: number;
+    datasetQuality?: number;
+    sampleSize?: number;
   },
 ): BacktestWfoMetrics {
   return {
@@ -176,6 +213,10 @@ export function metricsFromPurgedWfoFold<T>(
     pnl: metrics.pnl,
     profitFactor: metrics.profitFactor,
     totalCost: metrics.totalCost,
+    parameterSensitivity: metrics.parameterSensitivity ?? 0,
+    regimeCoverage: metrics.regimeCoverage ?? 0,
+    datasetQuality: metrics.datasetQuality ?? 0,
+    sampleSize: metrics.sampleSize ?? 0,
     leakagePassed:
       fold.train.every(
         observation =>
