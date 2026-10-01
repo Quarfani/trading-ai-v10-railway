@@ -297,90 +297,19 @@ export class SymbolValidator {
       buildMT5BrokerContractDefinition(symbol, response.data),
     );
   }
-  private async validateBinance(symbol: string): Promise<boolean> {
-    const isFutures = this.config.binance.futures;
-
-    const bases = isFutures
-      ? [
-          this.config.binance.env === 'testnet'
-            ? 'https://testnet.binancefuture.com/fapi/v1'
-            : 'https://fapi.binance.com/fapi/v1',
-        ]
-      : [
-          'https://data-api.binance.vision/api/v3',
-          'https://api-gcp.binance.com/api/v3',
-          'https://api.binance.com/api/v3',
-          'https://api1.binance.com/api/v3',
-          'https://api2.binance.com/api/v3',
-          'https://api3.binance.com/api/v3',
-          'https://api4.binance.com/api/v3',
-        ];
-
-    const failures: string[] = [];
-
-    for (const base of bases) {
-      try {
-        const response = await axios.get(
-          `${base}/exchangeInfo`,
-          {
-            params: { symbol },
-            timeout: 5000,
-          },
-        );
-
-        const symbols = response.data?.symbols;
-
-        if (Array.isArray(symbols) && symbols.length > 0) {
-          this.logger.info(
-            `[Binance] ${symbol} validated via ${base}`,
-          );
-          return true;
-        }
-
-        failures.push(`${base}: empty symbols response`);
-      } catch (error: any) {
-        const status = error?.response?.status;
-        const code = error?.code;
-        const message = error?.message ?? 'unknown error';
-
-        failures.push(
-          `${base}: ${status ? `HTTP ${status}` : code ?? message}`,
-        );
-      }
-    }
-
-    this.logger.error(
-      `[Binance] ${symbol} validation failed on all endpoints: ${failures.join(
-        ' | ',
-      )}`,
+  private async enrichBrokerContract(symbol: string): Promise<void> {
+    const response = await axios.get(
+      this.config.mt5.bridgeUrl + '/contract',
+      {
+        params: { symbol },
+        timeout: 5000,
+        headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
+      },
     );
 
-    return false;
+    registerBrokerContract(
+      buildMT5BrokerContractDefinition(symbol, response.data),
+    );
   }
 
-  private resolveSource(symbol: string): 'mt5' | 'binance' {
-    if (this.config.mode === 'mt5') {
-      return 'mt5';
-    }
-
-    if (this.config.mode === 'binance') {
-      return 'binance';
-    }
-
-    if (this.config.dataSource === 'mt5') {
-      return 'mt5';
-    }
-
-    if (this.config.dataSource === 'binance') {
-      return 'binance';
-    }
-
-    const normalized = symbol
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '');
-
-    return /(USDT|USDC|BUSD)$/.test(normalized)
-      ? 'binance'
-      : 'mt5';
-  }
 }
