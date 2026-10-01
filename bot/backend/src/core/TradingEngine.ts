@@ -92,6 +92,7 @@ import { SentimentEngine } from '../sentiment/SentimentEngine';
 import { AITradeJournal } from '../journal/AITradeJournal';
 
 import { getSymbolSpec } from '../config/symbolConfig';
+import { detectFalseSignal } from '../filters/FalseSignalEngine';
 import { getMarketDefinition } from '../market/MarketCatalog';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 
@@ -1066,6 +1067,32 @@ export class TradingEngine extends EventEmitter {
           spread,
         );
     }
+
+    // ── False-signal filter ────────────────────────────────────────────
+    const signalSpreadPips = ticker
+      ? (ticker.ask - ticker.bid) /
+        getSymbolSpec(symbol).pip
+      : undefined;
+
+    const falseSignal = detectFalseSignal({
+      candles,
+      side: adjustedSignal.side,
+      entryPrice: adjustedSignal.price,
+      spreadPips: signalSpreadPips,
+      maxSpreadPips: getSymbolSpec(symbol).spreadMaxPips,
+    });
+
+    if (!falseSignal.passed) {
+      this.logger.info(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=FALSE_SIGNAL ` +
+          `reasons=${falseSignal.reasons.join(',')}`,
+      );
+      return;
+    }
+
+    this.logger.info(
+      `[PIPELINE_PASS] ${symbol}/${tf} stage=FALSE_SIGNAL`,
+    );
 
     // ── Recovery strategy filter ───────────────────────────────────────
     if (recoveryState.allowedStrategies) {
