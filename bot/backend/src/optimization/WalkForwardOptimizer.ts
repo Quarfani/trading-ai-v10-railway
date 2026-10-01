@@ -99,6 +99,7 @@ export class WalkForwardOptimizer {
   constructor(
     private dbPath: string,
     private readonly accountCurrency = String(process.env.ACCOUNT_CURRENCY ?? 'USD').toUpperCase(),
+    private readonly riskPerTrade = 0.01,
   ) {}
 
   async run(
@@ -336,6 +337,7 @@ export class WalkForwardOptimizer {
         accountCurrency,
         accountBalance: 10_000,
         minConfidence: params.minConfidence,
+        riskPerTrade: this.riskPerTrade,
       } as any);
 
       const res = await bt.run(
