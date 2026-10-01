@@ -74,18 +74,30 @@ async function main() {
     console.log('✅ Params saved to DB — will be used on next bot startup');
   }
 
-  // Run Monte Carlo on closed trades
-  const trades = db.raw().prepare(
-    `SELECT profit FROM trades WHERE status='closed' AND symbol=? AND profit IS NOT NULL`
-  ).all(symbol) as Array<{ profit: number }>;
-
-  if (trades.length >= 10) {
-    console.log('\nRunning Monte Carlo...');
-    const mc     = new MonteCarloSimulator();
-    const mcRes  = mc.run(trades, 10_000, 5_000, 100);
+  // Run Monte Carlo on the actual OOS trade results from this WFO run.
+  // Never read the persistent/live trade ledger here: it can contain unrelated
+  // trades and would invalidate the research evidence.
+  const oosTrades = result.windows.flatMap(window => window.testMetrics.tradePnls);
+  if (oosTrades.length >= 10) {
+    console.log(`\nRunning Monte Carlo on ${oosTrades.length} OOS trades...`);
+    const mc = new MonteCarloSimulator();
+    const mcRes = mc.run(
+      oosTrades.map(profit => ({ profit })),
+      10_000,
+      5_000,
+      100,
+    );
     console.log(mc.summarize(mcRes));
+
+    if (result.monteCarloStress) {
+      console.log(
+        `Stress 95% DD: ${(result.monteCarloStress.maxDDP95 * 100).toFixed(1)}% | ` +
+        `Ruin probability: ${(result.monteCarloStress.probabilityRuin * 100).toFixed(2)}% | ` +
+        `Unrecovered: ${(result.monteCarloStress.unrecoveredRate * 100).toFixed(2)}%`,
+      );
+    }
   } else {
-    console.log('\nMonte Carlo: insufficient trade history (< 10 trades)');
+    console.log(`\nMonte Carlo: insufficient OOS trade history (${oosTrades.length} < 10)`);
   }
 
   // Window summary
