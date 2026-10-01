@@ -120,8 +120,13 @@ export class Reconciler {
           headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
         },
       );
+      if (r.data?.ok === false) {
+        throw new Error('MT5 positions failed: ' + (r.data?.error ?? 'unknown error'));
+      }
       const positions: any[] = r.data?.positions ?? [];
-      const live = positions.find((p: any) => p.ticket === t.ticket);
+      const live = positions.find(
+        (p: any) => Number(p.ticket) === Number(t.ticket),
+      );
 
       if (!live) {
         // Position closed on broker side
@@ -130,14 +135,18 @@ export class Reconciler {
         await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
       } else {
         // Handle partial close: volume reduced on broker side
-        if (live.volume < t.volume - 0.001) {
-          const closedVol = t.volume - live.volume;
+        const brokerVolume = Number(live.volume);
+        if (!Number.isFinite(brokerVolume) || brokerVolume <= 0) {
+          throw new Error('MT5 invalid broker volume ticket=' + t.ticket);
+        }
+        const volumeDelta = t.volume - brokerVolume;
+        if (volumeDelta > Math.max(1e-8, t.volume * 0.0001)) {
           this.logger.info(
-            `[${t.symbol}] Partial close detected: ${closedVol.toFixed(2)} lots closed`,
+            `[${t.symbol}] Partial close detected: ${volumeDelta.toFixed(8)} lots closed`,
           );
           this.db.raw()
             .prepare('UPDATE trades SET volume=? WHERE id=?')
-            .run(live.volume, t.id!);
+            .run(brokerVolume, t.id!);
         }
       }
   }
