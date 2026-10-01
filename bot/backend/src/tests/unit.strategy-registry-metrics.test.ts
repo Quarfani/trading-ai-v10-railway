@@ -33,7 +33,9 @@ async function main() {
     300,
   ];
 
+  const realNow = Date.now;
   profits.forEach((profit, i) => {
+    Date.now = () => base + i * 86_400_000;
     registry.recordTrade(
       "METRIC_TEST",
       profit,
@@ -47,6 +49,7 @@ async function main() {
     }
   });
 
+  Date.now = realNow;
   const metrics = registry.getMetrics("METRIC_TEST")!;
   assert(Number.isFinite(metrics.sharpe_ratio), "daily Sharpe must be finite");
   assert(metrics.sharpe_ratio !== 0, "multiple observations across days should produce a non-zero Sharpe");
