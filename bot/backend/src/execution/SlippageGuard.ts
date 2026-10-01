@@ -7,8 +7,19 @@ import { Trade, Signal } from '../types/trading.types';
 export class SlippageGuard {
   constructor(private maxPct = 0.005) {} // 0.5% default
 
-  check(signal: Signal, trade: Trade): { ok: boolean; slippagePct: number } {
+  check(
+    signal: Signal,
+    trade: Trade,
+    maxPctOverride?: number,
+  ): { ok: boolean; slippagePct: number } {
+    if (!(signal.price > 0) || !Number.isFinite(signal.price) || !Number.isFinite(trade.entry)) {
+      return { ok: false, slippagePct: Number.POSITIVE_INFINITY };
+    }
+    const limit = maxPctOverride ?? this.maxPct;
+    if (!(limit >= 0) || !Number.isFinite(limit)) {
+      return { ok: false, slippagePct: Number.POSITIVE_INFINITY };
+    }
     const dev = Math.abs(trade.entry - signal.price) / signal.price;
-    return { ok: dev <= this.maxPct, slippagePct: dev };
+    return { ok: dev <= limit, slippagePct: dev };
   }
 }
