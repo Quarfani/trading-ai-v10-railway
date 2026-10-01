@@ -268,6 +268,7 @@ export class TradingEngine extends EventEmitter {
       db,
       consensusCfg,
       evidencePolicy,
+      config.accountBalance,
     );
 
     this.risk = new RiskManager(
