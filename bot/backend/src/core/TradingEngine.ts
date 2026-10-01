@@ -97,6 +97,7 @@ import { detectFalseSignal } from '../filters/FalseSignalEngine';
 import { getBrokerContractStatus, getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 import { SlippageGuard } from '../execution/SlippageGuard';
+import { normalizedConfidenceThreshold, passesMinimumSignalConfidence } from '../risk/SignalConfidenceGate';
 
 type Broadcaster = (event: string, data: unknown) => void;
 
@@ -1155,14 +1156,8 @@ export class TradingEngine extends EventEmitter {
     }
 
     // ── Minimum signal-confidence gate ──────────────────────────────────
-    const minConfidence = Math.min(
-      1,
-      Math.max(0, Number(this.config.minConfidence ?? 0)),
-    );
-    if (
-      !Number.isFinite(Number(adjustedSignal.confidence)) ||
-      Number(adjustedSignal.confidence) < minConfidence
-    ) {
+    const minConfidence = normalizedConfidenceThreshold(this.config.minConfidence, 0);
+    if (!passesMinimumSignalConfidence(adjustedSignal.confidence, minConfidence)) {
       this.logger.info(
         `[PIPELINE_BLOCK] ${symbol}/${tf} stage=CONFIDENCE ` +
           `confidence=${Number(adjustedSignal.confidence)} min=${minConfidence}`,
