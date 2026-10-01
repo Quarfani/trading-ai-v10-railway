@@ -81,8 +81,16 @@ export class PositionSizer {
 
     // ── 3. Kelly sizing ───────────────────────────────────────────────
     const { volume: kellyVolume } = this.kelly.size(
-      symbol, side, entry, sl, this.config,
-      stats, qualityScore, equity,
+      symbol,
+      side,
+      entry,
+      sl,
+      this.config,
+      stats,
+      qualityScore,
+      equity,
+      quoteToAccount,
+      timeframe,
     );
 
     // ── 4. Drawdown scale ─────────────────────────────────────────────
