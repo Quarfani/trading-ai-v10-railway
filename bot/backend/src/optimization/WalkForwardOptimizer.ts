@@ -451,6 +451,8 @@ export class WalkForwardOptimizer {
       trades: w.testMetrics.totalTrades,
       pnl: w.testMetrics.totalReturn,
       profitFactor: w.testMetrics.profitFactor,
+      positivePnl: w.testMetrics.tradePnls.reduce((sum, pnl) => sum + Math.max(0, pnl), 0),
+      negativePnl: w.testMetrics.tradePnls.reduce((sum, pnl) => sum + Math.max(0, -pnl), 0),
       totalCost: w.testMetrics.totalCost,
       parameterSensitivity: w.trainMetrics.parameterSensitivity,
       regimeCoverage: w.testMetrics.regimeCoverage,
