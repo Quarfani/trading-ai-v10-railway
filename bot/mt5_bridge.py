@@ -165,6 +165,18 @@ def resolve_position_ticket(order_result, mt5_module):
 
     return 0, deal_ticket
 
+def account_position_mode(info, mt5_module):
+    """Return explicit MT5 position-account mode for execution safety."""
+    margin_mode = getattr(info, "margin_mode", None)
+    hedging_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", None)
+    netting_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_RETAIL_NETTING", None)
+    exchange_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_EXCHANGE", None)
+    if hedging_mode is not None and margin_mode == hedging_mode:
+        return "HEDGING"
+    if margin_mode in (netting_mode, exchange_mode):
+        return "NETTING_OR_EXCHANGE"
+    return "UNKNOWN"
+
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
@@ -261,8 +273,9 @@ def account():
             "free_margin":  info.margin_free,
             "margin_level": info.margin_level,
             "currency":     info.currency,
-            "server":       info.server,
+            "server":        info.server,
             "login":        info.login,
+            "position_mode": account_position_mode(info, mt5),
         })
 
 

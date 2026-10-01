@@ -135,6 +135,22 @@ export class ExecutionGateway {
     return `ta_${digest}`.slice(0, 36);
   }
 
+  async getMT5PositionMode(): Promise<'HEDGING' | 'NETTING_OR_EXCHANGE' | 'UNKNOWN' | null> {
+    if (this.config.mode !== 'mt5') return null;
+    try {
+      const r = await axios.get(`${this.config.mt5.bridgeUrl}/account`, {
+        timeout: 4_000,
+        headers: this.mt5Headers(),
+      });
+      const mode = String(r.data?.position_mode ?? 'UNKNOWN').toUpperCase();
+      if (mode === 'HEDGING' || mode === 'NETTING_OR_EXCHANGE') return mode;
+      return 'UNKNOWN';
+    } catch (e: any) {
+      this.logger.warn(`getMT5PositionMode failed: ${e?.message ?? e}`);
+      return null;
+    }
+  }
+
   async getCurrentEquity(): Promise<number | null> {
     try {
       if (this.config.mode === 'paper') return this.paper.getBalance();

@@ -95,6 +95,13 @@ export class ScaleInManager {
   }
 
   private async doScaleIn(t:any,currentPrice:number){
+    const positionMode = await this.exec.getMT5PositionMode();
+    if (this.config.mode === 'mt5' && positionMode !== 'HEDGING') {
+      throw new Error(
+        `Scale-in requires MT5 HEDGING account mode; got ${positionMode ?? 'UNAVAILABLE'}`,
+      );
+    }
+
     const market = getMarketDefinition(t.symbol);
     if (!market) throw new Error(`No broker-confirmed market definition for ${t.symbol}`);
 

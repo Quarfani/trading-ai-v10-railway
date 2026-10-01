@@ -123,3 +123,30 @@ def test_position_ticket_resolution_fails_closed_without_identity():
     position, deal = bridge.resolve_position_ticket(result, mt5)
     assert position == 0
     assert deal == 456
+
+
+def test_account_position_mode_detects_hedging():
+    mt5 = types.SimpleNamespace(
+        ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
+        ACCOUNT_MARGIN_MODE_RETAIL_NETTING=0,
+        ACCOUNT_MARGIN_MODE_EXCHANGE=1,
+    )
+    assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=2), mt5) == "HEDGING"
+
+
+def test_account_position_mode_detects_netting():
+    mt5 = types.SimpleNamespace(
+        ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
+        ACCOUNT_MARGIN_MODE_RETAIL_NETTING=0,
+        ACCOUNT_MARGIN_MODE_EXCHANGE=1,
+    )
+    assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=0), mt5) == "NETTING_OR_EXCHANGE"
+
+
+def test_account_position_mode_fails_closed_unknown():
+    mt5 = types.SimpleNamespace(
+        ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
+        ACCOUNT_MARGIN_MODE_RETAIL_NETTING=0,
+        ACCOUNT_MARGIN_MODE_EXCHANGE=1,
+    )
+    assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=99), mt5) == "UNKNOWN"
