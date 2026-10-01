@@ -396,9 +396,18 @@ export class ExecutionGateway {
         Number.isFinite(brokerResult.realizedProfit) &&
         t.id
       ) {
+        const cumulativeProfit = this.config.mode === 'binance'
+          ? Number(t.realizedProfit ?? 0) + brokerResult.realizedProfit
+          : brokerResult.realizedProfit;
+        if (!Number.isFinite(cumulativeProfit)) {
+          throw new Error(
+            'Cumulative broker realized PnL is not finite',
+          );
+        }
+
         const changed = this.db.updateTradeClose(
           t.id,
-          brokerResult.realizedProfit,
+          cumulativeProfit,
           Date.now(),
           'MANUAL',
         );
@@ -618,7 +627,10 @@ export class ExecutionGateway {
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
-        realizedProfit = result.realizedProfit;
+        realizedProfit = await this.convertBrokerProfitToAccount(
+          result.realizedProfit,
+          result.realizedProfitCurrency,
+        );
       } else {
         if (!t.ticket) throw new Error('Paper trade has no ticket');
         const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason);

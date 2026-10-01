@@ -298,14 +298,16 @@ class ModelTrainer:
         wf_std:      float,
     ) -> str:
         """
-        Deployment decision based on:
-          - Test accuracy (held-out data)
-          - Walk-Forward consistency (low std = stable)
-          - Minimum threshold
+        Deployment decision based only on WFO/OOS evidence.
+
+        The held-out test set is report-only and must never influence
+        deployment selection. ``test_acc`` remains in the signature for
+        report/API compatibility.
         """
-        if test_acc >= 0.56 and wf_mean >= 0.53 and wf_std <= 0.06:
+        _ = test_acc
+        if wf_mean >= 0.53 and wf_std <= 0.06:
             return "DEPLOY ✅"
-        elif test_acc >= 0.53 and wf_mean >= 0.51:
+        elif wf_mean >= 0.51:
             return "CAUTION ⚠️ — paper trade first"
         else:
             return "DO_NOT_DEPLOY ❌ — collect more data"

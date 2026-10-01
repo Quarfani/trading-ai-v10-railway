@@ -464,6 +464,39 @@ export class DatabaseManager {
     return this.db.prepare(`SELECT * FROM daily_stats WHERE day=?`).get(day) as any ?? null;
   }
 
+  getOpenPartialRealizedPnlSince(since: number): number {
+    if (!Number.isFinite(since)) return 0;
+    const rows = this.db.prepare(`
+      SELECT requestJson, resultJson
+      FROM execution_ledger
+      WHERE action='PARTIAL_CLOSE'
+        AND status='EXECUTED'
+        AND updatedAt > ?
+      ORDER BY updatedAt ASC
+    `).all(since) as Array<{ requestJson?: string | null; resultJson?: string | null }>;
+
+    let total = 0;
+    for (const row of rows) {
+      if (!row.requestJson || !row.resultJson) continue;
+      let request: any;
+      let result: any;
+      try {
+        request = JSON.parse(row.requestJson);
+        result = JSON.parse(row.resultJson);
+      } catch {
+        continue;
+      }
+      const tradeId = Number(request?.tradeId);
+      if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+      const trade = this.db.prepare(
+        `SELECT status FROM trades WHERE id=? LIMIT 1`,
+      ).get(tradeId) as { status: string } | undefined;
+      if (!trade || trade.status !== 'open') continue;
+      const profit = Number(result?.profit);
+      if (Number.isFinite(profit)) total += profit;
+    }
+    return Number.isFinite(total) ? total : 0;
+  }
   getWeeklyStats() {
     const since = new Date();
     since.setDate(since.getDate() - 7);

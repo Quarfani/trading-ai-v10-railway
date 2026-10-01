@@ -230,7 +230,9 @@ export class RiskManager {
         `SELECT COALESCE(SUM(profit),0) AS pnl FROM trades WHERE status='closed' AND closedAt > ?`,
       ).get(since) as { pnl?: number } | undefined;
 
-      const weeklyPnl = Number(row?.pnl ?? 0);
+      const closedPnl = Number(row?.pnl ?? 0);
+      const openPartialPnl = this.db.getOpenPartialRealizedPnlSince(since);
+      const weeklyPnl = closedPnl + openPartialPnl;
       if (
         weeklyPnl < 0 &&
         Math.abs(weeklyPnl) >=
@@ -272,7 +274,7 @@ export class RiskManager {
       ]);
     }
 
-    if (this.profitTarget.reached()) {
+    if (this.profitTarget.reached(equity)) {
       return this.block('daily_profit_target', [
         'Daily profit target reached',
       ]);

@@ -4,7 +4,7 @@
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
 Current head: verify refs/heads/main before resuming
-Current validated checkpoint: CI #531 passed for commit 2ac4e30e5b87d27529882e231fd1084c1d391ee2
+Current validated checkpoint: CI #545 passed for commit 5ceb42bd773292de9acba9dbefe014dbbb3534e8
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
