@@ -19,7 +19,18 @@ async function main() {
     scope:{assetClasses:["FOREX"],symbols:["EURUSD"],timeframes:["H1"],regimes:["TRENDING"],sessions:["LONDON"]},
     requiredData:["OHLCV"], parametersVersion:"p1",
     riskProfile:{baseRiskFraction:0.01,minimumRiskReward:1.5,maximumDrawdown:0.2},
-    evidence:{datasetVersion:"d1",costModelVersion:"cost-v1",sampleSize:100,outOfSampleTrades:50,outOfSampleProfitFactor:1.2,walkForwardStability:0.6,parameterSensitivity:0.6,regimeCoverage:0.6,passed:true,evaluatedAt:Date.now()},
+    evidence:{
+    datasetVersion:"d1", costModelVersion:"cost-v1", sampleSize:400,
+    outOfSampleTrades:320, outOfSampleProfitFactor:1.7,
+    walkForwardStability:0.75, parameterSensitivity:0.72, regimeCoverage:0.76,
+    monteCarloStress:{
+      simulations:2000, futureTrades:200, p5FinalBalance:8500,
+      p50FinalBalance:11200, maxDDP95:0.24, probabilityLoss:0.25,
+      probabilityDD20:0.40, probabilityRuin:0.01, unrecoveredRate:0.10,
+      recoveryTradesP95:35,
+    },
+    passed:true, evaluatedAt:Date.now()
+  },
     createdAt:Date.now(),updatedAt:Date.now(),
   };
   store.save(base);
