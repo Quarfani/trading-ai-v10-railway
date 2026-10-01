@@ -4,6 +4,25 @@ Date: 2026-09-23
 Repository: `trading-ai-v9-paper-ready-v12(1)`
 Audit mode: static + local execution; no broker credentials; no Docker binary; package registry unavailable
 
+
+## Current engineering status — 2026-10-01
+
+The repository has materially advanced beyond the original 2026-09-23 audit.
+
+- Backend and frontend now have committed npm lockfiles, and the CI workflow uses reproducible `npm ci` installs.
+- CI is present in `.github/workflows/ci.yml` with backend, frontend, and Python validation jobs.
+- CI #548 passed Backend, Frontend, and Python for commit `5df114afb2ec7f3e797ef232186dd1f054d4332a`.
+- CI #549 passed after the risk-model documentation update.
+- The subsequent execution-ledger state-machine commit `b00a5c62597d34337490c9500311a75cdaa22882` has not yet received a valid validation run: CI #550 failed twice before any job steps or logs were created. The failure is therefore not attributable to a project test failure from the available evidence.
+- Exposure/leverage gates are now enforced by RiskManager using account-currency notional conversion and broker-confirmed MT5 contract metadata; missing market/FX/broker data fails closed.
+- The execution ledger now rejects unknown states at creation and enforces one-way transitions; terminal records cannot be rewritten through the generic update path.
+- MT5 startup recovery now uses authoritative broker history, duplicate-close protection, atomic trade+ledger settlement, and timing validation against unresolved operations.
+- Binance partial/final-close realized PnL is normalized and accumulated in account currency.
+- Held-out ML test accuracy is report-only; deployment recommendation uses WFO/OOS evidence and stability thresholds.
+- Strategy promotion lifecycle transitions and evidence gates are executable through the StrategyDefinitionStore/StrategyLifecycle path.
+
+These changes reduce several original P0/P1 implementation gaps, but they do not replace runtime evidence.
+
 ## Executive status
 
 **OVERALL: BLOCKED / NOT PRODUCTION READY**
