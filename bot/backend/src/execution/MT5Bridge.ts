@@ -8,6 +8,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { Signal, SystemConfig, Trade } from '../types/trading.types';
 import { Logger } from '../utils/Logger';
+import { getMarketDefinition } from '../market/MarketCatalog';
 
 const TIMEOUT_SHORT  = 4_000;
 const TIMEOUT_NORMAL = 10_000;
@@ -36,8 +37,11 @@ export class MT5Bridge {
 
   async placeOrder(s: Signal, volume: number): Promise<Trade | null> {
     try {
+      const market = getMarketDefinition(s.symbol, s.timeframe ?? 'H1');
+      if (!market) return null;
+      const brokerSymbol = market.brokerSymbol ?? s.symbol;
       const r = await this.http.post('/trade',
-        { symbol: s.symbol, side: s.side, volume, sl: s.sl, tp: s.tp },
+        { symbol: brokerSymbol, side: s.side, volume, sl: s.sl, tp: s.tp },
         { timeout: TIMEOUT_NORMAL });
       if (!r.data.ticket) {
         this.logger.error(`Order returned no ticket: ${JSON.stringify(r.data)}`);
@@ -45,7 +49,7 @@ export class MT5Bridge {
       }
       return {
         ticket: Number(r.data.ticket),
-        symbol: s.symbol, side: s.side, volume,
+        symbol: brokerSymbol, side: s.side, volume,
         entry: Number(r.data.price), sl: s.sl, tp: s.tp,
         status: 'open', openedAt: Date.now(), source: s.source,
       };

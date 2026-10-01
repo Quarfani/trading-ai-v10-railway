@@ -111,14 +111,17 @@ export class ExecutionGateway {
   }
 
   private async executeMT5(signal: Signal, volume: number, tf: Timeframe, operationKey: string): Promise<Trade> {
+    const market = getMarketDefinition(signal.symbol, tf);
+    if (!market) throw new Error('MT5 market definition missing for ' + signal.symbol);
+    const brokerSymbol = market.brokerSymbol ?? signal.symbol;
     const comment = `ta_${crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 27)}`.slice(0, 31);
     const r = await axios.post(`${this.config.mt5.bridgeUrl}/trade`, {
-      symbol: signal.symbol, side: signal.side, volume, sl: signal.sl, tp: signal.tp, comment,
+      symbol: brokerSymbol, side: signal.side, volume, sl: signal.sl, tp: signal.tp, comment,
       idempotency_key: operationKey,
     }, { timeout: 8_000, headers: this.mt5Headers() });
     if (!r.data?.ticket) throw new Error(`MT5 no ticket: ${JSON.stringify(r.data)}`);
     return {
-      ticket: Number(r.data.ticket), symbol: signal.symbol, side: signal.side, volume,
+      ticket: Number(r.data.ticket), symbol: brokerSymbol, side: signal.side, volume,
       entry: Number(r.data.price ?? signal.price), sl: signal.sl, tp: signal.tp,
       status: 'open', openedAt: Date.now(), source: signal.source, timeframe: tf,
     };
