@@ -282,6 +282,68 @@ export class DatabaseManager {
     return null;
   }
 
+  resolveReconciledFullClose(
+    tradeId: number,
+    executionId: string,
+    profit: number,
+    closedAt: number,
+    exitReason: string,
+    result: unknown,
+    brokerOrderId?: string | number,
+  ): boolean {
+    const tx = this.db.transaction(() => {
+      const trade = this.db.prepare(
+        `SELECT status FROM trades WHERE id=? LIMIT 1`,
+      ).get(tradeId) as { status: string } | undefined;
+      if (!trade) return false;
+
+      const ledger = this.db.prepare(
+        `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
+      ).get(executionId) as { status: string } | undefined;
+      if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+
+      if (trade.status === 'open') {
+        const changed = this.db.prepare(
+          `UPDATE trades
+           SET status='closed', profit=?, closedAt=?, exitReason=?
+           WHERE id=? AND status='open'`,
+        ).run(profit, closedAt, exitReason, tradeId).changes;
+        if (changed !== 1) {
+          throw new Error(`Could not persist reconciled full-close trade id=${tradeId}`);
+        }
+
+        const day = new Date(closedAt).toISOString().slice(0, 10);
+        const win = profit > 0 ? 1 : 0;
+        this.db.prepare(`
+          INSERT INTO daily_stats(day, trades, wins, losses, pnl)
+          VALUES (?,1,?,?,?)
+          ON CONFLICT(day) DO UPDATE SET
+            trades=trades+1,
+            wins=wins+?,
+            losses=losses+?,
+            pnl=pnl+?
+        `).run(day, win, 1-win, profit, win, 1-win, profit);
+      }
+
+      const ledgerChanged = this.db.prepare(`
+        UPDATE execution_ledger
+        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+      `).run(
+        brokerOrderId != null ? String(brokerOrderId) : null,
+        JSON.stringify(result),
+        Date.now(),
+        executionId,
+      ).changes;
+      if (ledgerChanged !== 1) {
+        throw new Error(`Could not resolve reconciled full ledger ${executionId}`);
+      }
+      return true;
+    });
+
+    return tx();
+  }
+
   resolveReconciledPartialClose(
     tradeId: number,
     executionId: string,
