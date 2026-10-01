@@ -358,17 +358,17 @@ export class WalkForwardOptimizer {
   }
 
   /** Save optimized params to DB so they're loaded on next startup */
-  saveParams(db: DatabaseManager, symbol: string, params: OptimParams): void {
-    db.setSetting(`wfo_params_${symbol}`, JSON.stringify({ ...params, savedAt: Date.now() }));
+  saveParams(db: DatabaseManager, symbol: string, params: OptimParams, timeframe: Timeframe = 'H1'): void {
+    db.setSetting(`wfo_params_${symbol}_${timeframe}`, JSON.stringify({ ...params, savedAt: Date.now(), timeframe }));
     // Also set env vars so symbolConfig picks them up
     process.env[`SPEC_${symbol}_ATR_MULT`] = String(params.atrMult);
     process.env[`SPEC_${symbol}_TP_RATIO`] = String(params.tpRatio);
     this.logger.info(`Saved WFO params for ${symbol}: atrMult=${params.atrMult} tpRatio=${params.tpRatio}`);
   }
 
-  loadParams(db: DatabaseManager, symbol: string): OptimParams | null {
+  loadParams(db: DatabaseManager, symbol: string, timeframe: Timeframe = 'H1'): OptimParams | null {
     try {
-      const s = db.getSetting(`wfo_params_${symbol}`);
+      const s = db.getSetting(`wfo_params_${symbol}_${timeframe}`);
       if (!s) return null;
       const p = JSON.parse(s) as OptimParams & { savedAt: number };
       // Expire after 30 days
