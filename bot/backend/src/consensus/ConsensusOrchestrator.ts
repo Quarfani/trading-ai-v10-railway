@@ -31,8 +31,14 @@ export class ConsensusOrchestrator {
     private readonly db:  DatabaseManager,
     cfg: Partial<ConsensusConfig> = {},
     evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
+    initialEquity = 10_000,
   ) {
-    this.registry = new StrategyRegistry(db, cfg, evidencePolicy);
+    this.registry = new StrategyRegistry(
+      db,
+      cfg,
+      evidencePolicy,
+      initialEquity,
+    );
 
     // [FIX] Register all 8 strategies
     for (const adapter of createAllAdapters()) {
