@@ -206,6 +206,48 @@ async function main() {
   assert(JSON.parse(resolvedRow.resultJson).profit === 12.5, "resolved ledger must preserve authoritative result");
   resolveDb.raw().close();
 
+  const corruptDb = new DatabaseManager(":memory:");
+  await corruptDb.initialize();
+  corruptDb.createExecutionLedger({
+    executionId: "corrupt-1",
+    operationKey: "corrupt-operation",
+    action: "OPEN",
+    status: "EXECUTED",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+  });
+  corruptDb.raw()
+    .prepare("UPDATE execution_ledger SET resultJson=? WHERE executionId=?")
+    .run("{invalid-json", "corrupt-1");
+
+  const corruptGateway = new ExecutionGateway(
+    config(),
+    corruptDb,
+    new PaperTrader(10_000),
+  );
+  const corruptResult = await corruptGateway.execute(
+    {
+      symbol: "EURUSD",
+      side: "BUY",
+      timestamp: 123456,
+      price: 1.1,
+      sl: 1.09,
+      tp: 1.12,
+      confidence: 0.9,
+      source: "CORRUPT_LEDGER_TEST",
+      timeframe: "H1",
+    } as any,
+    0.01,
+    "H1",
+  );
+  assert(!corruptResult.success, "corrupt EXECUTED ledger must fail closed");
+  assert(
+    String(corruptResult.error).includes("manual reconciliation"),
+    "corrupt EXECUTED ledger must require manual reconciliation",
+  );
+  corruptDb.raw().close();
+
   const claimDb = new DatabaseManager(":memory:");
   await claimDb.initialize();
   const firstClaim = claimDb.createExecutionLedger({
@@ -234,7 +276,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 18 passed, 0 failed");
+  console.log("Result: 20 passed, 0 failed");
 }
 
 main().catch(error => {
