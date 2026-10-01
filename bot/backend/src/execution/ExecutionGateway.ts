@@ -378,6 +378,54 @@ export class ExecutionGateway {
     throw new Error('Paper close must use closeAtMarket');
   }
 
+  private settleLiveFullClose(
+    t: Trade,
+    executionId: string,
+    brokerResult: { realizedProfit: number | null },
+    reason: string,
+  ): number | null {
+    if (!t.id) throw new Error('Live full close requires a persisted trade id');
+    if (brokerResult.realizedProfit == null || !Number.isFinite(brokerResult.realizedProfit)) {
+      throw new Error('Live full close requires a finite authoritative broker realized PnL');
+    }
+
+    let priorRealized = 0;
+    if (this.config.mode === 'binance') {
+      const row = this.db.raw().prepare(
+        `SELECT realizedProfit, status FROM trades WHERE id=? LIMIT 1`,
+      ).get(t.id) as { realizedProfit?: number; status?: string } | undefined;
+      if (!row || row.status !== 'open') {
+        throw new Error(
+          `Cannot settle Binance close for trade id=${t.id}: internal trade is missing or not open`,
+        );
+      }
+      priorRealized = Number(row.realizedProfit ?? 0);
+      if (!Number.isFinite(priorRealized)) {
+        throw new Error(`Persisted Binance realized PnL is invalid for trade id=${t.id}`);
+      }
+    }
+
+    const cumulativeProfit = priorRealized + brokerResult.realizedProfit;
+    if (!Number.isFinite(cumulativeProfit)) {
+      throw new Error('Cumulative broker realized PnL is not finite');
+    }
+
+    const settled = this.db.resolveReconciledFullClose(
+      t.id,
+      executionId,
+      cumulativeProfit,
+      Date.now(),
+      reason,
+      brokerResult,
+      t.ticket,
+    );
+    if (!settled) {
+      throw new Error(
+        `Broker close succeeded but atomic trade/ledger settlement failed for id=${t.id}`,
+      );
+    }
+    return cumulativeProfit;
+  }
   async closeTrade(t: Trade) {
     const key = this.stableKey('CLOSE', {
       id: t.id,
@@ -391,37 +439,12 @@ export class ExecutionGateway {
     try {
       const brokerResult = await this.closeBrokerTrade(t, key);
 
-      if (
-        brokerResult.realizedProfit != null &&
-        Number.isFinite(brokerResult.realizedProfit) &&
-        t.id
-      ) {
-        const cumulativeProfit = this.config.mode === 'binance'
-          ? Number(t.realizedProfit ?? 0) + brokerResult.realizedProfit
-          : brokerResult.realizedProfit;
-        if (!Number.isFinite(cumulativeProfit)) {
-          throw new Error(
-            'Cumulative broker realized PnL is not finite',
-          );
-        }
-
-        const changed = this.db.updateTradeClose(
-          t.id,
-          cumulativeProfit,
-          Date.now(),
-          'MANUAL',
-        );
-        if (!changed) {
-          throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
-          );
-        }
-      }
-
-      this.db.updateExecutionLedger(op.executionId, {
-        status: 'EXECUTED',
-        result: brokerResult,
-      });
+      this.settleLiveFullClose(
+        t,
+        op.executionId,
+        brokerResult,
+        'MANUAL',
+      );
       return true;
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, {
@@ -506,31 +529,15 @@ export class ExecutionGateway {
 
       const brokerResult = await this.closeBrokerTrade(t, key);
 
-      if (
-        brokerResult.realizedProfit != null &&
-        Number.isFinite(brokerResult.realizedProfit) &&
-        t.id
-      ) {
-        const changed = this.db.updateTradeClose(
-          t.id,
-          brokerResult.realizedProfit,
-          Date.now(),
-          reason,
-        );
-        if (!changed) {
-          throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
-          );
-        }
-      }
-
-      this.db.updateExecutionLedger(
+      const cumulativeProfit = this.settleLiveFullClose(
+        t,
         op.executionId,
-        { status: 'EXECUTED', result: brokerResult },
+        brokerResult,
+        reason,
       );
       return {
         ok: true,
-        profit: brokerResult.realizedProfit ?? undefined,
+        profit: cumulativeProfit ?? undefined,
       };
     } catch (e: any) {
       this.db.updateExecutionLedger(

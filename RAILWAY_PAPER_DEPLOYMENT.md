@@ -123,4 +123,4 @@ Keep the 4GB PC lightweight by running the React dashboard locally and pointing 
 
 ## What this deployment does NOT prove
 
-A healthy Railway deployment does not prove profitability, economic edge, or production readiness. The project still requires the outstanding economic-cost engine, exposure/leverage enforcement, broker E2E, OOS/WFO/Monte Carlo/stress evidence, and recovery drills described in `FINAL_READINESS_REPORT.md`.
+A healthy Railway deployment does not prove profitability, economic edge, or production readiness. The shared paper/backtest cost model is implemented, but broker-specific live cost/fill evidence, broker E2E, OOS/WFO/Monte Carlo/stress evidence, and recovery drills described in `FINAL_READINESS_REPORT.md` are still required.
