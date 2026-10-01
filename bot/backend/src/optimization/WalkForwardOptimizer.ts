@@ -30,6 +30,7 @@ import { Logger } from '../utils/Logger';
 import { HistoricalRateSeries } from '../market/HistoricalCurrencySeries';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { buildPurgedWalkForwardFolds } from '../research/PurgedWalkForward';
+import { summarizeWfoEvidence, BacktestWfoMetrics } from '../research/WfoEvidenceAdapter';
 
 export interface OptimParams {
   atrMult:       number;
@@ -44,8 +45,8 @@ export interface WalkForwardWindow {
   testStart:   number;
   testEnd:     number;
   bestParams:  OptimParams;
-  trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; valid: boolean };
-  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; valid: boolean };
+  trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; valid: boolean };
+  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; valid: boolean };
   oos_valid:   boolean; // out-of-sample passed minimum threshold
   leakagePassed: boolean;
   purgedCount: number;
@@ -64,6 +65,7 @@ export interface WalkForwardResult {
   runAt:          number;
   valid:           boolean;
   validationReasons: string[];
+  evidence: ReturnType<typeof summarizeWfoEvidence>;
 }
 
 // Parameter search grid
@@ -221,6 +223,8 @@ export class WalkForwardOptimizer {
     profitFactor: number;
     totalReturn: number;
     maxDD: number;
+    totalTrades: number;
+    totalCost: number;
     valid: boolean;
   }> {
     const envAtrKey = `SPEC_${symbol}_${timeframe}_ATR_MULT`;
@@ -257,6 +261,8 @@ export class WalkForwardOptimizer {
           profitFactor: 0,
           totalReturn: 0,
           maxDD: 1,
+          totalTrades: 0,
+          totalCost: 0,
           valid: false,
         };
       }
@@ -276,6 +282,8 @@ export class WalkForwardOptimizer {
         profitFactor: 0,
         totalReturn: 0,
         maxDD: 1,
+        totalTrades: 0,
+        totalCost: 0,
         valid: false,
       };
     } finally {
@@ -332,10 +340,22 @@ export class WalkForwardOptimizer {
 
     const validWindows = windows.filter(w => w.oos_valid);
     const evaluatedWindows = windows.filter(w => w.testMetrics.valid && w.leakagePassed);
+    const evidenceMetrics: BacktestWfoMetrics[] = windows.map(w => ({
+      foldIndex: windows.indexOf(w),
+      oos: true,
+      startTime: w.testStart,
+      endTime: w.testEnd,
+      trades: w.testMetrics.totalTrades,
+      pnl: w.testMetrics.totalReturn,
+      profitFactor: w.testMetrics.profitFactor,
+      totalCost: w.testMetrics.totalCost,
+      leakagePassed: w.leakagePassed,
+    }));
+    const evidence = summarizeWfoEvidence(evidenceMetrics);
     const oos_winRate  = avg(evaluatedWindows.map(w => w.testMetrics.winRate));
     const oos_sharpe   = avg(evaluatedWindows.map(w => w.testMetrics.sharpe));
     const oos_profit   = evaluatedWindows.reduce((s, w) => s + w.testMetrics.totalReturn, 0);
-    const allFoldsValid = evaluatedWindows.length === windows.length && windows.every(w => w.trainMetrics.valid);
+    const allFoldsValid = evaluatedWindows.length === windows.length && windows.every(w => w.trainMetrics.valid) && evidence.passed;
 
     // Final params: average of best params from valid windows (or all if none valid)
     const source = validWindows.length > 0 ? validWindows : windows;
@@ -366,7 +386,7 @@ export class WalkForwardOptimizer {
 
     this.logger.info(`WFO ${symbol}: ${recommendation} | OOS WR=${(oos_winRate*100).toFixed(1)}% Sharpe=${oos_sharpe.toFixed(2)}`);
 
-    return { symbol, windows, finalParams, oos_winRate, oos_sharpe, oos_profit, recommendation, reason, runAt: Date.now(), valid, validationReasons: validationReason ? [validationReason] : [] };
+    return { symbol, windows, finalParams, oos_winRate, oos_sharpe, oos_profit, recommendation, reason, runAt: Date.now(), valid: valid && evidence.passed, validationReasons: [...(validationReason ? [validationReason] : []), ...evidence.reasons], evidence };
   }
 
   private insufficient(symbol: string, reason = 'Insufficient candle data for walk-forward optimization'): WalkForwardResult {
