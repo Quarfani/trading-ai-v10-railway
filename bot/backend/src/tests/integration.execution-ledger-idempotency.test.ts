@@ -198,8 +198,13 @@ async function main() {
     replayCloseCalls += 1;
     return { data: { ok: true, profit: 17.25 } };
   };
+  const replayCloseId = replayCloseDb.insertTrade({
+    ticket: 910, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+    volume: 0.01, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
+    openedAt: 1_800_000_000_010, source: "REPLAY_CLOSE_TEST",
+  } as any);
   const replayCloseTrade = {
-    id: 910, ticket: 910, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+    id: replayCloseId, ticket: 910, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
     volume: 0.01, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
     openedAt: 1_800_000_000_010, source: "REPLAY_CLOSE_TEST",
   } as any;
@@ -207,8 +212,9 @@ async function main() {
     const close1 = await replayCloseGateway.closeAtMarket(replayCloseTrade, 1.11, "MANUAL");
     const close2 = await replayCloseGateway.closeAtMarket(replayCloseTrade, 1.11, "MANUAL");
     assert(close1.ok && close2.ok, "successful close replay must remain successful");
-    assert(close1.profit === close2.profit, "close replay must return the same persisted profit");
+    assert(close1.profit === 17.25 && close2.profit === 17.25, "close replay must return the same persisted realized profit");
     assert(replayCloseCalls === 1, "close replay must not call the broker twice");
+    assert(replayCloseDb.getOpenTrades().length === 0, "verified MT5 close must close the internal trade");
   } finally {
     (axios as any).post = originalReplayPost;
     replayCloseDb.raw().close();
