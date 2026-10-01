@@ -26,7 +26,10 @@
 import { Candle, Timeframe } from '../types/trading.types';
 import { Backtester }      from '../backtest/Backtester';
 import { DatabaseManager } from '../database/DatabaseManager';
-import { Logger }          from '../utils/Logger';
+import { Logger } from '../utils/Logger';
+import { HistoricalRateSeries } from '../market/HistoricalCurrencySeries';
+import { TIMEFRAME_MS } from '../market/market.types';
+import { buildPurgedWalkForwardFolds } from '../research/PurgedWalkForward';
 
 export interface OptimParams {
   atrMult:       number;
@@ -41,8 +44,8 @@ export interface WalkForwardWindow {
   testStart:   number;
   testEnd:     number;
   bestParams:  OptimParams;
-  trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number };
-  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number };
+  trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; valid: boolean };
+  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; valid: boolean };
   oos_valid:   boolean; // out-of-sample passed minimum threshold
   leakagePassed: boolean;
   purgedCount: number;
@@ -160,7 +163,10 @@ export class WalkForwardOptimizer {
   // ─── Grid search on training data ────────────────────────────────────────
 
   private async optimizeOnTrain(
-    symbol: string, candles: Candle[]
+    symbol: string,
+    candles: Candle[],
+    timeframe: Timeframe,
+    historicalCurrencyRates: HistoricalRateSeries,
   ): Promise<{ bestParams: OptimParams; bestMetrics: any }> {
     let bestScore  = -Infinity;
     let bestParams: OptimParams = { atrMult: 1.5, tpRatio: 2.0, minConfidence: 0.60, rollingWindow: 30 };
@@ -172,10 +178,18 @@ export class WalkForwardOptimizer {
         if (tpRatio < 1.5) continue; // skip low R:R
         for (const minConfidence of MIN_CONFIDENCES) {
           const params: OptimParams = { atrMult, tpRatio, minConfidence, rollingWindow: 30 };
-          const metrics = await this.quickBacktest(symbol, candles, params);
+          const metrics = await this.quickBacktest(
+            symbol,
+            candles,
+            params,
+            timeframe,
+            historicalCurrencyRates,
+          );
 
           // Objective function: Sharpe × WinRate × (1 - MaxDD)
           const score = metrics.sharpe * metrics.winRate * (1 - Math.min(0.5, metrics.maxDD));
+
+          if (!metrics.valid) continue;
 
           if (score > bestScore) {
             bestScore   = score;
@@ -192,8 +206,12 @@ export class WalkForwardOptimizer {
   // ─── Quick backtest for a single param set ───────────────────────────────
 
   private async quickBacktest(
-    symbol: string, candles: Candle[], params: OptimParams
-  ): Promise<{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number }> {
+    symbol: string,
+    candles: Candle[],
+    params: OptimParams,
+    timeframe: Timeframe,
+    historicalCurrencyRates: HistoricalRateSeries,
+  ): Promise<{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; valid: boolean }> {
     try {
       // Override symbolConfig for this test via environment (temp)
       const originalEnv = {
@@ -257,9 +275,11 @@ export class WalkForwardOptimizer {
     if (!windows.length) return this.insufficient(symbol);
 
     const validWindows = windows.filter(w => w.oos_valid);
-    const oos_winRate  = avg(windows.map(w => w.testMetrics.winRate));
-    const oos_sharpe   = avg(windows.map(w => w.testMetrics.sharpe));
-    const oos_profit   = windows.reduce((s, w) => s + w.testMetrics.totalReturn, 0);
+    const evaluatedWindows = windows.filter(w => w.testMetrics.valid && w.leakagePassed);
+    const oos_winRate  = avg(evaluatedWindows.map(w => w.testMetrics.winRate));
+    const oos_sharpe   = avg(evaluatedWindows.map(w => w.testMetrics.sharpe));
+    const oos_profit   = evaluatedWindows.reduce((s, w) => s + w.testMetrics.totalReturn, 0);
+    const allFoldsValid = evaluatedWindows.length === windows.length && windows.every(w => w.trainMetrics.valid);
 
     // Final params: average of best params from valid windows (or all if none valid)
     const source = validWindows.length > 0 ? validWindows : windows;
@@ -275,15 +295,17 @@ export class WalkForwardOptimizer {
     let recommendation: WalkForwardResult['recommendation'];
     let reason: string;
 
-    if (oos_winRate >= 0.52 && oos_sharpe >= 0.5 && validPct >= 0.6) {
+    if (valid && allFoldsValid && oos_winRate >= 0.52 && oos_sharpe >= 0.5 && validPct >= 0.6) {
       recommendation = 'TRADE';
       reason = `OOS Win Rate ${(oos_winRate*100).toFixed(1)}%, Sharpe ${oos_sharpe.toFixed(2)}, ${(validPct*100).toFixed(0)}% valid windows`;
-    } else if (oos_winRate >= 0.47 && validPct >= 0.4) {
+    } else if (valid && allFoldsValid && oos_winRate >= 0.47 && validPct >= 0.4) {
       recommendation = 'CAUTION';
       reason = `Marginal OOS results — start with minimum lot size`;
     } else {
       recommendation = 'DO_NOT_TRADE';
-      reason = `OOS Win Rate ${(oos_winRate*100).toFixed(1)}% too low or ${(validPct*100).toFixed(0)}% valid windows insufficient`;
+      reason = !valid || !allFoldsValid
+        ? 'WFO invalid: one or more folds failed economic, OOS, or leakage validation'
+        : `OOS Win Rate ${(oos_winRate*100).toFixed(1)}% too low or ${(validPct*100).toFixed(0)}% valid windows insufficient`;
     }
 
     this.logger.info(`WFO ${symbol}: ${recommendation} | OOS WR=${(oos_winRate*100).toFixed(1)}% Sharpe=${oos_sharpe.toFixed(2)}`);
