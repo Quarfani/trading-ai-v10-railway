@@ -250,6 +250,12 @@ export class DatabaseManager {
     return null;
   }
 
+  hasUnresolvedExecutionLedger(): boolean {
+    const row = this.db.prepare(
+      `SELECT 1 FROM execution_ledger WHERE status IN ('PENDING','UNKNOWN') LIMIT 1`,
+    ).get();
+    return Boolean(row);
+  }
   hasUnresolvedExecutionForTrade(tradeId: number, actions?: string[]): boolean {
     return this.findExecutionForTradeStatus(tradeId, ['PENDING', 'UNKNOWN'], actions) != null;
   }
