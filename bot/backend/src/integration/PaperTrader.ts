@@ -1,9 +1,9 @@
 import { Signal, Trade, Candle } from '../types/trading.types';
 import { getSymbolSpec } from '../config/symbolConfig';
 import { Logger } from '../utils/Logger';
+import { calculateGrossPnlAccount, estimateEntryCosts, estimateExitCosts } from '../market/CostModel';
+import { getCostProfile } from '../market/CostProfiles';
 
-const COMMISSION_PER_LOT = 7; // round-trip USD/lot for non-crypto paper trades
-const PAPER_CRYPTO_FEE_RATE = Number(process.env.PAPER_CRYPTO_FEE_RATE ?? '0.001'); // 0.10% per side
 const MAX_TRADE_AGE_MS = 48 * 3_600_000;
 
 export class PaperTrader {
@@ -24,10 +24,11 @@ export class PaperTrader {
   placeOrder(signal: Signal, volume: number, timeframe='H1'): Trade {
     const spec=getSymbolSpec(signal.symbol);
     if (!(volume>0) || ![signal.price,signal.sl,signal.tp].every(Number.isFinite)) throw new Error(`Invalid paper order ${signal.symbol}`);
-    const spreadCost=spec.pip*spec.contractSize*volume*spec.spreadMaxPips*0.5;
+    const profile=getCostProfile(signal.symbol);
     const slippage=Math.random()*spec.pip*0.3*(signal.side==='BUY'?1:-1);
     const fillPrice=signal.price+slippage;
-    this.balance-=spreadCost;
+    const entryCosts=estimateEntryCosts({price:fillPrice,volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
+    this.balance-=entryCosts;
     const ticket=this.nextTicket++, openedAt=Date.now();
     const pt: PaperTrade={ticket,symbol:signal.symbol,side:signal.side,volume,entry:fillPrice,sl:signal.sl,tp:signal.tp,openedAt,status:'open',source:signal.source,timeframe,realizedProfit:0};
     this.openTrades.set(ticket,pt);
@@ -71,36 +72,19 @@ export class PaperTrader {
     return true;
   }
 
-  private calculateCommission(
-    symbol: string,
-    entry: number,
-    exit: number,
-    volume: number,
-    contractSize: number,
-  ): number {
-    const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const isCrypto = /(USDT|USDC|BUSD)$/.test(normalized);
-
-    if (isCrypto) {
-      const entryNotional = Math.abs(entry * volume * contractSize);
-      const exitNotional = Math.abs(exit * volume * contractSize);
-      return (entryNotional + exitNotional) * PAPER_CRYPTO_FEE_RATE;
-    }
-
-    return COMMISSION_PER_LOT * volume * 2;
-  }
   partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL'): {ok:boolean;profit:number;remainingVolume:number}{
     const t=this.openTrades.get(ticket); if(!t || !(volume>0) || volume>=t.volume) return {ok:false,profit:0,remainingVolume:t?.volume??0};
     const spec=getSymbolSpec(t.symbol);
     const closedVolume=Math.min(volume,t.volume);
-    const raw=(exitPrice-t.entry)*(t.side==='BUY'?1:-1)*closedVolume*spec.contractSize;
-    const commission=this.calculateCommission(t.symbol,t.entry,exitPrice,closedVolume,spec.contractSize);
-    const profit=raw-commission;
+    const profile=getCostProfile(t.symbol);
+    const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:spec.contractSize,quoteToAccount:1,side:t.side});
+    const exitCosts=estimateExitCosts({price:exitPrice,volume:closedVolume,contractSize:spec.contractSize,quoteToAccount:1},profile);
+    const profit=raw-exitCosts;
     t.volume=+(t.volume-closedVolume).toFixed(8);
     t.realizedProfit=(t.realizedProfit??0)+profit;
     this.balance+=profit;
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');
-    if(rec){rec.volume=t.volume;rec.realizedProfit=t.realizedProfit;rec.commission=(rec.commission??0)+commission;}
+    if(rec){rec.volume=t.volume;rec.realizedProfit=t.realizedProfit;rec.commission=(rec.commission??0)+0;}
     this.equityCurve.push({time:Date.now(),equity:this.balance});
     this.logger.info(`[PAPER] Partial close ${t.symbol} ${closedVolume} @ ${exitPrice} profit=${profit.toFixed(2)} remaining=${t.volume}`);
     return {ok:true,profit,remainingVolume:t.volume};
@@ -110,14 +94,16 @@ export class PaperTrader {
     const t=this.openTrades.get(ticket); if(!t) return {ok:false,profit:0};
     const spec=getSymbolSpec(t.symbol); let fill=exitPrice;
     if(reason==='SL'){const slip=Math.random()*0.5;fill+=t.side==='BUY'?-slip*spec.pip:slip*spec.pip;}
-    const raw=(fill-t.entry)*(t.side==='BUY'?1:-1)*t.volume*spec.contractSize;
-    const commission=this.calculateCommission(t.symbol,t.entry,fill,t.volume,spec.contractSize);
-    const finalProfit=raw-commission;
+    const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
+    const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice:fill,volume:t.volume,contractSize:spec.contractSize,quoteToAccount:1,side:t.side});
+    const profile=getCostProfile(t.symbol);
+    const exitCosts=estimateExitCosts({price:fill,volume:t.volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
+    const finalProfit=raw-exitCosts;
     const profit=(t.realizedProfit??0)+finalProfit;
     this.balance+=finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
     this.openTrades.delete(ticket);this.closedTrades.push(t);
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');
-    if(rec){rec.status='closed';rec.closedAt=at;rec.profit=profit;rec.exitReason=reason;rec.commission=(rec.commission??0)+commission;rec.volume=t.volume;rec.realizedProfit=t.realizedProfit??0;}
+    if(rec){rec.status='closed';rec.closedAt=at;rec.profit=profit;rec.exitReason=reason;rec.volume=t.volume;rec.realizedProfit=t.realizedProfit??0;}
     this.equityCurve.push({time:at,equity:this.balance});
     return {ok:true,profit};
   }

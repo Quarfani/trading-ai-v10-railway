@@ -17,6 +17,8 @@ import { ConsensusOrchestrator }        from '../consensus/ConsensusOrchestrator
 import { DatabaseManager }             from '../database/DatabaseManager';
 import { calculateATR }                from '../utils/ATR';
 import { getSymbolSpec }               from '../config/symbolConfig';
+import { COST_MODEL_VERSION, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
+import { getCostProfile }              from '../market/CostProfiles';
 import { Logger }                      from '../utils/Logger';
 import * as path                       from 'path';
 import * as fs                         from 'fs';
@@ -41,7 +43,7 @@ export interface BacktestResult {
   maxDrawdownPct: number; maxDrawdownUsd: number;
   sharpeRatio: number; sortinoRatio: number; calmarRatio: number;
   maxConsecWins: number; maxConsecLosses: number;
-  totalCommission: number; totalSpread: number;
+  totalCommission: number; totalSpread: number; totalCost: number; costModelVersion: string;
   simulationErrors: number;
   trades: BacktestTrade[]; equityCurve: Array<{ t: number; equity: number }>;
   monthlyBreakdown: MonthlyBreakdown[];
@@ -76,25 +78,6 @@ function resampleToH4(candles: Candle[]): Candle[] {
   return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
 }
 
-// Per-symbol commission map (USD per lot, round-trip)
-const COMMISSION_MAP: Record<string, number> = {
-  EURUSD: 7, GBPUSD: 7, AUDUSD: 7, NZDUSD: 7,
-  USDCAD: 7, USDCHF: 7, USDJPY: 7,
-  EURGBP: 7, EURJPY: 7, GBPJPY: 7,
-  XAUUSD: 10, XAGUSD: 8,
-  US30: 5, NAS100: 5, SPX500: 5, GER40: 5,
-  BTCUSDT: 0, ETHUSDT: 0, BNBUSDT: 0, SOLUSDT: 0,
-};
-
-function symbolSpread(symbol: string): number {
-  const spec = getSymbolSpec(symbol);
-  return spec.spreadMaxPips * 0.6 * spec.pip;
-}
-
-function symbolCommission(symbol: string, lots: number): number {
-  return (COMMISSION_MAP[symbol.toUpperCase()] ?? 7) * lots;
-}
-
 export class Backtester {
   private logger = new Logger('Backtester');
 
@@ -113,7 +96,7 @@ export class Backtester {
 
     marketRegimeDetector.invalidate(symbol);
     const spec = getSymbolSpec(symbol);
-    const spreadPerSide = symbolSpread(symbol);
+    const costProfile = getCostProfile(symbol);
 
     const trades: BacktestTrade[]                    = [];
     const equityCurve: Array<{ t: number; equity: number }> = [];
@@ -122,7 +105,7 @@ export class Backtester {
     let balance   = startBalance;
     let peak      = startBalance;
     let maxDDPct  = 0, maxDDUsd = 0;
-    let totalComm = 0, totalSpread = 0;
+    let totalComm = 0, totalSpread = 0, totalCost = 0;
     let simulationErrors = 0;
 
     let openPos: {
@@ -147,18 +130,29 @@ export class Backtester {
           const exitPrice  = hitSL ? openPos.sl : hitTP ? openPos.tp : cur.close;
           const exitReason = hitSL ? 'SL' : hitTP ? 'TP' : 'TIMEOUT';
 
-          const rawPnl = (exitPrice - openPos.entry)
-            * (openPos.side === 'BUY' ? 1 : -1)
-            * openPos.size
-            * spec.contractSize;
+          const rawPnl = calculateGrossPnlAccount({
+            entryPrice: openPos.entry,
+            exitPrice,
+            volume: openPos.size,
+            contractSize: spec.contractSize,
+            quoteToAccount: 1,
+            side: openPos.side,
+          });
 
-          const comm   = symbolCommission(symbol, openPos.size);
-          const spread = spreadPerSide * spec.contractSize * openPos.size * 2;
-          const pnl    = rawPnl - comm - spread;
+          const costs = estimateCosts({
+            entryPrice: openPos.entry,
+            exitPrice,
+            volume: openPos.size,
+            contractSize: spec.contractSize,
+            quoteToAccount: 1,
+          }, costProfile);
 
-          balance     += pnl;
-          totalComm   += comm;
-          totalSpread += spread;
+          const pnl = rawPnl - costs.total;
+
+          balance += pnl;
+          totalComm += costs.commission;
+          totalSpread += costs.spread;
+          totalCost += costs.total;
           peak         = Math.max(peak, balance);
           const dd     = (peak - balance) / peak;
           maxDDPct     = Math.max(maxDDPct, dd);
@@ -223,7 +217,7 @@ export class Backtester {
 
     return this.buildResult(
       symbol, startBalance, balance, trades, equityCurve,
-      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors,
+      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost,
     );
   }
 
@@ -232,7 +226,7 @@ export class Backtester {
     trades: BacktestTrade[], equityCurve: Array<{ t: number; equity: number }>,
     monthlyBreakdown: MonthlyBreakdown[],
     maxDDPct: number, maxDDUsd: number,
-    totalCommission: number, totalSpread: number, simulationErrors: number,
+    totalCommission: number, totalSpread: number, simulationErrors: number, totalCost: number,
   ): BacktestResult {
     const wins   = trades.filter(t => t.pnl > 0);
     const losses = trades.filter(t => t.pnl <= 0);
@@ -287,6 +281,8 @@ export class Backtester {
       maxConsecLosses: maxLStreak,
       totalCommission: +totalCommission.toFixed(2),
       totalSpread:     +totalSpread.toFixed(2),
+      totalCost:       +totalCost.toFixed(2),
+      costModelVersion: COST_MODEL_VERSION,
       trades,
       equityCurve,
       monthlyBreakdown,
