@@ -112,10 +112,29 @@ export class WalkForwardOptimizer {
     if (WFO_PROCESS_LOCK) {
       throw new Error('Another walk-forward optimization is already running in this process');
     }
-
     WFO_PROCESS_LOCK = true;
     try {
+      return await this.runInternal(
+        symbol,
+        allCandles,
+        timeframe,
+        historicalCurrencyRates,
+        marketOverride,
+        costProfileOverride,
+      );
+    } finally {
+      WFO_PROCESS_LOCK = false;
+    }
+  }
 
+  private async runInternal(
+    symbol: string,
+    allCandles: Candle[],
+    timeframe: Timeframe = 'H1',
+    historicalCurrencyRates: HistoricalRateSeries = {},
+    marketOverride?: MarketDefinition,
+    costProfileOverride?: CostProfile,
+  ): Promise<WalkForwardResult> {
     this.logger.info(`Walk-Forward: ${symbol} | ${allCandles.length} candles`);
 
     if (allCandles.length < TRAIN_BARS + TEST_BARS) {
@@ -213,10 +232,6 @@ export class WalkForwardOptimizer {
     }
 
     return this.buildResult(symbol, windows, planned.passed, planned.reason);
-
-  } finally {
-      WFO_PROCESS_LOCK = false;
-    }
   }
 
   // ─── Grid search on training data ────────────────────────────────────────
