@@ -76,9 +76,12 @@ export class StartupReconciler {
       const tradeId = Number(request?.tradeId);
       if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
 
-      if (resolvedTrades.has(tradeId)) {
+      if (
+        resolvedTrades.has(tradeId) ||
+        this.db.hasResolvedExecutionForTrade(tradeId, ['CLOSE', 'CLOSE_AT_MARKET'])
+      ) {
         this.logger.warn(
-          `[MT5] Multiple unresolved close operations for trade id=${tradeId}; leaving additional operations blocked`,
+          `[MT5] Multiple close operations for trade id=${tradeId}; leaving additional operations blocked`,
         );
         continue;
       }
@@ -148,6 +151,7 @@ export class StartupReconciler {
 
       const tradeId = Number(request?.tradeId);
       if (!Number.isInteger(tradeId) || tradeId <= 0 || resolvedTrades.has(tradeId)) continue;
+      if (this.db.hasResolvedExecutionForTrade(tradeId, ['PARTIAL_CLOSE'])) continue;
 
       const trade = this.db.raw().prepare(`SELECT * FROM trades WHERE id=? LIMIT 1`).get(tradeId) as any;
       if (!trade?.ticket || String(trade.status) !== 'open') continue;
@@ -177,18 +181,28 @@ export class StartupReconciler {
       const requestedVolume = Number(request?.volume);
       if (!(requestedVolume > 0) || !Number.isFinite(requestedVolume)) continue;
 
+      const tolerance = Math.max(
+        1e-8,
+        Number(trade.volume) * 0.02,
+        Number(history.remainingVolume) * 0.02,
+      );
+      const alreadyApplied =
+        Math.abs(Number(trade.volume) - history.remainingVolume) <= tolerance;
       const requestedRemaining = Number(trade.volume) - requestedVolume;
-      const tolerance = Math.max(1e-8, Number(trade.volume) * 0.02, Number(history.remainingVolume) * 0.02);
-      if (Math.abs(history.remainingVolume - requestedRemaining) > tolerance) {
-        this.logger.warn(`[MT5] Partial-close history mismatch for trade id=${tradeId}; leaving operation unresolved`);
+      const expectedRemainingMatches =
+        Math.abs(history.remainingVolume - requestedRemaining) <= tolerance;
+      if (!alreadyApplied && !expectedRemainingMatches) {
+        this.logger.warn(
+          `[MT5] Partial-close history mismatch for trade id=${tradeId}; leaving operation unresolved`,
+        );
         continue;
       }
 
-      this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=? WHERE id=? AND status='open'`)
-        .run(history.remainingVolume, history.netProfit, tradeId);
-
-      const resolved = this.db.resolveExecutionLedger(
+      const resolved = this.db.resolveReconciledPartialClose(
+        tradeId,
         String(row.executionId),
+        history.remainingVolume,
+        history.netProfit,
         {
           broker: 'mt5', ticket: Number(trade.ticket),
           closedVolume: Number(trade.volume) - history.remainingVolume,
@@ -228,13 +242,22 @@ export class StartupReconciler {
       if (side !== t.side) throw new Error(`MT5 side mismatch ticket=${t.ticket}: DB=${t.side} broker=${side}`);
       const brokerVol = Number(live.volume);
       if (!(brokerVol > 0) || !Number.isFinite(brokerVol)) throw new Error(`MT5 invalid broker volume ticket=${t.ticket}`);
-      if (Math.abs(brokerVol - t.volume) > Math.max(1e-8, t.volume * 0.02))
+      const volumeMismatch = Math.abs(brokerVol - t.volume) > Math.max(1e-8, t.volume * 0.02);
+      const unresolvedPartial =
+        t.id != null &&
+        this.db.hasUnresolvedExecutionForTrade(Number(t.id), ['PARTIAL_CLOSE']);
+      if (volumeMismatch && !(unresolvedPartial && brokerVol < t.volume)) {
         throw new Error(`MT5 volume mismatch ticket=${t.ticket}: DB=${t.volume} broker=${brokerVol}`);
+      }
       const sl = Number(live.sl), tp = Number(live.tp);
       if (![sl, tp].every(Number.isFinite) || sl <= 0 || tp <= 0) throw new Error(`MT5 protective order state invalid ticket=${t.ticket}`);
       if ((t.side === 'BUY' && (sl >= t.entry || tp <= t.entry)) || (t.side === 'SELL' && (sl <= t.entry || tp >= t.entry)))
         throw new Error(`MT5 protective order direction invalid ticket=${t.ticket}`);
-      this.db.raw().prepare(`UPDATE trades SET sl=?, tp=?, volume=? WHERE id=? AND status='open'`).run(sl, tp, brokerVol, t.id!);
+      if (volumeMismatch) {
+        this.db.raw().prepare(`UPDATE trades SET sl=?, tp=? WHERE id=? AND status='open'`).run(sl, tp, t.id!);
+      } else {
+        this.db.raw().prepare(`UPDATE trades SET sl=?, tp=?, volume=? WHERE id=? AND status='open'`).run(sl, tp, brokerVol, t.id!);
+      }
     }
 
     for (const p of positions) {
