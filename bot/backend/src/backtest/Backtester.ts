@@ -22,6 +22,7 @@ import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
 import { getMarketDefinition }         from '../market/MarketCatalog';
 import { HistoricalRateSeries, resolveHistoricalQuoteToAccount, validateHistoricalRateSeries } from '../market/HistoricalCurrencySeries';
+import { evaluateMarketDataQuality } from '../market/DataQualityGate';
 import { Logger }                      from '../utils/Logger';
 import * as path                       from 'path';
 import * as fs                         from 'fs';
@@ -48,6 +49,7 @@ export interface BacktestResult {
   maxConsecWins: number; maxConsecLosses: number;
   totalCommission: number; totalSpread: number; totalCost: number; costModelVersion: string;
   valid: boolean; blockedReason?: string;
+  dataQualityScore: number;
   simulationErrors: number;
   trades: BacktestTrade[]; equityCurve: Array<{ t: number; equity: number }>;
   monthlyBreakdown: MonthlyBreakdown[];
@@ -136,6 +138,18 @@ export class Backtester {
         historicalCurrencyRates,
       );
 
+    const dataQuality = evaluateMarketDataQuality(
+      candles,
+      timeframe,
+      {
+        allowScheduledSessionGaps:
+          market?.assetClass === 'FOREX' ||
+          market?.assetClass === 'METAL' ||
+          market?.assetClass === 'ENERGY' ||
+          market?.assetClass === 'INDEX',
+      },
+    );
+
     const currencyValidation = validateHistoricalRateSeries(
       historicalCurrencyRates,
     );
@@ -147,7 +161,10 @@ export class Backtester {
         ['USD', 'USDT', 'USDC', 'BUSD'].includes(quoteCurrency)
       );
 
-    if (!market) {
+    if (!dataQuality.passed) {
+      valid = false;
+      blockedReason = `Market data quality gate failed: ${dataQuality.hardFailures.join('; ')}`;
+    } else if (!market) {
       valid = false;
       blockedReason = `Missing market definition for ${symbol}`;
     } else if (!currencyValidation.valid) {
@@ -188,6 +205,7 @@ export class Backtester {
         totalCost,
         false,
         blockedReason,
+        dataQuality.score,
       );
     }
 
@@ -319,7 +337,7 @@ export class Backtester {
 
     return this.buildResult(
       symbol, timeframe, startBalance, balance, trades, equityCurve,
-      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost, valid, blockedReason,
+      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost, valid, blockedReason, dataQuality.score,
     );
   }
 
@@ -329,7 +347,9 @@ export class Backtester {
     monthlyBreakdown: MonthlyBreakdown[],
     maxDDPct: number, maxDDUsd: number,
     totalCommission: number, totalSpread: number, simulationErrors: number, totalCost: number,
-    valid = true, blockedReason?: string,
+    valid = true,
+    blockedReason?: string,
+    dataQualityScore = 1,
   ): BacktestResult {
     const wins   = trades.filter(t => t.pnl > 0);
     const losses = trades.filter(t => t.pnl <= 0);
@@ -389,6 +409,7 @@ export class Backtester {
       costModelVersion: COST_MODEL_VERSION,
       valid,
       blockedReason,
+      dataQualityScore: +dataQualityScore.toFixed(6),
       trades,
       equityCurve,
       monthlyBreakdown,
