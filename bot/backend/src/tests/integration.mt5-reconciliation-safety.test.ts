@@ -114,7 +114,7 @@ async function main() {
       db.raw().close();
     }
 
-    console.log("Result: 5 passed, 0 failed");
+    console.log("Result: 6 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
