@@ -153,6 +153,94 @@ export class BinanceExecutor {
     }
   }
 
+  async reconcileFullCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    realizedProfit: number;
+    realizedProfitCurrency: string | null;
+  }> {
+    if (!this.isFutures || !clientOrderId) {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId);
+    if (!order) {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const orderId = Number(order?.orderId);
+    const status = String(order?.status ?? '').toUpperCase();
+    const executedQty = Number(order?.executedQty ?? 0);
+    if (!(orderId > 0) || !Number.isFinite(executedQty) || executedQty <= 0) {
+      return {
+        ok: false,
+        orderId: 0,
+        executedQty: 0,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    if (status && !['FILLED', 'PARTIALLY_FILLED', 'CANCELED', 'EXPIRED'].includes(status)) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+    if (!realized) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: 0,
+        realizedProfitCurrency: null,
+      };
+    }
+
+    const positions = await this.getAllPositions();
+    const position = positions.find(
+      item => item.symbol === symbol && Math.abs(item.positionAmt) > 1e-12,
+    );
+    if (position) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: realized.profit,
+        realizedProfitCurrency: realized.currency,
+      };
+    }
+
+    return {
+      ok: true,
+      orderId,
+      executedQty,
+      realizedProfit: realized.profit,
+      realizedProfitCurrency: realized.currency,
+    };
+  }
+
   async reconcilePartialCloseByClientOrderId(
     symbol: string,
     clientOrderId: string,
@@ -598,8 +686,10 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
+    orderId?: number;
     realizedProfit: number | null;
     realizedProfitCurrency: string | null;
   }> {
@@ -657,6 +747,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
@@ -707,6 +798,9 @@ export class BinanceExecutor {
 
       return {
         ok:true,
+        orderId: this.isFutures
+          ? closeOrderId
+          : undefined,
         realizedProfit:this.isFutures ? realizedProfit : null,
         realizedProfitCurrency:this.isFutures
           ? realizedProfitCurrency
