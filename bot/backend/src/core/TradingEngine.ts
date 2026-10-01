@@ -1178,6 +1178,7 @@ export class TradingEngine extends EventEmitter {
           adjustedSignal.sl,
           adjustedVolume,
           equity,
+          livePrices,
         );
 
     if (!(volume > 0)) {

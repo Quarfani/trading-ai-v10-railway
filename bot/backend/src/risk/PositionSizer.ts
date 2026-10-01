@@ -175,7 +175,14 @@ export class PositionSizer {
   }
 
   /** Re-apply the absolute risk cap after any downstream sizing modifiers. */
-  capToAbsoluteRisk(symbol: string, entry: number, sl: number, volume: number, equity: number): number {
+  capToAbsoluteRisk(
+    symbol: string,
+    entry: number,
+    sl: number,
+    volume: number,
+    equity: number,
+    livePrices: Record<string, number> = {},
+  ): number {
     if (!(equity > 0) || !(volume > 0) || !Number.isFinite(volume)) return 0;
     const spec = getSymbolSpec(symbol);
     const market = getMarketDefinition(symbol);
@@ -183,7 +190,7 @@ export class PositionSizer {
     const quoteToAccount = resolveQuoteToAccount(
       market.quoteCurrency,
       this.config.accountCurrency ?? 'USD',
-      {},
+      livePrices,
     );
     if (quoteToAccount == null) return 0;
     const riskPerUnit = Math.abs(entry - sl) * spec.contractSize * quoteToAccount;
