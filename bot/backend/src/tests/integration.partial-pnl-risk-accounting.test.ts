@@ -80,8 +80,19 @@ async function main() {
   await liveDb.initialize();
   const liveCfg = config("mt5", 0.05);
   const liveTarget = new DailyProfitTarget(liveCfg, liveDb, new TelegramBot(liveCfg));
-  assert(liveTarget.reached(10_000) === false, "live target anchor should initialize at current equity");
-  assert(liveTarget.reached(10_600) === true, "live daily target must use the persisted daily equity anchor");
+  const liveTradeId = liveDb.insertTrade({
+    ticket: 7005, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 0.1,
+    entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(), source: "LIVE_PARTIAL_TARGET",
+  } as any);
+  liveDb.createExecutionLedger({
+    executionId: "live-partial-1", operationKey: "live-partial-op", action: "PARTIAL_CLOSE",
+    status: "EXECUTED", symbol: "EURUSD", side: "BUY", volume: 0.04,
+    request: { tradeId: liveTradeId, volume: 0.04 },
+  });
+  liveDb.updateExecutionLedger("live-partial-1", {
+    result: { remainingVolume: 0.06, profit: 600 }, status: "EXECUTED",
+  });
+  assert(liveTarget.reached() === true, "live daily target must include realized partial PnL");
 
   const binanceDb = new DatabaseManager(":memory:");
   await binanceDb.initialize();
