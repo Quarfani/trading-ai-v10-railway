@@ -518,9 +518,19 @@ def close():
 
         pos       = positions[0]
         tick_data = mt5.symbol_info_tick(pos.symbol)
+        if not tick_data:
+            return err(f"No tick for close {pos.symbol}: {mt5.last_error()}", 503)
         close_price = tick_data.bid if pos.type == 0 else tick_data.ask  # 0=BUY
 
+        volume_ok, volume_reason = validate_trade_volume(float(pos.volume), mt5.symbol_info(pos.symbol))
+        if not volume_ok:
+            return err(volume_reason, 422)
+
         close_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+        try:
+            filling_mode = choose_market_filling_mode(mt5.symbol_info(pos.symbol), mt5)
+        except ValueError as exc:
+            return err(str(exc), 422)
         request_data = {
             "action":      mt5.TRADE_ACTION_DEAL,
             "symbol":      pos.symbol,
@@ -528,12 +538,17 @@ def close():
             "type":        close_type,
             "position":    ticket,
             "price":       close_price,
-            "deviation":   20,
+            "deviation":   int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20")),
             "magic":       get_magic(),
             "comment":     "bot-close",
             "type_time":   mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"Close order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(f"Close check failed: retcode={check.retcode} comment={getattr(check, "comment", "")}", 422)
         result = mt5.order_send(request_data)
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Close failed: {result.retcode if result else mt5.last_error()}")
@@ -570,13 +585,26 @@ def close_partial():
 
         pos       = positions[0]
         sym_info  = mt5.symbol_info(pos.symbol)
-        vol_step  = sym_info.volume_step if sym_info else 0.01
+        if not sym_info:
+            return err(f"Symbol {pos.symbol} metadata unavailable", 503)
+        vol_step  = float(getattr(sym_info, "volume_step", 0))
+        if not vol_step > 0:
+            return err(f"Invalid broker volume step for {pos.symbol}", 422)
         close_vol = max(vol_step, round(pos.volume * fraction / vol_step) * vol_step)
         close_vol = min(close_vol, pos.volume)
+        volume_ok, volume_reason = validate_trade_volume(close_vol, sym_info)
+        if not volume_ok:
+            return err(volume_reason, 422)
 
         tick_data   = mt5.symbol_info_tick(pos.symbol)
+        if not tick_data:
+            return err(f"No tick for partial close {pos.symbol}: {mt5.last_error()}", 503)
         close_price = tick_data.bid if pos.type == 0 else tick_data.ask
         close_type  = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+        try:
+            filling_mode = choose_market_filling_mode(sym_info, mt5)
+        except ValueError as exc:
+            return err(str(exc), 422)
 
         request_data = {
             "action":      mt5.TRADE_ACTION_DEAL,
@@ -585,12 +613,17 @@ def close_partial():
             "type":        close_type,
             "position":    ticket,
             "price":       close_price,
-            "deviation":   20,
+            "deviation":   int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20")),
             "magic":       get_magic(),
             "comment":     f"bot-partial-{int(fraction*100)}pct",
             "type_time":   mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"Partial close order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(f"Partial close check failed: retcode={check.retcode} comment={getattr(check, "comment", "")}", 422)
         result = mt5.order_send(request_data)
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Partial close failed: {result.retcode if result else mt5.last_error()}")
