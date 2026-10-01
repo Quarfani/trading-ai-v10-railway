@@ -344,7 +344,12 @@ export class BinanceExecutor {
 
   // ─── Close position ───────────────────────────────────────────────────
 
-  async closePosition(ticket: number, symbol: string, volume?: number): Promise<boolean> {
+  async closePosition(
+    ticket: number,
+    symbol: string,
+    volume?: number,
+    side?: 'BUY' | 'SELL',
+  ): Promise<boolean> {
     try {
       // Cancel SL/TP first
       const ids = this.orderMap.get(ticket);
@@ -365,8 +370,11 @@ export class BinanceExecutor {
         const closeQty=volume??Math.abs(pos.positionAmt); const closeSide=pos.positionAmt>0?'SELL':'BUY';
         await this.signedPost('/fapi/v1/order',{symbol,side:closeSide,type:'MARKET',quantity:this.formatQty(Math.abs(closeQty),getSymbolSpec(symbol).volumeStep),reduceOnly:'true'});
       } else {
-        const closeSide=ids?.closeSide, closeQty=volume??ids?.quantity;
-        if(!closeSide||!closeQty) return false;
+        const closeSide = ids?.closeSide ?? (
+          side === 'BUY' ? 'SELL' : side === 'SELL' ? 'BUY' : undefined
+        );
+        const closeQty = volume ?? ids?.quantity;
+        if (!closeSide || !(closeQty > 0)) return false;
         await this.signedPost('/api/v3/order',{symbol,side:closeSide,type:'MARKET',quantity:this.formatQty(closeQty,getSymbolSpec(symbol).volumeStep)});
       }
       this.logger.info(`[Binance] Closed position ${symbol} ticket=${ticket}`); return true;
