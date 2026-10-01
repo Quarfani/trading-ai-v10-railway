@@ -76,9 +76,12 @@ export class StartupReconciler {
       const tradeId = Number(request?.tradeId);
       if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
 
-      if (selectedByTrade.has(tradeId)) {
+      if (
+        selectedByTrade.has(tradeId) ||
+        this.db.hasResolvedExecutionForTrade(tradeId, ['CLOSE', 'CLOSE_AT_MARKET'])
+      ) {
         this.logger.warn(
-          `[MT5] Multiple unresolved close operations for trade id=${tradeId}; only the earliest operation may be reconciled`,
+          `[MT5] Multiple or already-resolved close operations for trade id=${tradeId}; only one operation may ever be reconciled`,
         );
         continue;
       }
