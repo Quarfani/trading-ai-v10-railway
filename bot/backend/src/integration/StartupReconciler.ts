@@ -54,14 +54,14 @@ export class StartupReconciler {
       FROM execution_ledger
       WHERE status IN ('PENDING','UNKNOWN')
         AND action IN ('CLOSE','CLOSE_AT_MARKET')
-      ORDER BY updatedAt ASC, createdAt ASC
+      ORDER BY updatedAt ASC, createdAt ASC, executionId ASC
     `).all() as Array<{
       executionId: string;
       action: string;
       requestJson?: string | null;
     }>;
 
-    const resolvedTrades = new Set<number>();
+    const selectedByTrade = new Set<number>();
 
     for (const row of rows) {
       if (!row.requestJson) continue;
@@ -76,12 +76,9 @@ export class StartupReconciler {
       const tradeId = Number(request?.tradeId);
       if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
 
-      if (
-        resolvedTrades.has(tradeId) ||
-        this.db.hasResolvedExecutionForTrade(tradeId, ['CLOSE', 'CLOSE_AT_MARKET'])
-      ) {
+      if (selectedByTrade.has(tradeId)) {
         this.logger.warn(
-          `[MT5] Multiple close operations for trade id=${tradeId}; leaving additional operations blocked`,
+          `[MT5] Multiple unresolved close operations for trade id=${tradeId}; only the earliest operation may be reconciled`,
         );
         continue;
       }
@@ -89,11 +86,7 @@ export class StartupReconciler {
       const trade = this.db.raw().prepare(
         `SELECT * FROM trades WHERE id=? LIMIT 1`,
       ).get(tradeId) as any;
-      if (!trade?.ticket || String(trade.status) !== 'open') {
-        // Once the internal trade is already closed, never let a second
-        // unresolved close operation attach itself to the same broker close.
-        continue;
-      }
+      if (!trade?.ticket) continue;
 
       const history = await this.getMT5HistoryEntry(Number(trade.ticket));
       if (!history) continue;
@@ -120,7 +113,13 @@ export class StartupReconciler {
         },
         Number(trade.ticket),
       );
-      if (resolved) resolvedTrades.add(tradeId);
+      selectedByTrade.add(tradeId);
+
+      if (!resolved) {
+        this.logger.warn(
+          `[MT5] Could not resolve close operation=${row.executionId}; leaving it unresolved`,
+        );
+      }
     }
   }
 
