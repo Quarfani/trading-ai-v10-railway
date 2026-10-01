@@ -40,6 +40,7 @@ export class DailyLossGuard {
 
     let dailyLossNumerator: number;
     let denominator: number;
+    let floatingPnlForMessage: number | null = null;
 
     if (
       this.config.mode !== 'paper' &&
@@ -69,6 +70,7 @@ export class DailyLossGuard {
         return false;
       }
       dailyLossNumerator = realizedPnl + floatingPnl;
+      floatingPnlForMessage = floatingPnl;
     }
 
     const lossPct = -dailyLossNumerator / denominator;
@@ -77,11 +79,15 @@ export class DailyLossGuard {
       const today = new Date().toISOString().slice(0, 10);
       if (this.warnedToday !== today) {
         this.warnedToday = today;
+        const dailyMoveMessage =
+          floatingPnlForMessage != null
+            ? `خسارة محققة: ${realizedPnl.toFixed(2)}\nخسارة عائمة: ${floatingPnlForMessage.toFixed(2)}\n`
+            : `تغير equity اليوم: ${dailyLossNumerator.toFixed(2)}\n`;
+
         const msg =
           `⚠️ <b>DAILY LOSS LIMIT HIT</b>\n` +
-          `خسارة محققة: $${realizedPnl.toFixed(2)}\n` +
-          `خسارة عائمة: $${floatingPnl.toFixed(2)}\n` +
-          `إجمالي الخسارة: ${(lossPct * 100).toFixed(2)}% ` +
+          dailyMoveMessage +
+          `الخسارة اليومية: ${(lossPct * 100).toFixed(2)}% ` +
           `(الحد: ${(this.config.maxDailyLoss * 100).toFixed(1)}%)\n` +
           `تم إيقاف التداول حتى منتصف الليل UTC.`;
         this.logger.error(msg);
