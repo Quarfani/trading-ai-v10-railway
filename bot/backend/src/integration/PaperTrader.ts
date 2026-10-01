@@ -30,7 +30,7 @@ export class PaperTrader {
     const entryCosts=estimateEntryCosts({price:fillPrice,volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
     this.balance-=entryCosts;
     const ticket=this.nextTicket++, openedAt=Date.now();
-    const pt: PaperTrade={ticket,symbol:signal.symbol,side:signal.side,volume,entry:fillPrice,sl:signal.sl,tp:signal.tp,openedAt,status:'open',source:signal.source,timeframe,realizedProfit:0};
+    const pt: PaperTrade={ticket,symbol:signal.symbol,side:signal.side,volume,entry:fillPrice,sl:signal.sl,tp:signal.tp,openedAt,status:'open',source:signal.source,timeframe,realizedProfit:0,remainingEntryCost:entryCosts};
     this.openTrades.set(ticket,pt);
     const rec: Trade={ticket,symbol:signal.symbol,side:signal.side,volume,entry:fillPrice,sl:signal.sl,tp:signal.tp,status:'open',openedAt,source:signal.source,timeframe};
     this.trades.push(rec);
@@ -88,6 +88,7 @@ export class PaperTrader {
     const profit=raw-exitCosts-entryCostShare;
     t.remainingEntryCost=Math.max(0,(t.remainingEntryCost??0)-entryCostShare);
     t.volume=+(t.volume-closedVolume).toFixed(8);
+    this.balance += raw-exitCosts;
     t.realizedProfit=(t.realizedProfit??0)+profit;
     
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');
@@ -106,9 +107,7 @@ export class PaperTrader {
     const profile=getCostProfile(t.symbol);
     const exitCosts=estimateExitCosts({price:fill,volume:t.volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
     const finalProfit=raw-exitCosts-(t.remainingEntryCost??0);
-    this.balance += raw-exitCosts;
-    const profit=(t.realizedProfit??0)+finalProfit;
-    this.balance+=finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
+    const profit=(t.realizedProfit??0)+finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
     this.openTrades.delete(ticket);this.closedTrades.push(t);
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');
     if(rec){rec.status='closed';rec.closedAt=at;rec.profit=profit;rec.exitReason=reason;rec.volume=t.volume;rec.realizedProfit=t.realizedProfit??0;}
@@ -141,4 +140,4 @@ export class PaperTrader {
   }
   reset(newBalance=10_000){this.balance=newBalance;this.initialBal=newBalance;this.openTrades.clear();this.closedTrades=[];this.trades=[];this.nextTicket=1;this.equityCurve=[{time:Date.now(),equity:newBalance}];}
 }
-interface PaperTrade{ticket:number;symbol:string;side:'BUY'|'SELL';volume:number;entry:number;sl:number;tp:number;openedAt:number;closedAt?:number;status:'open'|'closed';profit?:number;realizedProfit?:number;remainingEntryCost?:number;remainingEntryCost?:number;exitReason?:string;source?:string;timeframe?:Timeframe}
+interface PaperTrade{ticket:number;symbol:string;side:'BUY'|'SELL';volume:number;entry:number;sl:number;tp:number;openedAt:number;closedAt?:number;status:'open'|'closed';profit?:number;realizedProfit?:number;remainingEntryCost?:number;exitReason?:string;source?:string;timeframe?:Timeframe}

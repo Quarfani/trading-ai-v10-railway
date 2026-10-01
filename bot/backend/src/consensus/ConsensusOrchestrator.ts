@@ -11,7 +11,7 @@ import { StrategyConsensusEngine }  from './StrategyConsensusEngine';
 import { createAllAdapters }        from './StrategyAdapters';
 import { ConsensusConfig, ConsensusResult, StrategyContext } from './types';
 import { ConsensusLogger } from './ConsensusLogger';
-import { Candle, Timeframe }        from '../types/trading.types';
+import { Candle, Timeframe, Mode } from '../types/trading.types';
 
 export interface LogEntry extends ConsensusResult {
   symbol: string;
