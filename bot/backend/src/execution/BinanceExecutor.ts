@@ -140,20 +140,36 @@ export class BinanceExecutor {
     if (!this.isFutures) return null;
     try {
       const now = Date.now();
-      const startTime = Number.isFinite(Number(createdAt)) && Number(createdAt) > 0
+      let startTime = Number.isFinite(Number(createdAt)) && Number(createdAt) > 0
         ? Math.max(0, Number(createdAt) - 5 * 60_000)
         : Math.max(0, now - 24 * 60 * 60_000);
-      const result = await this.signedGet('/fapi/v1/allOrders', {
-        symbol,
-        startTime,
-        endTime: now,
-        limit: 1000,
-      });
-      if (!Array.isArray(result)) return result ?? null;
-      return result.find(
-        (order: any) =>
-          String(order?.clientOrderId ?? order?.origClientOrderId ?? '') === clientOrderId,
-      ) ?? null;
+
+      for (let page = 0; page < 5; page += 1) {
+        const result = await this.signedGet('/fapi/v1/allOrders', {
+          symbol,
+          startTime,
+          endTime: now,
+          limit: 1000,
+        });
+        if (!Array.isArray(result)) return result ?? null;
+
+        const match = result.find(
+          (order: any) =>
+            String(order?.clientOrderId ?? order?.origClientOrderId ?? '') === clientOrderId,
+        );
+        if (match) return match;
+        if (result.length < 1000) return null;
+
+        const lastTime = Math.max(
+          ...result.map((order: any) =>
+            Number(order?.updateTime ?? order?.time ?? 0),
+          ),
+        );
+        if (!(lastTime >= startTime)) return null;
+        startTime = lastTime + 1;
+      }
+
+      return null;
     } catch {
       return null;
     }
