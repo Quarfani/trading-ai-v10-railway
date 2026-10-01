@@ -355,6 +355,7 @@ export class Reconciler {
         const recovered = await this.exec.reconcileBinanceFullClose(
           String(unresolvedClose.operationKey),
           t.symbol,
+          Number(unresolvedClose.createdAt),
         );
         const executedQty = Number(recovered.executedQty);
         if (!Number.isFinite(executedQty) || executedQty <= 0) {
@@ -391,8 +392,6 @@ export class Reconciler {
         this.tracker.recordClose(t.profit);
         this.onClose({ ...t, profit: t.profit });
       } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
-
-      } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
         const unresolvedPartial = t.id != null
           ? this.db.getLatestUnresolvedExecutionForTrade(t.id, ['PARTIAL_CLOSE'])
           : null;
@@ -406,6 +405,7 @@ export class Reconciler {
         const recovered = await this.exec.reconcileBinancePartialClose(
           String(unresolvedPartial.operationKey),
           t.symbol,
+          Number(unresolvedPartial.createdAt),
         );
 
         const remaining = Number(recovered.remainingVolume);
