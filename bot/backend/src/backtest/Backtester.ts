@@ -348,7 +348,12 @@ export class Backtester {
             break;
           }
 
-          const regime = marketRegimeDetector.detect(symbol, timeframe, slice.slice(-100));
+          const regime = marketRegimeDetector.detect(
+            symbol,
+            timeframe,
+            slice.slice(-100),
+            { useCache: false },
+          );
           if (regime.regime === 'VOLATILE') continue;
 
           // FIX BUG-C3: resample current slice to H4 and pass to orchestrator
