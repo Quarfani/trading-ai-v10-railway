@@ -410,7 +410,6 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE trades ADD COLUMN exitQuoteToAccount REAL;
     `
   },
-,
   {
     version: 15, name: 'execution_ledger_state_constraints',
     up: `
