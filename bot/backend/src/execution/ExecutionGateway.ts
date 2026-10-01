@@ -421,9 +421,14 @@ export class ExecutionGateway {
         realizedProfit = +brokerProfit.toFixed(8);
       } else if (this.config.mode === 'binance') {
         if (!t.ticket) throw new Error('Binance partial close requires broker ticket');
-        const result = await this.binance.closePartialPosition(t.ticket, t.symbol, volume);
+        const result = await this.binance.closePartialPosition(
+          t.ticket,
+          t.symbol,
+          volume,
+        );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
+        realizedProfit = result.realizedProfit;
       } else {
         if (!t.ticket) throw new Error('Paper trade has no ticket');
         const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason);
