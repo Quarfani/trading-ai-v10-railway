@@ -117,7 +117,7 @@ export class StrategyDefinitionStore {
       at,
     );
 
-    this.db.transaction(() => {
+    this.db.raw().transaction(() => {
       this.save(result.definition);
       this.db.raw().prepare(`
         INSERT INTO strategy_lifecycle_transitions

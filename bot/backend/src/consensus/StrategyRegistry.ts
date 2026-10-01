@@ -169,8 +169,8 @@ export class StrategyRegistry {
     return this.entries.get(name)?.metrics ?? null;
   }
 
-  getSnapshot(): Record<string, { enabled: boolean; metrics: StrategyMetrics }> {
-    const snap: Record<string, { enabled: boolean; metrics: StrategyMetrics }> = {};
+  getSnapshot(): Record<string, { enabled: boolean; metrics: StrategyMetrics; definition?: RegistryEntry['definition'] }> {
+    const snap: Record<string, { enabled: boolean; metrics: StrategyMetrics; definition?: RegistryEntry['definition'] }> = {};
     for (const [name, entry] of this.entries) {
       snap[name] = { enabled: entry.enabled, metrics: entry.metrics, definition: entry.definition };
     }

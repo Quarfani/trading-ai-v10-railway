@@ -1,6 +1,6 @@
 import axios from 'axios';
 import * as crypto from 'crypto';
-import { SystemConfig, Signal, Trade } from '../types/trading.types';
+import { SystemConfig, Signal, Trade, Timeframe } from '../types/trading.types';
 import { DatabaseManager } from '../database/DatabaseManager';
 import { BinanceExecutor } from './BinanceExecutor';
 import { PaperTrader } from '../integration/PaperTrader';
@@ -46,7 +46,7 @@ export class ExecutionGateway {
     }
   }
 
-  async execute(signal: Signal, volume: number, timeframe: string): Promise<ExecutionResult> {
+  async execute(signal: Signal, volume: number, timeframe: Timeframe): Promise<ExecutionResult> {
     const operationKey = this.stableKey('OPEN', {
       account: this.config.accountName ?? 'default', mode: this.config.mode,
       symbol: signal.symbol, side: signal.side, timestamp: signal.timestamp,
@@ -110,7 +110,7 @@ export class ExecutionGateway {
     }
   }
 
-  private async executeMT5(signal: Signal, volume: number, tf: string, operationKey: string): Promise<Trade> {
+  private async executeMT5(signal: Signal, volume: number, tf: Timeframe, operationKey: string): Promise<Trade> {
     const comment = `ta_${crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 27)}`.slice(0, 31);
     const r = await axios.post(`${this.config.mt5.bridgeUrl}/trade`, {
       symbol: signal.symbol, side: signal.side, volume, sl: signal.sl, tp: signal.tp, comment,

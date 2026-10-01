@@ -108,7 +108,7 @@ export function checkExposureAndLeverage(
 
   for (const trade of openTrades) {
     const result = notional(trade, prices, accountCurrency);
-    if (!result.ok) {
+    if (result.ok === false) {
       return {
         allowed: false,
         reason: result.reason,
@@ -119,7 +119,7 @@ export function checkExposureAndLeverage(
   }
 
   const added = notional(newPosition, prices, accountCurrency);
-  if (!added.ok) {
+  if (added.ok === false) {
     return {
       allowed: false,
       reason: added.reason,
