@@ -14,6 +14,7 @@ import {
   normalizeSymbol,
 } from './market.types';
 import { getSymbolSpec, isConfiguredSymbol } from '../config/symbolConfig';
+import { BrokerContractDefinition, BrokerContractRegistry } from './BrokerContractRegistry';
 
 const STABLE_QUOTES = ['USDT', 'USDC', 'BUSD'] as const;
 
@@ -28,6 +29,8 @@ const INDEX_SYMBOLS = new Set([
   'NAS100',
   'GER40',
 ]);
+
+const BROKER_CONTRACTS = new BrokerContractRegistry();
 
 const KNOWN_FOREX_CODES = new Set([
   'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'NZD', 'CAD', 'CHF',
@@ -60,8 +63,19 @@ function inferVenues(assetClass: AssetClass): readonly MarketVenue[] {
   }
 }
 
+export function registerBrokerContract(definition: BrokerContractDefinition): void {
+  BROKER_CONTRACTS.register(definition);
+}
+
+export function clearBrokerContracts(): void {
+  BROKER_CONTRACTS.clear();
+}
+
 export function getMarketDefinition(symbol: string): MarketDefinition | null {
   const normalized = normalizeSymbol(symbol);
+
+  const brokerDefinition = BROKER_CONTRACTS.getMarketDefinition(normalized);
+  if (brokerDefinition) return brokerDefinition;
   const assetClass = inferAssetClass(normalized);
 
   if (!assetClass) return null;
