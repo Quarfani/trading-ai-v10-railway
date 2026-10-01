@@ -79,9 +79,13 @@ export class MultiLevelPartialTP {
 
         const profit_R = (t.side === 'BUY' ? price - t.entry : t.entry - price) / risk;
 
+        // Capture the original size so Level 2 can close another 30% of the original,
+        // not 30% of the already-reduced broker position.
+        const initialVolume = t.volume;
+
         // Level 1: 1R → close 30% + move to BE
         if (!rec.l1Done && profit_R >= 1.0) {
-          await this.executeLevel(t, 1, 0.30, price, risk);
+          await this.executeLevel(t, 1, 0.30, price, risk, initialVolume);
           await this.moveSL(t, t.entry); // SL → Breakeven
           rec.l1Done = true;
           this.saveState();
@@ -90,9 +94,11 @@ export class MultiLevelPartialTP {
 
         // Level 2: 2R → close another 30% + SL to +0.5R
         if (rec.l1Done && !rec.l2Done && profit_R >= 2.0) {
-          await this.executeLevel(t, 2, 0.30, price, risk);
-          const sl05R = t.side === 'BUY' ? t.entry + risk * 0.5 : t.entry - risk * 0.5;
-          await this.moveSL(t, sl05R);
+          const current = this.db.getOpenTrades().find(x => x.id === t.id);
+          if (!current) continue;
+          await this.executeLevel(current, 2, 0.30, price, risk, initialVolume);
+          const sl05R = current.side === 'BUY' ? current.entry + risk * 0.5 : current.entry - risk * 0.5;
+          await this.moveSL(current, sl05R);
           rec.l2Done = true;
           this.saveState();
           this.logger.info(`[${t.symbol}] L2 partial TP at ${profit_R.toFixed(1)}R — closed 30%`);
@@ -108,9 +114,16 @@ export class MultiLevelPartialTP {
     }
   }
 
-  private async executeLevel(t: Trade, level: number, fraction: number, price: number, _risk: number) {
+  private async executeLevel(
+    t: Trade,
+    level: number,
+    fraction: number,
+    price: number,
+    _risk: number,
+    baseVolume = t.volume,
+  ) {
     if (!t.id) throw new Error('Trade ID is required for partial TP');
-    const volume=+(t.volume*fraction).toFixed(8);
+    const volume=+(baseVolume*fraction).toFixed(8);
     if (!(volume>0) || volume>=t.volume) throw new Error(`Invalid partial volume ${volume}`);
     const result=await this.exec.closePartial(t,volume,price,`LEVEL_${level}`);
     if (!result.ok) throw new Error(`Partial level ${level} execution failed`);

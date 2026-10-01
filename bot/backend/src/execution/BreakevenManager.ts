@@ -103,11 +103,12 @@ export class BreakevenManager {
 
       try {
         if (this.exec) {
-          await this.exec.modifySLTP(t as any, newSL, t.tp);
+          const ok = await this.exec.modifySLTP(t as any, newSL, t.tp);
+          if (!ok) throw new Error('Broker rejected breakeven SL modification');
         }
         // Update DB
         this.db.raw()
-          .prepare('UPDATE trades SET sl=? WHERE id=?')
+          .prepare("UPDATE trades SET sl=? WHERE id=? AND status='open'")
           .run(newSL, t.id);
 
         this.movedBE.add(t.id);

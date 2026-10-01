@@ -9,7 +9,6 @@ import { DatabaseManager }     from '../database/DatabaseManager';
 import { ExecutionGateway }    from './ExecutionGateway';
 import { getMarketDefinition } from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
-import { PositionSizer } from '../risk/PositionSizer';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 import { Logger }              from '../utils/Logger';
 import { MarketScanner }       from '../core/MarketScanner';
@@ -30,9 +29,7 @@ export class ScaleInManager {
     private exec:   ExecutionGateway,
     private scanner: MarketScanner,
     private currencyRates: CurrencyConversionProvider,
-  ) {
-    this.sizer = new PositionSizer(config, db);
-  }
+  ) {}
 
   start() {
     // FIX: load previously-scaled IDs from DB on startup
