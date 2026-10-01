@@ -157,6 +157,11 @@ export class Backtester {
       gate: { min_win_rate: 0, min_sharpe_ratio: -Infinity, min_rolling_expectancy: -Infinity, max_drawdown: Infinity, min_trades_for_gate: Infinity },
     });
 
+    const riskFraction = Math.min(
+      0.02,
+      Math.max(0.0001, Number(this.config.riskPerTrade ?? 0.01)),
+    );
+
     marketRegimeDetector.invalidate(symbol);
     const market = marketOverride ?? getMarketDefinition(symbol, timeframe);
     const costProfile = costProfileOverride ?? getCostProfile(symbol, {
@@ -369,7 +374,7 @@ export class Backtester {
         if (geometryValid) {
           const size = calculateBacktestPositionSize(
             balance,
-            0.01,
+            riskFraction,
             simulatedEntry,
             pendingSignal.sl,
             economics!.contractSize,
