@@ -180,7 +180,7 @@ export class Reconciler {
             `[${t.symbol}] Partial close detected: ${volumeDelta.toFixed(8)} lots closed`,
           );
 
-          const cumulative = await this.getMT5History(t.ticket);
+          const cumulative = await this.getMT5History(t.ticket, false);
           const currentRealized = Number(t.realizedProfit ?? 0);
           const cumulativeRealized = cumulative
             ? Number(cumulative.profit)
@@ -230,6 +230,7 @@ export class Reconciler {
 
   private async getMT5History(
     ticket: number,
+    requireClosed = true,
   ): Promise<{
     price: number;
     profit: number;
@@ -249,7 +250,7 @@ export class Reconciler {
 
       const closed = r.data?.closed === true ||
         Number(r.data?.remaining_volume ?? 0) <= 1e-10;
-      if (!closed) return null;
+      if (requireClosed && !closed) return null;
 
       const netProfit = Number(r.data?.net_profit);
       const price = Number(r.data?.close_price);
