@@ -46,8 +46,9 @@ function sampleScore(trades: number): number {
 
 function pfScore(pf: number): number {
   if (!Number.isFinite(pf) || pf <= 1) return 0;
-  // PF 1.5 maps to ~0.8, PF 2.0 and above reaches 1.
-  return bounded((pf - 1) / 1.25);
+  // PF 1.5 -> 0.8; PF 2.0+ -> 1.0.
+  if (pf >= 2) return 1;
+  return bounded((pf - 1) * 1.6);
 }
 
 export function calculateEvidenceScore(
