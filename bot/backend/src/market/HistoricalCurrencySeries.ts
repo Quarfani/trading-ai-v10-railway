@@ -11,6 +11,54 @@ export interface HistoricalRatePoint {
 
 export type HistoricalRateSeries = Record<string, HistoricalRatePoint[]>;
 
+export interface HistoricalSeriesValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+export function validateHistoricalRateSeries(
+  series: HistoricalRateSeries,
+): HistoricalSeriesValidation {
+  const errors: string[] = [];
+
+  for (const [rawKey, points] of Object.entries(series)) {
+    const key = normalizeSymbol(rawKey);
+    if (!key) {
+      errors.push('empty currency-pair key');
+      continue;
+    }
+    if (!Array.isArray(points) || points.length === 0) {
+      errors.push(`${key}: empty rate series`);
+      continue;
+    }
+
+    let previousTime = -Infinity;
+    for (const point of points) {
+      if (
+        !Number.isFinite(point?.time) ||
+        !validRate(point?.rate)
+      ) {
+        errors.push(`${key}: invalid rate point`);
+        break;
+      }
+      if (point.time < previousTime) {
+        errors.push(`${key}: rate points must be time ordered`);
+        break;
+      }
+      if (point.time === previousTime) {
+        errors.push(`${key}: duplicate timestamp`);
+        break;
+      }
+      previousTime = point.time;
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
 function normalize(value: string): string {
   return value.trim().toUpperCase();
 }
