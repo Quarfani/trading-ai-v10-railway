@@ -471,6 +471,7 @@ export class RiskManager {
       signal.symbol,
       currentEquity,
       livePrices,
+      signal.timeframe ?? 'H1',
     );
 
     if (!heatCheck.allowed) {

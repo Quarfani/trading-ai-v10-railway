@@ -5,8 +5,8 @@
  * the exposure guard. Missing conversion is fail-closed instead of silently
  * treating quote-currency risk as account-currency risk.
  */
-import { Trade } from '../types/trading.types';
-import { SystemConfig } from '../types/trading.types';
+import { Trade, SystemConfig } from '../types/trading.types';
+import { Timeframe } from '../market/market.types';
 import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
 import { Logger } from '../utils/Logger';
@@ -63,6 +63,7 @@ export class PortfolioHeat {
     newSymbol: string,
     equity: number,
     prices: Record<string, number> = {},
+  newTimeframe: Timeframe = 'H1',
   ): HeatResult {
     const maxHeat = this.config.maxPortfolioHeat ?? 0.06;
     const accountCurrency = this.config.accountCurrency ?? 'USD';
@@ -113,7 +114,7 @@ export class PortfolioHeat {
       accountCurrency,
       prices,
       this.config.mode === 'mt5',
-      'H1',
+      newTimeframe,
     );
 
     if (addedRiskAbsolute == null) {

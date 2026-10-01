@@ -112,8 +112,8 @@ export class ExecutionGateway {
   }
 
   private async executeMT5(signal: Signal, volume: number, tf: Timeframe, operationKey: string): Promise<Trade> {
-    const market = getMarketDefinition(signal.symbol, tf);
-    if (!market) throw new Error('MT5 market definition missing for ' + signal.symbol);
+    const market = getBrokerMarketDefinition(signal.symbol, tf);
+    if (!market) throw new Error(`MT5 broker contract unavailable or expired for ${signal.symbol}/${tf}`);
     const brokerSymbol = market.brokerSymbol ?? signal.symbol;
     const comment = `ta_${crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 27)}`.slice(0, 31);
     const r = await axios.post(`${this.config.mt5.bridgeUrl}/trade`, {
