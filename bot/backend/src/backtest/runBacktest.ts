@@ -6,11 +6,21 @@ import 'dotenv/config';
 import { loadConfig }    from '../utils/loadConfig';
 import { MarketScanner } from '../core/MarketScanner';
 import { Backtester }    from './Backtester';
+import { isTimeframe, Timeframe } from '../market/market.types';
 
 async function main() {
   const symbol = process.argv[2] ?? 'EURUSD';
-  const tf     = (process.argv[3] ?? 'M15') as any;
-  const count  = Number(process.argv[4] ?? 2000);
+  const rawTf = (process.argv[3] ?? 'M15').trim().toUpperCase();
+  if (!isTimeframe(rawTf)) {
+    console.error(`Invalid timeframe "${rawTf}". Valid: M1, M5, M15, M30, H1, H4, D1`);
+    process.exit(1);
+  }
+  const tf: Timeframe = rawTf;
+  const count = Number(process.argv[4] ?? 2000);
+  if (!Number.isInteger(count) || count < 300 || count > 10000) {
+    console.error('Count must be an integer between 300 and 10000');
+    process.exit(1);
+  }
 
   const config  = loadConfig();
   const scanner = new MarketScanner(config);
@@ -19,7 +29,7 @@ async function main() {
   const candles = await scanner.fetchCandles(symbol, tf, count);
   if (candles.length < 300) { console.error('Not enough candles'); process.exit(1); }
 
-  const r = await new Backtester(config).run(symbol, candles, config.accountBalance);
+  const r = await new Backtester(config).run(symbol, candles, config.accountBalance, tf);
 
   console.log('\n══════════════════════════════════════════════');
   console.log(`  Backtest: ${symbol} | ${tf} | ${candles.length} bars`);
