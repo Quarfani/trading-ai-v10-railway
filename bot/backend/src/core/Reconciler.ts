@@ -297,15 +297,16 @@ export class Reconciler {
 
   private async reconcileBinance(t: Trade): Promise<void> {
     if (!t.ticket) return;
-      const pos  = await this.exec.getBinancePosition(t.symbol);
+    const pos = await this.exec.getBinancePosition(t.symbol);
 
-      if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
-        // Binance has disappeared from the live position set, but this reconciler
-        // does not yet fetch authoritative account-trade fills/PnL. Never infer a
-        // profitable/losing close from market candles; stop and require reconciliation.
-        throw new Error(`Binance position ${t.symbol} is absent but authoritative fill/PnL history is unavailable`);
+    if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
+      const recovered = await this.tryReconcileBinanceAuthoritativeClose(t);
+      if (recovered) return;
 
-      } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
+      throw new Error(
+        `Binance position ${t.symbol} is absent but authoritative close reconciliation is unresolved`,
+      );
+    } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
         // Partial close
         const remaining = Math.abs(pos.positionAmt);
         this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
