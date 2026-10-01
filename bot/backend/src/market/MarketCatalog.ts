@@ -1,0 +1,144 @@
+/**
+ * MARKET CATALOG — fail-closed symbol identity.
+ *
+ * This catalog is intentionally limited to symbols whose current repository
+ * configuration provides concrete contract economics. New asset classes such
+ * as Oil must be added with broker-confirmed contract specifications instead
+ * of inheriting the generic Forex defaults.
+ */
+
+import {
+  AssetClass,
+  MarketDefinition,
+  MarketVenue,
+  normalizeSymbol,
+} from './market.types';
+import { getSymbolSpec } from '../config/symbolConfig';
+
+const CRYPTO_SYMBOLS = new Set([
+  'BTCUSDT',
+  'ETHUSDT',
+  'BNBUSDT',
+  'SOLUSDT',
+  'XRPUSDT',
+]);
+
+const METAL_SYMBOLS = new Set([
+  'XAUUSD',
+  'XAGUSD',
+]);
+
+const INDEX_SYMBOLS = new Set([
+  'US30',
+  'SPX500',
+  'NAS100',
+  'GER40',
+]);
+
+const KNOWN_FOREX_CODES = new Set([
+  'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'NZD', 'CAD', 'CHF',
+]);
+
+function inferAssetClass(symbol: string): AssetClass | null {
+  if (CRYPTO_SYMBOLS.has(symbol)) return 'CRYPTO';
+  if (METAL_SYMBOLS.has(symbol)) return 'METAL';
+  if (INDEX_SYMBOLS.has(symbol)) return 'INDEX';
+
+  if (symbol.length === 6) {
+    const base = symbol.slice(0, 3);
+    const quote = symbol.slice(3, 6);
+    if (KNOWN_FOREX_CODES.has(base) && KNOWN_FOREX_CODES.has(quote)) {
+      return 'FOREX';
+    }
+  }
+
+  return null;
+}
+
+function inferVenues(assetClass: AssetClass): readonly MarketVenue[] {
+  switch (assetClass) {
+    case 'CRYPTO':
+      return ['BINANCE_SPOT', 'BINANCE_FUTURES'];
+    case 'FOREX':
+    case 'METAL':
+    case 'INDEX':
+      return ['MT5'];
+  }
+}
+
+export function getMarketDefinition(symbol: string): MarketDefinition | null {
+  const normalized = normalizeSymbol(symbol);
+  const assetClass = inferAssetClass(normalized);
+
+  if (!assetClass) return null;
+
+  const spec = getSymbolSpec(normalized);
+
+  if (
+    !Number.isFinite(spec.contractSize) ||
+    spec.contractSize <= 0 ||
+    !Number.isFinite(spec.minVolume) ||
+    !Number.isFinite(spec.maxVolume) ||
+    !Number.isFinite(spec.volumeStep) ||
+    spec.volumeStep <= 0
+  ) {
+    return null;
+  }
+
+  let baseAsset: string;
+  let quoteCurrency: string;
+
+  if (assetClass === 'FOREX') {
+    baseAsset = normalized.slice(0, 3);
+    quoteCurrency = normalized.slice(3, 6);
+  } else if (assetClass === 'METAL') {
+    baseAsset = normalized.startsWith('XAU') ? 'XAU' : 'XAG';
+    quoteCurrency = normalized.slice(3, 6);
+  } else if (assetClass === 'CRYPTO') {
+    quoteCurrency = normalized.endsWith('USDT')
+      ? 'USDT'
+      : normalized.endsWith('USDC')
+        ? 'USDC'
+        : normalized.endsWith('BUSD')
+          ? 'BUSD'
+          : '';
+    baseAsset = quoteCurrency ? normalized.slice(0, -quoteCurrency.length) : normalized;
+  } else {
+    baseAsset = normalized;
+    quoteCurrency = 'USD';
+  }
+
+  if (!baseAsset || !quoteCurrency) return null;
+
+  return {
+    symbol: normalized,
+    baseAsset,
+    quoteCurrency,
+    assetClass,
+    supportedVenues: inferVenues(assetClass),
+    economics: {
+      contractType: assetClass === 'CRYPTO'
+        ? 'PERPETUAL'
+        : assetClass === 'FOREX' || assetClass === 'METAL' || assetClass === 'INDEX'
+          ? 'CFD'
+          : 'CFD',
+      contractSize: spec.contractSize,
+      priceIncrement: spec.pip,
+      minVolume: spec.minVolume,
+      maxVolume: spec.maxVolume,
+      volumeStep: spec.volumeStep,
+      marginModel: 'NOTIONAL_LEVERAGE',
+    },
+  };
+}
+
+export function requireMarketDefinition(symbol: string): MarketDefinition {
+  const market = getMarketDefinition(symbol);
+  if (!market) {
+    throw new Error(
+      `[MarketCatalog] Unsupported or incomplete market definition for "${symbol}". ` +
+      'Add broker-confirmed contract economics before enabling it.',
+    );
+  }
+  return market;
+}
