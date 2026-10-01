@@ -16,7 +16,6 @@ import { marketRegimeDetector }         from '../core/MarketRegimeDetector';
 import { ConsensusOrchestrator }        from '../consensus/ConsensusOrchestrator';
 import { DatabaseManager }             from '../database/DatabaseManager';
 import { calculateATR }                from '../utils/ATR';
-import { getSymbolSpec }               from '../config/symbolConfig';
 import { COST_MODEL_VERSION, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
@@ -148,9 +147,12 @@ export class Backtester {
     });
 
     marketRegimeDetector.invalidate(symbol);
-    const spec = getSymbolSpec(symbol, timeframe);
-    const costProfile = getCostProfile(symbol);
-    const market = getMarketDefinition(symbol);
+    const market = getMarketDefinition(symbol, timeframe);
+    const costProfile = getCostProfile(symbol, {
+      priceIncrement: market?.economics.priceIncrement,
+      requireExplicit: Boolean(market?.brokerSymbol),
+    });
+    const economics = market?.economics;
     const accountCurrency = (this.config.accountCurrency ?? 'USD').toUpperCase();
     const quoteCurrency = market?.quoteCurrency ?? 'USD';
     let valid = true;
@@ -281,7 +283,7 @@ export class Backtester {
             entryPrice: openPos.entry,
             exitPrice,
             volume: openPos.size,
-            contractSize: spec.contractSize,
+            contractSize: economics!.contractSize,
             quoteToAccount: exitQuoteToAccount,
             side: openPos.side,
           });
@@ -290,7 +292,7 @@ export class Backtester {
             entryPrice: openPos.entry,
             exitPrice,
             volume: openPos.size,
-            contractSize: spec.contractSize,
+            contractSize: economics!.contractSize,
             quoteToAccount: exitQuoteToAccount,
             entryQuoteToAccount: openPos.entryQuoteToAccount,
             exitQuoteToAccount,
@@ -357,10 +359,18 @@ export class Backtester {
           const atr = calculateATR(slice.slice(-50), 14);
           if (!atr) continue;
 
-          const riskPerUnit=Math.abs(sig.price-sig.sl)*spec.contractSize*entryQuoteToAccount;
-          const rawSize=riskPerUnit>0?(balance*0.01)/riskPerUnit:0;
-          const size=Math.min(spec.maxVolume,Math.floor(rawSize/spec.volumeStep)*spec.volumeStep);
-          if (size>=spec.minVolume) {
+          const size = calculateBacktestPositionSize(
+            balance,
+            0.01,
+            sig.price,
+            sig.sl,
+            economics!.contractSize,
+            economics!.minVolume,
+            economics!.maxVolume,
+            economics!.volumeStep,
+            entryQuoteToAccount,
+          );
+          if (size > 0) {
             openPos = {
               side: sig.side, entry: cur.close, sl: sig.sl, tp: sig.tp,
               size, openedAt: cur.time, openBar: i, source: sig.source, entryQuoteToAccount,

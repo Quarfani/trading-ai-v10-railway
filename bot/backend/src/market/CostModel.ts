@@ -4,7 +4,7 @@
  * Cost accounting used by research/backtest and paper execution.
  * Broker-specific live values must be supplied explicitly before production.
  */
-export const COST_MODEL_VERSION = 'cost-v1';
+export const COST_MODEL_VERSION = 'cost-v2';
 
 export interface CostProfile {
   version: string;
@@ -15,6 +15,7 @@ export interface CostProfile {
   spreadPricePerSide: number;
   marketImpactBpsPerSide: number;
   holdingRatePerDay: number;
+  source: 'REPOSITORY_DEFAULT' | 'ENV_EXPLICIT';
 }
 
 export interface CostInput {

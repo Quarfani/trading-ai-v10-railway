@@ -25,21 +25,80 @@ const CRYPTO = new Set([
   'XRPUSDT',
 ]);
 
-export function getCostProfile(symbol: string): CostProfile {
+export interface CostProfileOptions {
+  priceIncrement?: number;
+  requireExplicit?: boolean;
+}
+
+function readEnvNumber(key: string): number | undefined {
+  const raw = process.env[key];
+  if (raw == null || raw.trim() === '') return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`[CostProfiles] ${key} must be finite and >= 0`);
+  }
+  return value;
+}
+
+export function getCostProfile(
+  symbol: string,
+  options: CostProfileOptions = {},
+): CostProfile {
+
   const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const spec = getSymbolSpec(normalized);
+  const envPrefix = `COST_${normalized}_`;
+
+  const explicit = {
+    spreadPips: readEnvNumber(envPrefix + 'SPREAD_PIPS'),
+    fixedRoundTrip: readEnvNumber(envPrefix + 'FIXED_ROUND_TRIP'),
+    notionalRate: readEnvNumber(envPrefix + 'NOTIONAL_RATE'),
+    impactBps: readEnvNumber(envPrefix + 'IMPACT_BPS'),
+    holdingRatePerDay: readEnvNumber(envPrefix + 'HOLDING_RATE_DAY'),
+  };
+
+  const hasAnyExplicit = Object.values(explicit).some(value => value != null);
+  if (options.requireExplicit) {
+    const missing = Object.entries(explicit)
+      .filter(([, value]) => value == null)
+      .map(([key]) => key);
+
+    if (missing.length) {
+      throw new Error(
+        `[CostProfiles] Explicit cost profile required for ${normalized}; missing: ${missing.join(', ')}`,
+      );
+    }
+  }
+
+  const fixedRoundTrip =
+    explicit.fixedRoundTrip ??
+    FIXED_ROUND_TRIP_ACCOUNT[normalized] ??
+    0;
+
+  const notionalRate =
+    explicit.notionalRate ??
+    (CRYPTO.has(normalized) ? CRYPTO_NOTIONAL_RATE_PER_SIDE : 0);
+
+  const spreadPips =
+    explicit.spreadPips ??
+    spec.spreadMaxPips;
+
+  const priceIncrement =
+    options.priceIncrement ?? spec.pip;
+
+  if (!(priceIncrement > 0) || !Number.isFinite(priceIncrement)) {
+    throw new Error(`[CostProfiles] Invalid price increment for ${normalized}`);
+  }
 
   return {
     version: COST_MODEL_VERSION,
     commission: {
-      fixedRoundTripPerVolumeAccount:
-        FIXED_ROUND_TRIP_ACCOUNT[normalized] ?? 0,
-      notionalRatePerSide:
-        CRYPTO.has(normalized) ? CRYPTO_NOTIONAL_RATE_PER_SIDE : 0,
+      fixedRoundTripPerVolumeAccount: fixedRoundTrip,
+      notionalRatePerSide: notionalRate,
     },
-    spreadPricePerSide:
-      spec.spreadMaxPips * 0.6 * spec.pip,
-    marketImpactBpsPerSide: 0,
-    holdingRatePerDay: 0,
+    spreadPricePerSide: spreadPips * 0.6 * priceIncrement,
+    marketImpactBpsPerSide: explicit.impactBps ?? 0,
+    holdingRatePerDay: explicit.holdingRatePerDay ?? 0,
+    source: options.requireExplicit || hasAnyExplicit ? 'ENV_EXPLICIT' : 'REPOSITORY_DEFAULT',
   };
 }

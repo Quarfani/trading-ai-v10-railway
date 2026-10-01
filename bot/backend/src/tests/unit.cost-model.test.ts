@@ -115,4 +115,57 @@ const cryptoVarying = estimateCosts(
 assert(cryptoVarying.entryCommission !== cryptoCosts.entryCommission, 'notional-rate commission must use entry conversion');
 assert(cryptoVarying.exitCommission !== cryptoCosts.exitCommission, 'notional-rate commission must use exit conversion');
 
-console.log('Result: 13 passed, 0 failed');
+assert(fx.source === 'REPOSITORY_DEFAULT', 'static symbol cost profile must be marked as repository default');
+
+const envKeys = [
+  'COST_USOIL_SPREAD_PIPS',
+  'COST_USOIL_FIXED_ROUND_TRIP',
+  'COST_USOIL_NOTIONAL_RATE',
+  'COST_USOIL_IMPACT_BPS',
+  'COST_USOIL_HOLDING_RATE_DAY',
+] as const;
+const previous = Object.fromEntries(
+  envKeys.map(key => [key, process.env[key]]),
+);
+
+try {
+  delete process.env.COST_USOIL_SPREAD_PIPS;
+  delete process.env.COST_USOIL_FIXED_ROUND_TRIP;
+  delete process.env.COST_USOIL_NOTIONAL_RATE;
+  delete process.env.COST_USOIL_IMPACT_BPS;
+  delete process.env.COST_USOIL_HOLDING_RATE_DAY;
+
+  let strictRejected = false;
+  try {
+    getCostProfile('USOIL', {
+      priceIncrement: 0.01,
+      requireExplicit: true,
+    });
+  } catch (error) {
+    strictRejected = String(error).includes('Explicit cost profile required');
+  }
+  assert(strictRejected, 'broker-only cost profile must fail closed without explicit costs');
+
+  process.env.COST_USOIL_SPREAD_PIPS = '2';
+  process.env.COST_USOIL_FIXED_ROUND_TRIP = '8';
+  process.env.COST_USOIL_NOTIONAL_RATE = '0';
+  process.env.COST_USOIL_IMPACT_BPS = '1';
+  process.env.COST_USOIL_HOLDING_RATE_DAY = '0';
+
+  const oil = getCostProfile('USOIL', {
+    priceIncrement: 0.01,
+    requireExplicit: true,
+  });
+  assert(oil.source === 'ENV_EXPLICIT', 'explicit broker cost profile must be marked as env explicit');
+  approx(oil.spreadPricePerSide, 0.012);
+  assert(oil.commission.fixedRoundTripPerVolumeAccount === 8, 'explicit Oil fixed commission mismatch');
+  assert(oil.marketImpactBpsPerSide === 1, 'explicit Oil impact mismatch');
+} finally {
+  for (const key of envKeys) {
+    const value = previous[key];
+    if (value == null) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
+console.log('Result: 19 passed, 0 failed');
