@@ -311,10 +311,19 @@ async function main() {
        WHERE operationKey IN ('mt5-close-op-a','mt5-close-op-b')
          AND status IN ('PENDING','UNKNOWN')`,
     ).get().c;
-    assert(
-      duplicateUnresolved === 1,
-      'duplicate MT5 close recovery must resolve exactly one operation and leave one unresolved',
-    );
+    if (duplicateUnresolved !== 1) {
+      const state = mt5DuplicateDb.raw().prepare(
+        `SELECT operationKey, executionId, action, status, requestJson FROM execution_ledger
+         WHERE operationKey IN ('mt5-close-op-a','mt5-close-op-b')
+         ORDER BY operationKey`,
+      ).all();
+      const trade = mt5DuplicateDb.raw().prepare(
+        'SELECT id, status, profit, closedAt FROM trades WHERE id=?',
+      ).get(duplicateTradeId);
+      throw new Error(
+        'duplicate MT5 close state=' + JSON.stringify({ duplicateUnresolved, state, trade }),
+      );
+    }
     assert(
       mt5DuplicateDb.getExecutionByOperationKey('mt5-close-op-a').status === 'EXECUTED',
       'earliest duplicate MT5 close operation must be the one reconciled',
