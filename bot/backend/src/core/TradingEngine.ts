@@ -115,6 +115,7 @@ export class TradingEngine extends EventEmitter {
   private brokerContractRefreshTimer: NodeJS.Timeout | null = null;
 
   private lastTradeAt: Record<string, number> = {};
+  private lastProcessedCandle: Record<string, number> = {};
 
   // ─── Runtime observability ────────────────────────────────────────────────
   private cycleCount = 0;
@@ -846,6 +847,20 @@ export class TradingEngine extends EventEmitter {
           `reason=${dataQuality.reasons.slice(0, 5).join(', ')}`,
       );
       return;
+    }
+
+    const latestCandleTime = candles.at(-1)?.time ?? NaN;
+    const candleKey = `${symbol}_${tf}`;
+    if (Number.isFinite(latestCandleTime)) {
+      if (this.lastProcessedCandle[candleKey] === latestCandleTime) {
+        this.logger.debug(
+          `[PIPELINE_SKIP] ${symbol}/${tf} stage=SAME_CANDLE time=${latestCandleTime}`,
+        );
+        return;
+      }
+      // Mark the closed candle as processed before running downstream network
+      // and broker gates so a failed execution cannot be retried intrabar.
+      this.lastProcessedCandle[candleKey] = latestCandleTime;
     }
 
     // ── Freshness ──────────────────────────────────────────────────────
