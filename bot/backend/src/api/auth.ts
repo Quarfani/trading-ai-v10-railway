@@ -97,8 +97,8 @@ export function login(req: Request, res: Response) {
 
   const { password } = req.body ?? {};
   let role: Role | null = null;
-  if (password === PASSWORD) role = 'admin';
-  else if (OPERATOR_PASSWORD && password === OPERATOR_PASSWORD) role = 'operator';
+  if (safeTokenEquals(String(password ?? ''), PASSWORD)) role = 'admin';
+  else if (OPERATOR_PASSWORD && safeTokenEquals(String(password ?? ''), OPERATOR_PASSWORD)) role = 'operator';
 
   if (!role) {
     const b = bucket && now < bucket.resetAt ? bucket : { count: 0, resetAt: now + WINDOW_MS };
