@@ -122,6 +122,45 @@ async function main() {
     assert(mt5CloseDb.getOpenTrades().length === 0, 'authoritative MT5 close must close the internal trade before startup completes');
     mt5CloseDb.raw().close();
 
+    const mt5StaleHistoryDb = await newDb();
+    const staleTradeId = mt5StaleHistoryDb.insertTrade({
+      ticket: 83, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5StaleHistoryDb.createExecutionLedger({
+      executionId: 'mt5-stale-close', operationKey: 'mt5-stale-close-op',
+      action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+      request: { tradeId: staleTradeId },
+    });
+    const staleCreated = mt5StaleHistoryDb.raw()
+      .prepare('UPDATE execution_ledger SET createdAt=? WHERE executionId=?')
+      .run(Date.now(), 'mt5-stale-close').changes;
+    assert(staleCreated === 1, 'stale history fixture must persist operation timestamp');
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) return { data: { ok: true, positions: [] } };
+      if (url.endsWith('/history')) return {
+        data: {
+          closed: true, remaining_volume: 0, close_price: 1.105,
+          net_profit: 12.5, close_reason: 'manual', close_time_msc: Date.now() - 60 * 60 * 1000,
+        },
+      };
+      throw new Error('unexpected URL');
+    };
+    let staleBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5StaleHistoryDb, new TelegramBot(mt5Cfg)).run();
+    } catch { staleBlocked = true; }
+    assert(staleBlocked, 'broker history predating UNKNOWN close operation must block startup');
+    assert(
+      mt5StaleHistoryDb.getOpenTrades().length === 1,
+      'stale close history must not close the internal trade',
+    );
+    assert(
+      mt5StaleHistoryDb.getExecutionByOperationKey('mt5-stale-close-op').status === 'UNKNOWN',
+      'stale close history must leave the execution UNKNOWN',
+    );
+    mt5StaleHistoryDb.raw().close();
+
     const mt5CloseDuplicateRestartDb = await newDb();
     const duplicateCloseRestartTradeId = mt5CloseDuplicateRestartDb.insertTrade({
       ticket: 82, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
