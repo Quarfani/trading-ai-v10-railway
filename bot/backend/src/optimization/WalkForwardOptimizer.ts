@@ -481,6 +481,11 @@ export class WalkForwardOptimizer {
     const finalParams = selectDeploymentParams(windows)!;
 
     const validPct = windows.length > 0 ? validWindows.length / windows.length : 0;
+    const monteCarloPassed =
+      !!monteCarloStress &&
+      monteCarloStress.maxDDP95 <= 0.30 &&
+      monteCarloStress.probabilityRuin <= 0.05 &&
+      monteCarloStress.unrecoveredRate <= 0.25;
 
     let recommendation: WalkForwardResult['recommendation'];
     let reason: string;
@@ -489,13 +494,14 @@ export class WalkForwardOptimizer {
       valid &&
       allFoldsValid &&
       evidenceScore.passed &&
+      monteCarloPassed &&
       oos_winRate >= 0.52 &&
       oos_sharpe >= 0.5 &&
       validPct >= 0.6
     ) {
       recommendation = 'TRADE';
       reason =
-        `OOS evidence gate passed: ${evidenceScore.sufficientSample ? 'sufficient sample' : 'insufficient sample'}, ` +
+        `OOS evidence + Monte Carlo gate passed: ${evidenceScore.sufficientSample ? 'sufficient sample' : 'insufficient sample'}, ` +
         `WR ${(oos_winRate*100).toFixed(1)}%, Sharpe ${oos_sharpe.toFixed(2)}, ` +
         `${(validPct*100).toFixed(0)}% valid windows`;
     } else if (
@@ -510,7 +516,7 @@ export class WalkForwardOptimizer {
     } else {
       recommendation = 'DO_NOT_TRADE';
       reason = !valid || !allFoldsValid
-        ? 'WFO invalid: one or more folds failed economic, OOS, or leakage validation'
+        ? 'WFO invalid: one or more folds failed economic, OOS, leakage, or Monte Carlo validation'
         : `OOS Win Rate ${(oos_winRate*100).toFixed(1)}% too low or ${(validPct*100).toFixed(0)}% valid windows insufficient`;
     }
 
