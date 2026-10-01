@@ -121,7 +121,9 @@ export function promoteStrategy(
       Number.isFinite(mc.maxDDP95) &&
       mc.maxDDP95 > current.riskProfile.maximumDrawdown
     ) {
-      throw new Error( `'[StrategyLifecycle] Monte Carlo P95 drawdown exceeds strategy risk-profile maximumDrawdown', )
+      throw new Error(
+        '[StrategyLifecycle] Monte Carlo P95 drawdown exceeds strategy risk-profile maximumDrawdown',
+      )
     }
   }
 
