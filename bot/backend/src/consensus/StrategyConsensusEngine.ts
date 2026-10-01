@@ -47,6 +47,7 @@ import { StrategyRegistry } from './StrategyRegistry';
 import { PerformanceGate } from './PerformanceGate';
 import { Signal } from '../types/trading.types';
 import { Logger } from '../utils/Logger';
+import { evaluateStrategyEligibility } from './StrategyEligibility';
 
 // Neutral bootstrap Sharpe for new strategies.
 // It allows participation without pretending the strategy already
@@ -110,6 +111,24 @@ export class StrategyConsensusEngine {
 
     const activeEntries = this.registry.getActive();
 
+    const eligibleEntries = activeEntries.filter(entry => {
+      const result = evaluateStrategyEligibility(
+        entry.definition,
+        ctx,
+      );
+
+      if (!result.allowed) {
+        reasoning.push(
+          `[SCOPE_BLOCKED] ${entry.strategy.name}: ${result.reason}`,
+        );
+        this.logger.info(
+          `[CONSENSUS_SCOPE_BLOCK] ${ctx.symbol} ${ctx.timeframe} strategy=${entry.strategy.name} reason=${result.reason}`,
+        );
+      }
+
+      return result.allowed;
+    });
+
     const disabledSummary = this.registry
       .getDisabled()
       .map(d => ({
@@ -117,16 +136,16 @@ export class StrategyConsensusEngine {
         reason: d.reason,
       }));
 
-    if (activeEntries.length < this.cfg.minimum_active_strategies) {
+    if (eligibleEntries.length < this.cfg.minimum_active_strategies) {
       reasoning.push(
-        `[NO_ACTIVE] Active=${activeEntries.length} ` +
+        `[NO_ACTIVE] Eligible=${eligibleEntries.length} ` +
         `< min=${this.cfg.minimum_active_strategies}`,
       );
 
       this.logger.info(
         `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
         `reason=NO_ACTIVE_STRATEGIES ` +
-        `active=${activeEntries.length} ` +
+        `eligible=${eligibleEntries.length} ` +
         `minimum=${this.cfg.minimum_active_strategies}`,
       );
 
@@ -143,7 +162,7 @@ export class StrategyConsensusEngine {
 
     reasoning.push(
       `[ACTIVE] count=${activeEntries.length}: ` +
-      `${activeEntries.map(e => e.strategy.name).join(', ')}`,
+      `${eligibleEntries.map(e => e.strategy.name).join(', ')}`,
     );
 
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -154,7 +173,7 @@ export class StrategyConsensusEngine {
     const buySignals: StrategySignal[] = [];
     const sellSignals: StrategySignal[] = [];
 
-    for (const entry of activeEntries) {
+    for (const entry of eligibleEntries) {
       let ss: StrategySignal;
 
       try {
