@@ -14,10 +14,11 @@
 - Circuit breaker and emergency-stop checks.
 - Correlation filtering.
 - Fail-closed equity and sizing-state validation in non-paper modes.
+- Gross exposure and gross leverage gates are enforced before order admission using canonical contract notional and explicit quote-to-account FX conversion; MT5 requires broker-confirmed contract metadata.
 
 ## Known gaps
 
-The repository validates `MAX_LEVERAGE` and `MAX_EXPOSURE`, but the final order decision does not yet enforce them with a complete cross-asset notional model. `maxSymbolExposure`, `maxCorrelatedExposure`, and `maxExecutionLatency` are not yet first-class limits. Cross-currency conversion and contract-specific margin calculations are incomplete. These are production blockers.
+Current `MAX_LEVERAGE` and `MAX_EXPOSURE` gates are enforced at the final RiskManager admission point. Existing-position and proposed-position notionals are converted into account currency; missing market/FX/broker metadata fails closed. Remaining gaps are `maxSymbolExposure`, `maxCorrelatedExposure`, and `maxExecutionLatency` as first-class independent limits, plus broker-specific margin/maintenance semantics beyond gross notional leverage.
 
 ## Sizing
 
