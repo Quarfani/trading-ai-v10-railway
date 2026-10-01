@@ -410,6 +410,38 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE trades ADD COLUMN exitQuoteToAccount REAL;
     `
   },
+,
+  {
+    version: 15, name: 'execution_ledger_state_constraints',
+    up: `
+      CREATE TRIGGER IF NOT EXISTS trg_execution_ledger_status_insert
+      BEFORE INSERT ON execution_ledger
+      WHEN NEW.status NOT IN ('PENDING','UNKNOWN','EXECUTED','FAILED')
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid execution_ledger status');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_execution_ledger_status_update
+      BEFORE UPDATE OF status ON execution_ledger
+      WHEN
+        OLD.status NOT IN ('PENDING','UNKNOWN','EXECUTED','FAILED')
+        OR (
+          OLD.status IN ('PENDING','UNKNOWN')
+          AND NEW.status NOT IN ('PENDING','UNKNOWN','EXECUTED','FAILED')
+        )
+        OR (
+          OLD.status='EXECUTED'
+          AND NEW.status<>'EXECUTED'
+        )
+        OR (
+          OLD.status='FAILED'
+          AND NEW.status<>'FAILED'
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'illegal execution_ledger status transition');
+      END;
+    `
+  }
 
 ];
 
