@@ -461,6 +461,21 @@ export class BinanceExecutor {
     })).filter(p => Number.isFinite(p.positionAmt) && Number.isFinite(p.entryPrice) && Number.isFinite(p.unrealizedProfit));
   }
 
+  async getAllSpotBalancesForConfiguredSymbols(): Promise<any[]> {
+    if (this.isFutures) return [];
+    const account = await this.signedGet('/api/v3/account', {});
+    if (!Array.isArray(account?.balances)) {
+      throw new Error('Binance Spot account balances response is invalid');
+    }
+    return account.balances
+      .map((b: any) => ({
+        asset: String(b.asset ?? '').toUpperCase(),
+        free: Number(b.free ?? 0),
+        locked: Number(b.locked ?? 0),
+      }))
+      .filter((b: any) => b.asset && Number.isFinite(b.free) && Number.isFinite(b.locked) && (b.free > 0 || b.locked > 0));
+  }
+
   // ─── Open orders ────────────────────────────────────────────────────
 
   async getOpenOrders(symbol?: string): Promise<any[]> {
