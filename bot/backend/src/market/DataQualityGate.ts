@@ -28,6 +28,8 @@ export interface DataQualityOptions {
   allowSynthetic?: boolean;
   allowImputed?: boolean;
   maxLatencyMs?: number;
+  allowScheduledSessionGaps?: boolean;
+  scheduledGapMinMs?: number;
 }
 
 function validNumber(value: number): boolean {
@@ -53,6 +55,11 @@ export function evaluateMarketDataQuality(
     options.maxLatencyMs == null
       ? Infinity
       : Math.max(0, options.maxLatencyMs);
+  const allowScheduledSessionGaps = options.allowScheduledSessionGaps ?? false;
+  const scheduledGapMinMs = Math.max(
+    interval * 2,
+    options.scheduledGapMinMs ?? 36 * 60 * 60_000,
+  );
 
   const hardFailures: string[] = [];
   const warnings: string[] = [];
@@ -86,7 +93,17 @@ export function evaluateMarketDataQuality(
       }
 
       if (delta > interval) {
-        gapBars += Math.max(0, Math.floor(delta / interval) - 1);
+        const missing = Math.max(0, Math.floor(delta / interval) - 1);
+        if (
+          allowScheduledSessionGaps &&
+          delta >= scheduledGapMinMs
+        ) {
+          warnings.push(
+            `Scheduled/session gap ignored for completeness ratio: ${delta}ms`,
+          );
+        } else {
+          gapBars += missing;
+        }
       }
     }
 
