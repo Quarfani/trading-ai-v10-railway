@@ -300,6 +300,19 @@ async function main() {
     'Binance close HTTP request must contain the deterministic client order id',
   );
   assert(directClose.realizedProfit === 9.99, 'Binance close must report fill PnL net of commission');
+  const noPositionExecutor = new BinanceExecutor({
+    ...baseConfig('paper'),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...baseConfig('paper').binance, futures: true },
+  } as SystemConfig);
+  (noPositionExecutor as any).getPosition = async () => null;
+  (noPositionExecutor as any).reconcileFuturesCloseByClientOrderId = async () => ({ found: false });
+  const noPositionClose = await noPositionExecutor.closePosition(
+    4322, 'BTCUSDT', 0.01, 'BUY', 'ta_no_position_test',
+  );
+  assert(noPositionClose.ok === false, 'Binance close with absent position and unresolved order must fail closed');
   const binanceCloseDb = new DatabaseManager(":memory:");
   await binanceCloseDb.initialize();
   const binanceCloseCfg = {
