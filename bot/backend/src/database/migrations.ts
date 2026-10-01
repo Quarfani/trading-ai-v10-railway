@@ -379,7 +379,7 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_failure_memory_strategy_created
         ON failure_memory(strategy, createdAt);
     `
-  },  }, {
+  }, {
     version: 13, name: 'evidence_snapshots',
     up: `
       CREATE TABLE IF NOT EXISTS evidence_snapshots (
@@ -401,6 +401,7 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_evidence_snapshots_symbol_tf_created
         ON evidence_snapshots(symbol, timeframe, createdAt);
     `
+  },
 
 
 ];
