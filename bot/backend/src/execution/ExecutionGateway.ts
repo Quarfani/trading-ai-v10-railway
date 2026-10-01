@@ -234,7 +234,12 @@ export class ExecutionGateway {
         if (!t.ticket) throw new Error('Trade has no broker ticket');
         await axios.post(`${this.config.mt5.bridgeUrl}/close`, { ticket: t.ticket, idempotency_key: key }, { timeout: 8_000, headers: this.mt5Headers() });
       } else if (this.config.mode === 'binance') {
-        if (!t.ticket || !(await this.binance.closePosition(t.ticket, t.symbol, t.volume))) throw new Error('Binance close rejected');
+        if (
+          !t.ticket ||
+          !(await this.binance.closePosition(t.ticket, t.symbol, t.volume, t.side))
+        ) {
+          throw new Error('Binance close rejected');
+        }
       } else {
         throw new Error('Paper close requires closeAtMarket so the exit price is explicit');
       }
