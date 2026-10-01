@@ -1,5 +1,6 @@
 import axios from "axios";
 import { Reconciler } from "../core/Reconciler";
+import { DatabaseManager } from "../database/DatabaseManager";
 import { SystemConfig } from "../types/trading.types";
 
 function assert(condition: unknown, message: string): asserts condition {
