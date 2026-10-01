@@ -23,6 +23,9 @@ export interface CostInput {
   volume: number;
   contractSize: number;
   quoteToAccount: number;
+  /** Optional timestamp-specific conversion rates for research. */
+  entryQuoteToAccount?: number;
+  exitQuoteToAccount?: number;
   holdingDays?: number;
 }
 
@@ -132,11 +135,14 @@ export function estimateCosts(
   const commission = entryCommission + exitCommission;
 
   const spread =
-    2 *
     nonNegative('spreadPricePerSide', profile.spreadPricePerSide) *
     input.volume *
     input.contractSize *
-    input.quoteToAccount;
+    entryRate +
+    nonNegative('spreadPricePerSide', profile.spreadPricePerSide) *
+    input.volume *
+    input.contractSize *
+    exitRate;
 
   const impact =
     (entryNotional + exitNotional) *
