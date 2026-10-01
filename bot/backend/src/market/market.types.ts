@@ -64,6 +64,8 @@ export interface MarketEconomics {
   contractType: ContractType;
   contractSize: number;
   priceIncrement: number;
+  /** One conventional pip in price units; distinct from broker point/tick size. */
+  pipSize?: number;
   minVolume: number;
   maxVolume: number;
   volumeStep: number;
