@@ -38,7 +38,7 @@ function mockStrategy(name: string, vote: 'BUY'|'SELL'|'NONE', conf = 0.80): ISt
 }
 
 const testCtx: StrategyContext = {
-  symbol: 'EURUSD', candles: [], h4Candles: [], regime: 'TRENDING', timestamp: Date.now(),
+  symbol: 'EURUSD', timeframe: 'H1', candles: [], h4Candles: [], regime: 'TRENDING', timestamp: Date.now(),
 };
 
 // ─── StrategyRegistry ─────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ describe('StrategyConsensusEngine', () => {
     expect(r.block_reason).toBe('SINGLE_STRATEGY_LOW_CONFIDENCE');
   });
 
-  test('allows a single high-confidence strategy through the weight gate', () => {
+  test('blocks a single high-confidence strategy when weight is below minimum', () => {
     const reg = new StrategyRegistry(mockDb);
 
     reg.register(mockStrategy('ICHIMOKU', 'SELL', 0.80));
@@ -189,9 +189,9 @@ describe('StrategyConsensusEngine', () => {
 
     const r = eng.run(testCtx);
 
-    expect(r.outcome).toBe('SELL');
-    expect(r.block_reason).toBe('APPROVED');
-    expect(r.signal).not.toBeNull();
+    expect(r.outcome).toBe('NO_TRADE');
+    expect(r.block_reason).toBe('INSUFFICIENT_WEIGHT');
+    expect(r.signal).toBeNull();
   });
 
   test('reasoning array is non-empty and structured', () => {
