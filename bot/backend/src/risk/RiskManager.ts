@@ -26,6 +26,7 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { TelegramBot } from '../notifications/TelegramBot';
 import { Logger } from '../utils/Logger';
 import { getSymbolSpec } from '../config/symbolConfig';
+import { getMarketDefinition } from '../market/MarketCatalog';
 
 export function validateRiskReward(
   signal: { price: number; sl: number; tp: number },
@@ -328,11 +329,25 @@ export class RiskManager {
     );
 
     const maxSlip = this.config.maxSlippagePips ?? 3;
-    const spec = getSymbolSpec(signal.symbol, signal.timeframe ?? 'H1');
+    const market = getMarketDefinition(
+      signal.symbol,
+      signal.timeframe ?? 'H1',
+    );
+    if (!market) {
+      return this.block('market_definition', [
+        `No canonical market definition for ${signal.symbol}/${signal.timeframe ?? 'H1'}`,
+      ]);
+    }
+    const priceIncrement = market.economics.priceIncrement;
+    if (!(priceIncrement > 0) || !Number.isFinite(priceIncrement)) {
+      return this.block('market_definition', [
+        `Invalid price increment for ${signal.symbol}`,
+      ]);
+    }
     const execPrice =
       signal.side === 'BUY' ? ticker.ask : ticker.bid;
     const slippagePips =
-      Math.abs(price - execPrice) / spec.pip;
+      Math.abs(price - execPrice) / priceIncrement;
 
     if (
       !Number.isFinite(slippagePips) ||
