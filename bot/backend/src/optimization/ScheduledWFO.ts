@@ -55,7 +55,10 @@ export class ScheduledWFO {
     private scanner:  MarketScanner,
     private telegram: TelegramBot,
   ) {
-    this.wfo = new WalkForwardOptimizer(db.path);
+    this.wfo = new WalkForwardOptimizer(
+      db.path,
+      (config.accountCurrency ?? 'USD').toUpperCase(),
+    );
     this.evidenceSnapshots = new EvidenceSnapshotStore(db);
   }
 
@@ -126,7 +129,8 @@ export class ScheduledWFO {
     if (this.running) return;
     this.running = true;
 
-    this.logger.info(`Monthly WFO starting for ${symbols.length} symbols...`);
+    try {
+      this.logger.info(`Monthly WFO starting for ${symbols.length} symbols...`);
     await this.telegram
       .sendMessage(`🔄 <b>Monthly WFO Started</b>\nOptimizing ${symbols.length} symbols...`)
       .catch(() => {});
@@ -194,21 +198,28 @@ export class ScheduledWFO {
 
           const p = result.finalParams;
 
-          const policy = this.config.evidencePromotion;
+          const policy = promotionPolicyForTarget(
+            this.config.mode === 'paper' ? 'PAPER' : 'PRODUCTION',
+            this.config.evidencePromotion,
+          );
+
+          const promotionEvidenceRecord = {
+            datasetVersion:
+              'WFO-' + symbol + '-' + timeframe + '-' + String(result.runAt),
+            costModelVersion: COST_MODEL_VERSION,
+            sampleSize: result.evidence.sampleSize,
+            outOfSampleTrades: result.evidence.oosTrades,
+            outOfSampleProfitFactor: result.evidence.weightedProfitFactor,
+            walkForwardStability: result.evidence.walkForwardStability,
+            parameterSensitivity: result.evidence.averageParameterSensitivity,
+            regimeCoverage: result.evidence.averageRegimeCoverage,
+            passed: result.valid && result.evidence.passed && result.evidenceScore.passed,
+            evaluatedAt: result.runAt,
+            monteCarloStress: result.monteCarloStress,
+          };
+
           const promotionEvidence = evaluateEvidenceForPromotion(
-            {
-              datasetVersion:
-                'WFO-' + symbol + '-' + timeframe + '-' + String(result.runAt),
-              costModelVersion: COST_MODEL_VERSION,
-              sampleSize: candles.length,
-              outOfSampleTrades: result.evidence.oosTrades,
-              outOfSampleProfitFactor: result.evidence.weightedProfitFactor,
-              walkForwardStability: result.evidence.walkForwardStability,
-              parameterSensitivity: 0,
-              regimeCoverage: 0,
-              passed: result.valid && result.evidence.passed,
-              evaluatedAt: result.runAt,
-            },
+            promotionEvidenceRecord,
             policy,
           );
 
@@ -243,14 +254,7 @@ export class ScheduledWFO {
             symbol,
             timeframe,
             source: 'WFO',
-            evidence: {
-              ...result.evidence,
-              monteCarloStress: result.monteCarloStress,
-              promotionPolicy: {
-                passed: promotionEvidence.passed,
-                reasons: promotionEvidence.reasons,
-              },
-            },
+            evidence: promotionEvidenceRecord,
             promoted,
             promotionReason: promoted
               ? 'valid WFO evidence and shared promotion policy passed'
@@ -263,15 +267,10 @@ export class ScheduledWFO {
           );
 
           if (result.valid && result.recommendation === 'TRADE' && promotionEvidence.passed) {
-            this.db.setSetting(
-              `wfo_params_${symbol}_${timeframe}`,
-              JSON.stringify({
-                ...p,
-                updatedAt: Date.now(),
-                timeframe,
-                wfoValid: true,
-              }),
-            );
+            // Apply the promoted WFO parameters through the same authoritative
+            // saver used by manual WFO. This persists the params and updates
+            // the runtime symbolConfig environment atomically from this process.
+            this.wfo.saveParams(this.db, symbol, p, timeframe);
             successCount++;
             this.logger.info(
               `WFO ${symbol}/${timeframe}: params promoted after valid OOS evaluation`,
@@ -296,7 +295,9 @@ export class ScheduledWFO {
       results.map(r => `  ${r}`).join('\n');
 
     await this.telegram.sendMessage(report).catch(() => {});
-    this.logger.info(`WFO complete: ${successCount}/${symbols.length * timeframes.length} symbol/timeframe runs promoted`);
-    this.running = false;
+      this.logger.info(`WFO complete: ${successCount}/${symbols.length * timeframes.length} symbol/timeframe runs promoted`);
+    } finally {
+      this.running = false;
+    }
   }
 }
