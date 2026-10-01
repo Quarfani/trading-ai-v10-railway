@@ -396,9 +396,18 @@ export class ExecutionGateway {
         Number.isFinite(brokerResult.realizedProfit) &&
         t.id
       ) {
+        const cumulativeProfit = this.config.mode === 'binance'
+          ? Number(t.realizedProfit ?? 0) + brokerResult.realizedProfit
+          : brokerResult.realizedProfit;
+        if (!Number.isFinite(cumulativeProfit)) {
+          throw new Error(
+            'Cumulative broker realized PnL is not finite',
+          );
+        }
+
         const changed = this.db.updateTradeClose(
           t.id,
-          brokerResult.realizedProfit,
+          cumulativeProfit,
           Date.now(),
           'MANUAL',
         );
