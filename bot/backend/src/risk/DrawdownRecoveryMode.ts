@@ -45,12 +45,15 @@ export class DrawdownRecoveryMode {
   private peakEquity = 0;
   private lastLevel: RecoveryLevel = 'GREEN';
   private notifiedLevel: RecoveryLevel | null = null;
+  private peakKey = 'peak_equity:default';
 
   constructor(
     private db:       DatabaseManager,
     private telegram: TelegramBot,
     startEquity:      number,
+    accountKey = 'default',
   ) {
+    this.peakKey = `peak_equity:${accountKey.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     this.peakEquity = this.loadPeak() || startEquity;
   }
 
@@ -127,12 +130,12 @@ export class DrawdownRecoveryMode {
 
   private loadPeak(): number {
     try {
-      const v = this.db.getSetting('peak_equity');
+      const v = this.db.getSetting(this.peakKey);
       return v ? Number(v) : 0;
     } catch { return 0; }
   }
 
   private savePeak(equity: number): void {
-    try { this.db.setSetting('peak_equity', String(equity)); } catch { /* pass */ }
+    try { this.db.setSetting(this.peakKey, String(equity)); } catch { /* pass */ }
   }
 }
