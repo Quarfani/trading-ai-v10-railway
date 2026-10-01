@@ -8,7 +8,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { Signal, SystemConfig, Trade } from '../types/trading.types';
 import { Logger } from '../utils/Logger';
-import { getMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerMarketDefinition } from '../market/MarketCatalog';
 
 const TIMEOUT_SHORT  = 4_000;
 const TIMEOUT_NORMAL = 10_000;
@@ -37,7 +37,7 @@ export class MT5Bridge {
 
   async placeOrder(s: Signal, volume: number): Promise<Trade | null> {
     try {
-      const market = getMarketDefinition(s.symbol, s.timeframe ?? 'H1');
+      const market = getBrokerMarketDefinition(s.symbol, s.timeframe ?? 'H1');
       if (!market) return null;
       const brokerSymbol = market.brokerSymbol ?? s.symbol;
       const r = await this.http.post('/trade',

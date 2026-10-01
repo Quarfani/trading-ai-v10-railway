@@ -5,7 +5,7 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { BinanceExecutor } from './BinanceExecutor';
 import { PaperTrader } from '../integration/PaperTrader';
 import { Logger } from '../utils/Logger';
-import { getMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerMarketDefinition } from '../market/MarketCatalog';
 
 export interface ExecutionResult {
   success: boolean;

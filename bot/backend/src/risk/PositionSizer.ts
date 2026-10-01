@@ -23,7 +23,7 @@
 import { SystemConfig, Side, Timeframe } from '../types/trading.types';
 import { BROKER_TRADE_MODE } from '../market/market.types';
 import { DatabaseManager }      from '../database/DatabaseManager';
-import { getMarketDefinition }  from '../market/MarketCatalog';
+import { getBrokerMarketDefinition, getMarketDefinition }  from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
 import { KellyPositionSizer, SymbolTradeStats } from './KellyPositionSizer';
 import { DrawdownScaler }       from './DrawdownScaler';
@@ -53,7 +53,9 @@ export class PositionSizer {
   ): number {
     const equity = currentEquity ?? this.config.accountBalance;
 
-    const market = getMarketDefinition(symbol, timeframe);
+    const market = this.config.mode === 'mt5'
+      ? getBrokerMarketDefinition(symbol, timeframe)
+      : getMarketDefinition(symbol, timeframe);
     if (!market) {
       this.logger.warn(`[${symbol}] No canonical market definition — sizing blocked`);
       return 0;
@@ -231,7 +233,9 @@ export class PositionSizer {
     timeframe: Timeframe = 'H1',
   ): number {
     if (!(equity > 0) || !(volume > 0) || !Number.isFinite(volume)) return 0;
-    const market = getMarketDefinition(symbol);
+    const market = this.config.mode === 'mt5'
+      ? getBrokerMarketDefinition(symbol, timeframe)
+      : getMarketDefinition(symbol, timeframe);
     if (!market) return 0;
     if (
       market.supportedTimeframes &&

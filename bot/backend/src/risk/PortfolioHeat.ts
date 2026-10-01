@@ -7,7 +7,7 @@
  */
 import { Trade } from '../types/trading.types';
 import { SystemConfig } from '../types/trading.types';
-import { getMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
 import { Logger } from '../utils/Logger';
 
@@ -26,8 +26,12 @@ function stopRisk(
   volume: number,
   accountCurrency: string,
   prices: Record<string, number>,
+  requireBrokerContract = false,
+  timeframe: import('../market/market.types').Timeframe = 'H1',
 ): number | null {
-  const market = getMarketDefinition(symbol);
+  const market = requireBrokerContract
+    ? getBrokerMarketDefinition(symbol, timeframe)
+    : getMarketDefinition(symbol, timeframe);
   if (!market) return null;
 
   const quoteToAccount = resolveQuoteToAccount(
@@ -83,6 +87,8 @@ export class PortfolioHeat {
         trade.volume,
         accountCurrency,
         prices,
+        this.config.mode === 'mt5',
+        trade.timeframe ?? 'H1',
       );
 
       if (risk == null) {
@@ -106,6 +112,8 @@ export class PortfolioHeat {
       newVolume,
       accountCurrency,
       prices,
+      this.config.mode === 'mt5',
+      'H1',
     );
 
     if (addedRiskAbsolute == null) {

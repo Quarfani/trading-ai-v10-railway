@@ -26,7 +26,7 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { TelegramBot } from '../notifications/TelegramBot';
 import { Logger } from '../utils/Logger';
 import { getSymbolSpec } from '../config/symbolConfig';
-import { getMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 
 export function validateRiskReward(
   signal: { price: number; sl: number; tp: number },
@@ -329,10 +329,9 @@ export class RiskManager {
     );
 
     const maxSlip = this.config.maxSlippagePips ?? 3;
-    const market = getMarketDefinition(
-      signal.symbol,
-      signal.timeframe ?? 'H1',
-    );
+    const market = this.mode === 'mt5'
+      ? getBrokerMarketDefinition(signal.symbol, signal.timeframe ?? 'H1')
+      : getMarketDefinition(signal.symbol, signal.timeframe ?? 'H1');
     if (!market) {
       return this.block('market_definition', [
         `No canonical market definition for ${signal.symbol}/${signal.timeframe ?? 'H1'}`,
@@ -442,12 +441,14 @@ export class RiskManager {
         symbol: signal.symbol,
         volume,
         entry: price,
+        timeframe: signal.timeframe ?? 'H1',
       },
       currentEquity,
       this.config.accountCurrency ?? 'USD',
       this.config.maxExposure ?? 1,
       this.config.maxLeverage ?? 3,
       livePrices,
+      this.mode === 'mt5',
     );
 
     if (!exposureCheck.allowed) {

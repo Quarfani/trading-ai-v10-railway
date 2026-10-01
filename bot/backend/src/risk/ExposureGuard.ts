@@ -5,7 +5,8 @@
  * Conversion rates are explicit inputs; missing conversions fail closed.
  */
 import { Trade } from '../types/trading.types';
-import { getMarketDefinition } from '../market/MarketCatalog';
+import { Timeframe } from '../market/market.types';
+import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
 
 export interface ExposureSnapshot {
@@ -29,14 +30,18 @@ interface PositionLike {
   symbol: string;
   volume: number;
   entry: number;
+  timeframe?: Timeframe;
 }
 
 function notional(
   position: PositionLike,
   prices: Record<string, number>,
   accountCurrency: string,
+  requireBrokerContract = false,
 ): { ok: true; value: number } | { ok: false; reason: string } {
-  const market = getMarketDefinition(position.symbol);
+  const market = requireBrokerContract
+    ? getBrokerMarketDefinition(position.symbol, position.timeframe ?? 'H1')
+    : getMarketDefinition(position.symbol, position.timeframe ?? 'H1');
   if (!market) {
     return {
       ok: false,
@@ -82,6 +87,7 @@ export function checkExposureAndLeverage(
   maxExposure: number,
   maxLeverage: number,
   prices: Record<string, number> = {},
+  requireBrokerContract = false,
 ): ExposureCheck {
   if (!Number.isFinite(equity) || equity <= 0) {
     return {
@@ -107,7 +113,7 @@ export function checkExposureAndLeverage(
   let currentExposure = 0;
 
   for (const trade of openTrades) {
-    const result = notional(trade, prices, accountCurrency);
+    const result = notional(trade, prices, accountCurrency, requireBrokerContract);
     if (result.ok === false) {
       return {
         allowed: false,
@@ -118,7 +124,7 @@ export function checkExposureAndLeverage(
     currentExposure += result.value;
   }
 
-  const added = notional(newPosition, prices, accountCurrency);
+  const added = notional(newPosition, prices, accountCurrency, requireBrokerContract);
   if (added.ok === false) {
     return {
       allowed: false,
