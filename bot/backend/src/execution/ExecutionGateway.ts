@@ -240,32 +240,37 @@ export class ExecutionGateway {
   private async closeBrokerTrade(
     t: Trade,
     operationKey: string,
-  ): Promise<boolean> {
+  ): Promise<{ realizedProfit: number | null }> {
     if (this.config.mode === 'mt5') {
       if (!t.ticket) throw new Error('Trade has no broker ticket');
+
       const response = await axios.post(
         `${this.config.mt5.bridgeUrl}/close`,
         { ticket: t.ticket, idempotency_key: operationKey },
         { timeout: 8_000, headers: this.mt5Headers() },
       );
+
       if (response.data?.ok === false) {
         throw new Error(
           `MT5 close rejected: ${response.data?.error ?? 'unknown error'}`,
         );
       }
-      return true;
+
+      return { realizedProfit: null };
     }
 
     if (this.config.mode === 'binance') {
       if (!t.ticket) throw new Error('Trade has no broker ticket');
-      const ok = await this.binance.closePosition(
+
+      const result = await this.binance.closePosition(
         t.ticket,
         t.symbol,
         t.volume,
         t.side,
       );
-      if (!ok) throw new Error('Binance close rejected');
-      return true;
+
+      if (!result.ok) throw new Error('Binance close rejected');
+      return { realizedProfit: result.realizedProfit };
     }
 
     throw new Error('Paper close must use closeAtMarket');
@@ -282,8 +287,30 @@ export class ExecutionGateway {
     if (op.existing) return op.existing.status === 'EXECUTED';
 
     try {
-      await this.closeBrokerTrade(t, key);
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED' });
+      const brokerResult = await this.closeBrokerTrade(t, key);
+
+      if (
+        brokerResult.realizedProfit != null &&
+        Number.isFinite(brokerResult.realizedProfit) &&
+        t.id
+      ) {
+        const changed = this.db.updateTradeClose(
+          t.id,
+          brokerResult.realizedProfit,
+          Date.now(),
+          'MANUAL',
+        );
+        if (!changed) {
+          throw new Error(
+            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
+          );
+        }
+      }
+
+      this.db.updateExecutionLedger(op.executionId, {
+        status: 'EXECUTED',
+        result: brokerResult,
+      });
       return true;
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, {
@@ -337,13 +364,18 @@ export class ExecutionGateway {
         if (!result.ok) throw new Error('Paper settlement rejected');
 
         if (t.id) {
-          this.db.updateTradeClose(
+          const changed = this.db.updateTradeClose(
             t.id,
             result.profit,
             Date.now(),
             reason,
             quoteToAccount,
           );
+          if (!changed) {
+            throw new Error(
+              `Paper settlement could not be persisted for id=${t.id}`,
+            );
+          }
         }
 
         this.db.updateExecutionLedger(
@@ -353,12 +385,34 @@ export class ExecutionGateway {
         return { ok: true, profit: result.profit };
       }
 
-      await this.closeBrokerTrade(t, key);
+      const brokerResult = await this.closeBrokerTrade(t, key);
+
+      if (
+        brokerResult.realizedProfit != null &&
+        Number.isFinite(brokerResult.realizedProfit) &&
+        t.id
+      ) {
+        const changed = this.db.updateTradeClose(
+          t.id,
+          brokerResult.realizedProfit,
+          Date.now(),
+          reason,
+        );
+        if (!changed) {
+          throw new Error(
+            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
+          );
+        }
+      }
+
       this.db.updateExecutionLedger(
         op.executionId,
-        { status: 'EXECUTED' },
+        { status: 'EXECUTED', result: brokerResult },
       );
-      return { ok: true };
+      return {
+        ok: true,
+        profit: brokerResult.realizedProfit ?? undefined,
+      };
     } catch (e: any) {
       this.db.updateExecutionLedger(
         op.executionId,
@@ -375,6 +429,7 @@ export class ExecutionGateway {
       return { ok: false };
     }
   }
+
 
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
     if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
