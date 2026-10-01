@@ -757,6 +757,7 @@ export class ExecutionGateway {
   async reconcileBinanceFullClose(
     operationKey: string,
     symbol: string,
+    createdAt?: number,
   ): Promise<{
     ok: boolean;
     orderId: number;
@@ -769,6 +770,7 @@ export class ExecutionGateway {
     const recovered = await this.binance.reconcileFullCloseByClientOrderId(
       symbol,
       makeBinanceClientOrderId(operationKey),
+      createdAt,
     );
     if (!recovered.ok) {
       throw new Error(
@@ -795,6 +797,7 @@ export class ExecutionGateway {
   async reconcileBinancePartialClose(
     operationKey: string,
     symbol: string,
+    createdAt?: number,
   ): Promise<{
     ok: boolean;
     orderId: number;
@@ -808,6 +811,7 @@ export class ExecutionGateway {
     const recovered = await this.binance.reconcilePartialCloseByClientOrderId(
       symbol,
       makeBinanceClientOrderId(operationKey),
+      createdAt,
     );
     if (!recovered.ok) {
       throw new Error(
