@@ -456,29 +456,6 @@ def account():
     if BRIDGE_MODE == 'simulation':
         return jsonify({"equity": 10000.0, "balance": 10000.0,
                         "margin": 0.0, "free_margin": 10000.0, "margin_level": 0.0})
-    cached = _idempotency_lookup(idempotency_key)
-    if cached:
-        _, cached_status, cached_payload = cached
-        if cached_status == "SUCCESS":
-            return jsonify(cached_payload)
-        if cached_status == "UNKNOWN":
-            return err(
-                "Previous execution with this idempotency_key is unresolved; reconciliation is required",
-                503,
-            )
-
-    with _lock:
-        cached = _idempotency_lookup(idempotency_key)
-        if cached:
-            _, cached_status, cached_payload = cached
-            if cached_status == "SUCCESS":
-                return jsonify(cached_payload)
-            if cached_status == "UNKNOWN":
-                return err(
-                    "Previous execution with this idempotency_key is unresolved; reconciliation is required",
-                    503,
-                )
-
         if not ensure_connected():
             return err("MT5 not connected", 503)
         info = mt5.account_info()
@@ -655,6 +632,17 @@ def trade():
         return err("Invalid parameters: symbol, side, volume required")
     if BRIDGE_MODE == 'live' and not idempotency_key:
         return err("idempotency_key is required in live mode", 422)
+    cached = _idempotency_lookup(idempotency_key)
+    if cached:
+        _, cached_status, cached_payload = cached
+        if cached_status == "SUCCESS":
+            return jsonify(cached_payload)
+        if cached_status == "UNKNOWN":
+            return err(
+                "Previous execution with this idempotency_key is unresolved; reconciliation is required",
+                503,
+            )
+
 
     if BRIDGE_MODE == 'simulation':
         # Simulation mode
@@ -670,6 +658,16 @@ def trade():
                         "volume": volume, "symbol": symbol, "mode": "simulation"})
 
     with _lock:
+        cached = _idempotency_lookup(idempotency_key)
+        if cached:
+            _, cached_status, cached_payload = cached
+            if cached_status == "SUCCESS":
+                return jsonify(cached_payload)
+            if cached_status == "UNKNOWN":
+                return err(
+                    "Previous execution with this idempotency_key is unresolved; reconciliation is required",
+                    503,
+                )
         if not ensure_connected():
             return err("MT5 not connected", 503)
 
