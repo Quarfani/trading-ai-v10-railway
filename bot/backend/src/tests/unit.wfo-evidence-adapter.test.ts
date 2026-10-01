@@ -30,6 +30,9 @@ const folds = built.folds.map((fold, i) =>
     pnl:i % 2 === 0 ? 100 : 25,
     trades:20,
     profitFactor:i % 2 === 0 ? 1.8 : 1.2,
+    tradePnls:i % 2 === 0
+      ? [120,80,-40,-60,-100]
+      : [70,30,-10,-20,-45],
     totalCost:10,
   }),
 );
@@ -38,7 +41,12 @@ const summary = summarizeWfoEvidence(folds);
 assert(summary.passed, 'valid OOS folds should pass structure');
 assert(summary.oosTrades === folds.length * 20, 'OOS trades should be derived');
 assert(summary.walkForwardStability === 1, 'all synthetic folds are profitable');
-assert(summary.weightedProfitFactor > 1, 'weighted PF should be derived');
+assert(summary.weightedProfitFactor > 1, 'aggregate PF should be derived');
+assert(
+  Math.abs(summary.weightedProfitFactor - 430 / 275) < 1e-6,
+  'aggregate PF should be computed from exact OOS positive and negative PnL',
+);
+
 
 const evidence = evidenceInputFromWfo(folds, {
   sampleSize:500,
