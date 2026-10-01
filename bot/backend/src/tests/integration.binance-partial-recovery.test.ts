@@ -170,7 +170,105 @@ async function main() {
   assert(JSON.parse(reconciledLedger.resultJson).orderId === 70001, "reconciler must persist recovered broker order id");
   reconDb.raw().close();
 
-  console.log("Result: 6 passed, 0 failed");
+  const fullExecutor = new BinanceExecutor(config());
+  let fullClientOrderId: string | undefined;
+  (fullExecutor as any).signedPost = async (_path: string, body: Record<string, unknown>) => {
+    fullClientOrderId = String(body.newClientOrderId ?? "");
+    return { orderId: 70002 };
+  };
+  (fullExecutor as any).getPosition = async () => ({
+    positionAmt: 1,
+    entryPrice: 50_000,
+    unrealizedProfit: 0,
+  });
+  (fullExecutor as any).getFuturesOrderNetPnl = async () => ({
+    profit: 11,
+    currency: "USDT",
+  });
+  const fullPlaced = await fullExecutor.closePosition(
+    9200,
+    "BTCUSDT",
+    1,
+    "BUY",
+    makeBinanceClientOrderId("full-close-operation-key"),
+  );
+  assert(fullPlaced.ok === true, "Binance full close must succeed");
+  assert(fullPlaced.orderId === 70002, "Binance full close must return broker order id");
+  assert(
+    fullClientOrderId === makeBinanceClientOrderId("full-close-operation-key"),
+    "Binance full close must send deterministic client order id",
+  );
+
+  const fullRecovered = new BinanceExecutor(config());
+  (fullRecovered as any).signedGet = async (path: string, params: Record<string, unknown>) => {
+    if (path === "/fapi/v1/allOrders") {
+      assert(
+        params.origClientOrderId === makeBinanceClientOrderId("full-close-operation-key"),
+        "full-close historical lookup must use durable client order id",
+      );
+      return [{
+        symbol: "BTCUSDT",
+        orderId: 70002,
+        clientOrderId: makeBinanceClientOrderId("full-close-operation-key"),
+        status: "FILLED",
+        executedQty: "1",
+      }];
+    }
+    throw new Error("unexpected signed GET");
+  };
+  (fullRecovered as any).getAllPositions = async () => [];
+  (fullRecovered as any).getFuturesOrderNetPnl = async (symbol: string, orderId: number) => {
+    assert(symbol === "BTCUSDT" && orderId === 70002, "full recovery must use historical order id");
+    return { profit: 11, currency: "USDT" };
+  };
+  const fullRecoveredResult = await fullRecovered.reconcileFullCloseByClientOrderId(
+    "BTCUSDT",
+    makeBinanceClientOrderId("full-close-operation-key"),
+  );
+  assert(fullRecoveredResult.ok === true, "historical full-close recovery must succeed");
+  assert(fullRecoveredResult.executedQty === 1, "historical full-close recovery must preserve executed quantity");
+  assert(fullRecoveredResult.realizedProfit === 11, "historical full-close recovery must return fill PnL");
+
+  const fullReconDb = new DatabaseManager(":memory:");
+  await fullReconDb.initialize();
+  const fullReconTradeId = fullReconDb.insertTrade({
+    ticket: 9200, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 1,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "BINANCE_FULL_RUNTIME_RECOVERY", realizedProfit: 50,
+  } as any);
+  fullReconDb.createExecutionLedger({
+    executionId: "binance-full-unknown",
+    operationKey: "full-close-operation-key",
+    action: "CLOSE_AT_MARKET",
+    status: "UNKNOWN",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 1,
+    request: { tradeId: fullReconTradeId, exitPrice: 51_000, reason: "MANUAL" },
+  });
+  const fullReconExec = {
+    getBinancePosition: async () => null,
+    reconcileBinanceFullClose: async (opKey: string, symbol: string) => {
+      assert(opKey === "full-close-operation-key" && symbol === "BTCUSDT", "full reconciler must use durable close identity");
+      return { ok: true, orderId: 70002, executedQty: 1, realizedProfit: 11 };
+    },
+  } as any;
+  const fullReconciler = new Reconciler(
+    config(), fullReconDb, fullReconExec,
+    { sendMessage: async () => {} } as any,
+    { recordClose: () => {} } as any,
+    {} as any,
+    { activate: async () => {} } as any,
+    () => {},
+  );
+  await (fullReconciler as any).reconcileOne(fullReconDb.getOpenTrades()[0]);
+  const fullTrade = fullReconDb.getRecentClosedTrades(1)[0] as any;
+  const fullLedger = fullReconDb.getExecutionByOperationKey("full-close-operation-key");
+  assert(fullTrade.profit === 61, "full runtime recovery must include persisted prior realized PnL");
+  assert(fullLedger.status === "EXECUTED", "full runtime recovery must resolve UNKNOWN close ledger");
+  fullReconDb.raw().close();
+
+  console.log("Result: 9 passed, 0 failed");
 }
 
 main().catch(error => {
