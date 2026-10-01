@@ -308,27 +308,6 @@ export class Reconciler {
     }
   }
 
-  private resolveReconciledLedger(
-    tradeId: number | undefined,
-    actions: string[],
-    result: Record<string, unknown>,
-  ): void {
-    if (!tradeId) return;
-    const operation = this.db.getLatestUnresolvedExecutionForTrade(tradeId, actions);
-    if (!operation) return;
-
-    const resolved = this.db.resolveExecutionLedger(
-      String(operation.executionId),
-      result,
-      result.ticket as string | number | undefined,
-    );
-    if (resolved) {
-      this.logger.info(
-        `[${operation.action}] reconciled execution-ledger operation=${operation.operationKey}`,
-      );
-    }
-  }
-
   // ─── Binance ────────────────────────────────────────────────────────
 
   private async reconcileBinance(t: Trade): Promise<void> {
