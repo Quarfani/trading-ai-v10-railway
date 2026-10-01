@@ -116,11 +116,14 @@ export class StartupReconciler {
         continue;
       }
 
+      const closedAt = history.closeTimeMsc > 0
+        ? history.closeTimeMsc
+        : Date.now();
       const resolved = this.db.resolveReconciledFullClose(
         Number(trade.id),
         String(row.executionId),
         history.profit,
-        Date.now(),
+        closedAt,
         history.reason,
         {
           broker: 'mt5',
