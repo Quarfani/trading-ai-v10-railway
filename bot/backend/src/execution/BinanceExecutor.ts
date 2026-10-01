@@ -81,6 +81,45 @@ export class BinanceExecutor {
     );
   }
 
+  private async getFuturesOrderNetPnl(
+    symbol: string,
+    orderId: number,
+  ): Promise<number | null> {
+    if (!this.isFutures || !(orderId > 0)) return null;
+
+    const fills = await this.signedGet('/fapi/v1/userTrades', {
+      symbol,
+      orderId,
+    });
+
+    if (!Array.isArray(fills) || fills.length === 0) return null;
+
+    let net = 0;
+    for (const fill of fills) {
+      const realizedPnl = Number(fill?.realizedPnl);
+      const commission = Number(fill?.commission);
+      const commissionAsset = String(fill?.commissionAsset ?? '').toUpperCase();
+
+      if (
+        !Number.isFinite(realizedPnl) ||
+        !Number.isFinite(commission) ||
+        commission < 0
+      ) {
+        return null;
+      }
+
+      // USDⓈ-M fills normally settle commission in the margin asset. We refuse
+      // to silently convert an unexpected fee asset using a current price.
+      if (!['USDT', 'USDC', 'BUSD'].includes(commissionAsset)) {
+        return null;
+      }
+
+      net += realizedPnl - commission;
+    }
+
+    return Number.isFinite(net) ? net : null;
+  }
+
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
     try {
       return await this.signedGet(
@@ -377,20 +416,24 @@ export class BinanceExecutor {
     ticket:number,
     symbol:string,
     volume:number,
-  ):Promise<{ok:boolean; remainingVolume:number}>{
+  ):Promise<{ok:boolean; remainingVolume:number; realizedProfit:number}>{
     if(!this.isFutures || !(volume>0)) {
-      return { ok:false, remainingVolume:0 };
+      return { ok:false, remainingVolume:0, realizedProfit:0 };
     }
     try {
       const pos=await this.getPosition(symbol);
-      if(!pos || pos.positionAmt===0) return { ok:false, remainingVolume:0 };
+      if(!pos || pos.positionAmt===0) {
+        return { ok:false, remainingVolume:0, realizedProfit:0 };
+      }
 
       const available=Math.abs(pos.positionAmt);
       const qty=Math.min(volume,available);
-      if(!(qty>0)) return { ok:false, remainingVolume:available };
+      if(!(qty>0)) {
+        return { ok:false, remainingVolume:available, realizedProfit:0 };
+      }
 
       const closeSide=pos.positionAmt>0?'SELL':'BUY';
-      await this.signedPost('/fapi/v1/order',{
+      const order=await this.signedPost('/fapi/v1/order',{
         symbol,
         side:closeSide,
         type:'MARKET',
@@ -398,20 +441,33 @@ export class BinanceExecutor {
         reduceOnly:'true',
       });
 
+      const orderId=Number(order?.orderId);
+      if(!(orderId>0) || !Number.isFinite(orderId)) {
+        throw new Error('Binance partial close returned invalid orderId');
+      }
+
       // Re-read the broker position so local state reflects the amount that
       // actually remains after a potentially partial fill.
       const after=await this.getPosition(symbol);
       const remainingVolume=Math.max(0, Math.abs(after?.positionAmt ?? 0));
+
+      const realizedProfit=await this.getFuturesOrderNetPnl(symbol, orderId);
+      if(realizedProfit == null) {
+        throw new Error(
+          `Binance partial close ${symbol} executed but authoritative fills/PnL are unavailable`,
+        );
+      }
+
       const ids=this.orderMap.get(ticket);
       if(ids) ids.quantity=remainingVolume;
 
       this.logger.info(
-        `[Binance] Partial close ${symbol} requested=${qty} remaining=${remainingVolume}`,
+        `[Binance] Partial close ${symbol} requested=${qty} remaining=${remainingVolume} realized=${realizedProfit.toFixed(8)}`,
       );
-      return { ok:true, remainingVolume };
+      return { ok:true, remainingVolume, realizedProfit };
     }catch(e:any){
       this.logger.error(`closePartialPosition failed: ${e?.message??e}`);
-      return { ok:false, remainingVolume:0 };
+      return { ok:false, remainingVolume:0, realizedProfit:0 };
     }
   }
 
