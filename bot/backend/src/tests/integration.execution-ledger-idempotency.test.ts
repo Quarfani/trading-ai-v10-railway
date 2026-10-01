@@ -1,6 +1,7 @@
 import axios from "axios";
 import { DatabaseManager } from "../database/DatabaseManager";
 import { ExecutionGateway } from "../execution/ExecutionGateway";
+import { PaperTrader } from "../integration/PaperTrader";
 import { SystemConfig, Signal } from "../types/trading.types";
 import { clearBrokerContracts, registerBrokerContract } from "../market/MarketCatalog";
 
@@ -222,7 +223,7 @@ async function main() {
     .run("{invalid-json", "corrupt-1");
 
   const corruptGateway = new ExecutionGateway(
-    config(),
+    baseConfig("paper"),
     corruptDb,
     new PaperTrader(10_000),
   );
