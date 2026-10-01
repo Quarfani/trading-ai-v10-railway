@@ -180,6 +180,27 @@ export class ScheduledWFO {
             result.recommendation === 'TRADE' &&
             promotionEvidence.passed;
 
+          try {
+            this.db.raw().prepare(
+              "INSERT INTO system_events(event,severity,payload,timestamp) VALUES (?,?,?,?)",
+            ).run(
+              promoted ? 'WFO_PROMOTED' : 'WFO_REJECTED',
+              promoted ? 'INFO' : 'WARN',
+              JSON.stringify({
+                symbol,
+                timeframe,
+                recommendation: result.recommendation,
+                resultValid: result.valid,
+                policyPassed: promotionEvidence.passed,
+                policyReasons: promotionEvidence.reasons,
+                evidence: result.evidence,
+              }),
+              Date.now(),
+            );
+          } catch {
+            // Audit persistence must never make WFO itself fail.
+          }
+
           this.evidenceSnapshots.save({
             scopeKey,
             symbol,
@@ -237,7 +258,7 @@ export class ScheduledWFO {
       results.map(r => `  ${r}`).join('\n');
 
     await this.telegram.sendMessage(report).catch(() => {});
-    this.logger.info(`WFO complete: ${successCount}/${symbols.length} succeeded`);
+    this.logger.info(`WFO complete: ${successCount}/${symbols.length * timeframes.length} symbol/timeframe runs promoted`);
     this.running = false;
   }
 }
