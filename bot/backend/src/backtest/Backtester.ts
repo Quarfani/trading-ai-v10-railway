@@ -496,18 +496,59 @@ export class Backtester {
     const avgWin  = wins.length   ? grossW / wins.length   : 0;
     const avgLoss = losses.length ? grossL / losses.length : 0;
 
-    const returns   = trades.map(t => t.pnl / startBalance);
-    const mean      = returns.length ? returns.reduce((s, v) => s + v, 0) / returns.length : 0;
-    const std       = returns.length
-      ? Math.sqrt(returns.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / returns.length) : 1;
-    const downR     = returns.filter(r => r < 0);
-    const downStd   = downR.length
-      ? Math.sqrt(downR.reduce((s, v) => s + v * v, 0) / downR.length) : std;
-    const durationYears=equityCurve.length>1?Math.max(1/365,(equityCurve[equityCurve.length-1].t-equityCurve[0].t)/(365*24*3_600_000)):1;
-    const annFactor=Math.sqrt(Math.max(1,trades.length>1?trades.length/durationYears:1));
+    const meanTradePnl =
+      trades.length
+        ? trades.reduce((sum, trade) => sum + trade.pnl, 0) / trades.length
+        : 0;
 
-    const sharpe  = std    > 0 ? (mean / std)    * annFactor : 0;
-    const sortino = downStd > 0 ? (mean / downStd) * annFactor : 0;
+    // Sharpe/Sortino use sequential mark-to-market equity returns.
+    const periodicReturns: number[] = [];
+    for (let i = 1; i < equityCurve.length; i++) {
+      const previous = equityCurve[i - 1].equity;
+      const current = equityCurve[i].equity;
+      if (!(previous > 0) || !Number.isFinite(previous) || !Number.isFinite(current)) continue;
+      const ret = current / previous - 1;
+      if (Number.isFinite(ret)) periodicReturns.push(ret);
+    }
+
+    const meanReturn =
+      periodicReturns.length
+        ? periodicReturns.reduce((sum, value) => sum + value, 0) / periodicReturns.length
+        : 0;
+    const returnStd =
+      periodicReturns.length
+        ? Math.sqrt(
+            periodicReturns.reduce(
+              (sum, value) => sum + Math.pow(value - meanReturn, 2),
+              0,
+            ) / periodicReturns.length,
+          )
+        : 0;
+    const downsideDeviation =
+      periodicReturns.length
+        ? Math.sqrt(
+            periodicReturns.reduce(
+              (sum, value) => sum + Math.pow(Math.min(0, value), 2),
+              0,
+            ) / periodicReturns.length,
+          )
+        : 0;
+
+    const periodsPerYear =
+      TIMEFRAME_MS[timeframe] > 0
+        ? (365 * 24 * 3_600_000) / TIMEFRAME_MS[timeframe]
+        : 0;
+    const annualization = Math.sqrt(Math.max(1, periodsPerYear));
+
+    const sharpe =
+      returnStd > 0
+        ? (meanReturn / returnStd) * annualization
+        : 0;
+    const sortino =
+      downsideDeviation > 0
+        ? (meanReturn / downsideDeviation) * annualization
+        : 0;
+
     const calmar  = maxDDPct > 0
       ? ((balance - startBalance) / startBalance * 100) / (maxDDPct * 100) : 0;
 
@@ -530,7 +571,7 @@ export class Backtester {
       losses:          losses.length,
       winRate:         trades.length ? +(wins.length / trades.length * 100).toFixed(1) : 0,
       profitFactor:    grossL > 0 ? +(grossW / grossL).toFixed(2) : grossW > 0 ? 99 : 0,
-      expectancy:      trades.length ? +mean.toFixed(2) : 0,
+      expectancy:      +meanTradePnl.toFixed(2),
       avgWin:          +avgWin.toFixed(2),
       avgLoss:         +avgLoss.toFixed(2),
       riskReward:      avgLoss > 0 ? +(avgWin / avgLoss).toFixed(2) : 0,
