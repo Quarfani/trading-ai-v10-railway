@@ -53,6 +53,13 @@ export interface WalkForwardWindow {
   embargoMs: number;
 }
 
+export function selectDeploymentParams(
+  windows: Array<{ bestParams: OptimParams }>,
+): OptimParams | null {
+  if (!windows.length) return null;
+  return { ...windows[windows.length - 1].bestParams };
+}
+
 export interface WalkForwardResult {
   symbol:         string;
   windows:        WalkForwardWindow[];
@@ -361,9 +368,7 @@ export class WalkForwardOptimizer {
 
     // Deployment parameters come from the latest training window only.
     // OOS results decide promotion eligibility but never select the values.
-    const finalParams: OptimParams = {
-      ...windows[windows.length - 1].bestParams,
-    };
+    const finalParams = selectDeploymentParams(windows)!;
 
     const validPct = windows.length > 0 ? validWindows.length / windows.length : 0;
 
