@@ -9,6 +9,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const now = Date.now();
+const observedAt = Math.floor(now / 1000) * 1000;
 
 assert(
   inferMT5AssetClass("EURUSD.a", "Euro vs US Dollar", "EUR", "USD") === "FOREX",
@@ -33,14 +34,15 @@ const definition = buildMT5BrokerContractDefinition("EURUSD.a", {
   volume_min: 0.01,
   volume_max: 100,
   volume_step: 0.01,
-  time: Math.floor(now / 1000),
+  time: Math.floor(observedAt / 1000),
 }, now);
 
 assert(definition.symbol === "EURUSD.a", "broker symbol must be preserved");
 assert(definition.assetClass === "FOREX", "payload must produce FOREX definition");
 assert(definition.contractSize === 100000, "contract size must be mapped");
 assert(definition.volumeStep === 0.01, "volume step must be mapped");
-assert(definition.expiresAt === now + 24 * 3_600_000, "broker payload must receive bounded TTL");
+assert(definition.observedAt === observedAt, "broker observation timestamp must be preserved");
+assert(definition.expiresAt === observedAt + 24 * 3_600_000, "fresh broker payload must expire 24h after observation");
 
 clearBrokerContracts();
 registerBrokerContract(definition);
@@ -63,6 +65,19 @@ try {
 } catch {
   invalidRejected = true;
 }
+const stale = buildMT5BrokerContractDefinition("EURUSD.a", {
+  symbol: "EURUSD.a",
+  description: "Euro vs US Dollar",
+  currency_base: "EUR",
+  currency_profit: "USD",
+  trade_contract_size: 100000,
+  point: 0.00001,
+  volume_min: 0.01,
+  volume_max: 100,
+  volume_step: 0.01,
+  time: Math.floor((now - 25 * 3_600_000) / 1000),
+}, now);
+assert(stale.expiresAt <= now, "broker metadata observed over 24h ago must already be expired");
 assert(invalidRejected, "invalid contract economics must be rejected");
 assert(getMarketDefinition("EURUSD.a") === null, "invalid broker metadata must never remain active");
 

@@ -90,6 +90,16 @@ export function buildMT5BrokerContractDefinition(
 
   if (!assetClass) throw new Error('unsupported/unknown MT5 asset class');
 
+  const rawObservedAt = Number(data?.time) * 1000;
+  const observedAt =
+    Number.isFinite(rawObservedAt) && rawObservedAt > 0
+      ? rawObservedAt
+      : now;
+  const expiresAt = Math.min(
+    now + 24 * 3_600_000,
+    observedAt + 24 * 3_600_000,
+  );
+
   return {
     symbol,
     baseAsset: baseCurrency,
@@ -104,8 +114,8 @@ export function buildMT5BrokerContractDefinition(
     volumeStep: Number(data?.volume_step),
     marginModel: 'BROKER_DEFINED',
     source: 'MT5:symbol_info',
-    observedAt: Number(data?.time) * 1000 || now,
-    expiresAt: now + 24 * 3_600_000,
+    observedAt,
+    expiresAt,
     verified: true,
     tickSize: Number(data?.trade_tick_size) || undefined,
     tickValue: Number(data?.trade_tick_value) || undefined,
