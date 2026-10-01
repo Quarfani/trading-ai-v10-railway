@@ -170,7 +170,9 @@ export class WalkForwardOptimizer {
   ): Promise<{ bestParams: OptimParams; bestMetrics: any }> {
     let bestScore  = -Infinity;
     let bestParams: OptimParams = { atrMult: 1.5, tpRatio: 2.0, minConfidence: 0.60, rollingWindow: 30 };
-    let bestMetrics: any = {};
+    let bestMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; valid: boolean } = {
+      winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false,
+    };
 
     // Grid search over parameter combinations
     for (const atrMult of ATR_MULTS) {
@@ -211,16 +213,24 @@ export class WalkForwardOptimizer {
     params: OptimParams,
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
-  ): Promise<{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; valid: boolean }> {
-    try {
-      // Override symbolConfig for this test via environment (temp)
-      const originalEnv = {
-        atrMult:       process.env[`SPEC_${symbol}_ATR_MULT`],
-        tpRatio:       process.env[`SPEC_${symbol}_TP_RATIO`],
-      };
+  ): Promise<{
+    winRate: number;
+    sharpe: number;
+    profitFactor: number;
+    totalReturn: number;
+    maxDD: number;
+    valid: boolean;
+  }> {
+    const envAtrKey = `SPEC_${symbol}_ATR_MULT`;
+    const envTpKey = `SPEC_${symbol}_TP_RATIO`;
+    const originalEnv = {
+      atrMult: process.env[envAtrKey],
+      tpRatio: process.env[envTpKey],
+    };
 
-      process.env[`SPEC_${symbol}_ATR_MULT`] = String(params.atrMult);
-      process.env[`SPEC_${symbol}_TP_RATIO`] = String(params.tpRatio);
+    try {
+      process.env[envAtrKey] = String(params.atrMult);
+      process.env[envTpKey] = String(params.tpRatio);
 
       const bt = new Backtester({
         mode: 'paper',
@@ -228,6 +238,7 @@ export class WalkForwardOptimizer {
         accountBalance: 10_000,
         minConfidence: params.minConfidence,
       } as any);
+
       const res = await bt.run(
         symbol,
         candles,
@@ -237,25 +248,45 @@ export class WalkForwardOptimizer {
       );
 
       if (!res.valid) {
-        return { winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false };
+        return {
+          winRate: 0,
+          sharpe: 0,
+          profitFactor: 0,
+          totalReturn: 0,
+          maxDD: 1,
+          valid: false,
+        };
       }
 
-      // Restore env
-      if (originalEnv.atrMult !== undefined) process.env[`SPEC_${symbol}_ATR_MULT`] = originalEnv.atrMult;
-      else delete process.env[`SPEC_${symbol}_ATR_MULT`];
-      if (originalEnv.tpRatio !== undefined) process.env[`SPEC_${symbol}_TP_RATIO`] = originalEnv.tpRatio;
-      else delete process.env[`SPEC_${symbol}_TP_RATIO`];
-
       return {
-        winRate:      res.winRate,
-        sharpe:       res.sharpeRatio,
+        winRate: res.winRate,
+        sharpe: res.sharpeRatio,
         profitFactor: res.profitFactor,
-        totalReturn:  res.totalReturn,
-        maxDD:        res.maxDrawdownPct / 100,
-        valid:        true,
+        totalReturn: res.totalReturn,
+        maxDD: res.maxDrawdownPct / 100,
+        valid: true,
       };
     } catch {
-      return { winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false };
+      return {
+        winRate: 0,
+        sharpe: 0,
+        profitFactor: 0,
+        totalReturn: 0,
+        maxDD: 1,
+        valid: false,
+      };
+    } finally {
+      if (originalEnv.atrMult !== undefined) {
+        process.env[envAtrKey] = originalEnv.atrMult;
+      } else {
+        delete process.env[envAtrKey];
+      }
+
+      if (originalEnv.tpRatio !== undefined) {
+        process.env[envTpKey] = originalEnv.tpRatio;
+      } else {
+        delete process.env[envTpKey];
+      }
     }
   }
 
