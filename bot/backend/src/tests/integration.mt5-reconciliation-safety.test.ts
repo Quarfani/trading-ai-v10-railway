@@ -132,7 +132,66 @@ async function main() {
       db.raw().close();
     }
 
-    console.log("Result: 8 passed, 0 failed");
+    const rollbackDb = new DatabaseManager(":memory:");
+    await rollbackDb.initialize();
+    const rollbackTradeId = rollbackDb.insertTrade({
+      ticket: 770,
+      symbol: "EURUSD",
+      timeframe: "H1",
+      side: "BUY",
+      volume: 0.01,
+      entry: 1.1000,
+      sl: 1.0900,
+      tp: 1.1200,
+      status: "open",
+      openedAt: Date.now(),
+      source: "RUNTIME_ATOMIC_ROLLBACK",
+    } as any);
+    rollbackDb.createExecutionLedger({
+      executionId: "runtime-rollback-close",
+      operationKey: "runtime-rollback-close-op",
+      action: "CLOSE_AT_MARKET",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId: rollbackTradeId, exitPrice: 1.11, reason: "MANUAL" },
+    });
+    rollbackDb.raw().exec(`
+      CREATE TRIGGER fail_runtime_close_ledger
+      BEFORE UPDATE OF status ON execution_ledger
+      WHEN NEW.executionId='runtime-rollback-close' AND NEW.status='EXECUTED'
+      BEGIN SELECT RAISE(ABORT, 'forced runtime ledger failure'); END;
+    `);
+    try {
+      const rollbackReconciler = new Reconciler(
+        config(), rollbackDb, {} as any,
+        { sendMessage: async () => {} } as any,
+        { recordClose: () => {} } as any,
+        {} as any,
+        { activate: async () => {} } as any,
+        () => {},
+      );
+      let rollbackFailed = false;
+      try {
+        await (rollbackReconciler as any).reconcileOne(rollbackDb.getOpenTrades()[0]);
+      } catch {
+        rollbackFailed = true;
+      }
+      assert(rollbackFailed, "runtime atomic full-close must fail when ledger settlement fails");
+      assert(
+        rollbackDb.getOpenTrades()[0].status === "open",
+        "runtime atomic full-close failure must roll back trade state",
+      );
+      assert(
+        rollbackDb.getExecutionByOperationKey("runtime-rollback-close-op").status === "UNKNOWN",
+        "runtime atomic full-close failure must preserve UNKNOWN ledger state",
+      );
+    } finally {
+      rollbackDb.raw().close();
+    }
+
+    console.log("Result: 9 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
