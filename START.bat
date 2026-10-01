@@ -48,6 +48,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\AI-Development-Handoff-Watcher.ps1" -IntervalSeconds 60
 timeout /t 5 /nobreak >nul
 start "" http://localhost:3000
 
