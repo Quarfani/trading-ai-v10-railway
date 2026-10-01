@@ -45,14 +45,23 @@ export class MarketRegimeDetector {
   private logger = new Logger('RegimeDetector');
   private cache  = new Map<string, RegimeResult>();
 
-  detect(symbol: string, tf: string, candles: Candle[]): RegimeResult {
+  detect(
+    symbol: string,
+    tf: string,
+    candles: Candle[],
+    options: { useCache?: boolean } = {},
+  ): RegimeResult {
+    const useCache = options.useCache !== false;
     const key = `${symbol}_${tf}`;
     const ttl = CACHE_TTL[tf] ?? 900_000;
-    const cached = this.cache.get(key);
-    if (cached && Date.now() - cached.updatedAt < ttl) return cached;
+
+    if (useCache) {
+      const cached = this.cache.get(key);
+      if (cached && Date.now() - cached.updatedAt < ttl) return cached;
+    }
 
     const result = this.compute(candles, tf);
-    this.cache.set(key, result);
+    if (useCache) this.cache.set(key, result);
     this.logger.debug(
       `[${symbol} ${tf}] Regime=${result.regime} ADX=${result.adx.toFixed(1)} ` +
       `ATR%=${(result.atrPct * 100).toFixed(2)} Chop=${result.choppiness.toFixed(1)}`
