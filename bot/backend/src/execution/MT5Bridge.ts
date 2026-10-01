@@ -36,7 +36,7 @@ export class MT5Bridge {
 
   async placeOrder(s: Signal, volume: number): Promise<Trade | null> {
     try {
-      const r = await this.http.post('/order',
+      const r = await this.http.post('/trade',
         { symbol: s.symbol, side: s.side, volume, sl: s.sl, tp: s.tp },
         { timeout: TIMEOUT_NORMAL });
       if (!r.data.ticket) {
