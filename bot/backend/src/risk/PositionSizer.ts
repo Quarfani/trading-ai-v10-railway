@@ -37,7 +37,12 @@ export class PositionSizer {
   private ddScaler: DrawdownScaler;
 
   constructor(private config: SystemConfig, private db: DatabaseManager) {
-    this.ddScaler = new DrawdownScaler(db, config.accountBalance, config.mode !== 'paper');
+    this.ddScaler = new DrawdownScaler(
+      db,
+      config.accountBalance,
+      config.mode !== 'paper',
+      config.accountName ?? 'default',
+    );
   }
 
   size(
