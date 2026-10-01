@@ -872,16 +872,11 @@ export class TradingEngine extends EventEmitter {
 
     // ── MTF confirmation ───────────────────────────────────────────────
     const mtfResult =
-      tf === 'H4'
-        ? {
-            approved: true,
-            h1ok: true,
-            h4ok: true,
-          }
-        : await this.mtf.confirmFull(
-            symbol,
-            signal.side,
-          );
+      await this.mtf.confirmFull(
+        symbol,
+        signal.side,
+        tf,
+      );
 
     if (!mtfResult.approved) {
       this.logger.info(
