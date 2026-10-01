@@ -145,6 +145,48 @@ def sim_close(ticket: int, fraction: float = 1.0) -> dict:
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
+def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
+    """Validate requested lots against broker symbol limits."""
+    import math
+    try:
+        volume = float(volume)
+        minimum = float(getattr(symbol_info, "volume_min", 0))
+        maximum = float(getattr(symbol_info, "volume_max", 0))
+        step = float(getattr(symbol_info, "volume_step", 0))
+    except (TypeError, ValueError):
+        return False, "Invalid broker volume metadata"
+    if not all(math.isfinite(v) and v > 0 for v in (volume, minimum, maximum, step)):
+        return False, "Invalid broker volume metadata"
+    if maximum < minimum:
+        return False, "Broker volume_max is below volume_min"
+    eps = max(step * 1e-9, 1e-12)
+    if volume < minimum - eps:
+        return False, f"Volume {volume} below broker minimum {minimum}"
+    if volume > maximum + eps:
+        return False, f"Volume {volume} above broker maximum {maximum}"
+    units = (volume - minimum) / step
+    if abs(units - round(units)) > max(1e-8, eps / step):
+        return False, f"Volume {volume} is not aligned to broker step {step}"
+    return True, "OK"
+
+def choose_market_filling_mode(symbol_info, mt5_module):
+    """Choose a filling policy permitted by the symbol execution mode."""
+    execution_market = getattr(mt5_module, "SYMBOL_TRADE_EXECUTION_MARKET", None)
+    execution_mode = getattr(symbol_info, "trade_exemode", None)
+    order_return = getattr(mt5_module, "ORDER_FILLING_RETURN", None)
+    order_ioc = getattr(mt5_module, "ORDER_FILLING_IOC", None)
+    order_fok = getattr(mt5_module, "ORDER_FILLING_FOK", None)
+    if execution_mode != execution_market and order_return is not None:
+        return order_return
+    flags = int(getattr(symbol_info, "filling_mode", 0) or 0)
+    symbol_ioc = int(getattr(mt5_module, "SYMBOL_FILLING_IOC", 2))
+    symbol_fok = int(getattr(mt5_module, "SYMBOL_FILLING_FOK", 1))
+    if order_ioc is not None and (flags & symbol_ioc):
+        return order_ioc
+    if order_fok is not None and (flags & symbol_fok):
+        return order_fok
+    raise ValueError("No broker-supported market filling mode is available")
+
 @app.route("/ping", methods=["GET"])
 def ping():
     if not auth_check():
@@ -315,13 +357,30 @@ def trade():
         if not sym_info.visible:
             mt5.symbol_select(symbol, True)
 
+        if getattr(sym_info, "trade_mode", None) == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", object()):
+            return err(f"Symbol {symbol} trading is disabled", 409)
+
+        volume_ok, volume_reason = validate_trade_volume(volume, sym_info)
+        if not volume_ok:
+            return err(volume_reason, 422)
+
         order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
         tick_data  = mt5.symbol_info_tick(symbol)
         if not tick_data:
             return err(f"No tick: {mt5.last_error()}")
 
         price = tick_data.ask if side == "BUY" else tick_data.bid
-        deviation = 20  # max slippage in points
+        try:
+            deviation = int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20"))
+        except (TypeError, ValueError):
+            return err("MT5_MAX_DEVIATION_POINTS must be an integer", 500)
+        if deviation < 0:
+            return err("MT5_MAX_DEVIATION_POINTS must be >= 0", 500)
+
+        try:
+            filling_mode = choose_market_filling_mode(sym_info, mt5)
+        except ValueError as exc:
+            return err(str(exc), 422)
 
         request_data = {
             "action":      mt5.TRADE_ACTION_DEAL,
@@ -335,12 +394,22 @@ def trade():
             "magic":       get_magic(),
             "comment":     comment,
             "type_time":   mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_mode,
         }
+
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(
+                f"Trade check failed: retcode={check.retcode} "
+                f"comment={getattr(check, "comment", "")}",
+                422,
+            )
 
         result = mt5.order_send(request_data)
         if result is None:
-            return err(f"order_send returned None: {mt5.last_error()}")
+            return err(f"order_send returned None: {mt5.last_error()}", 503)
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Trade failed: retcode={result.retcode} comment={result.comment}")
