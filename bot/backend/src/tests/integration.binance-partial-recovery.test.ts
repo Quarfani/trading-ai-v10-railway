@@ -1,5 +1,6 @@
 import { BinanceExecutor, makeBinanceClientOrderId } from "../execution/BinanceExecutor";
 import { ExecutionGateway } from "../execution/ExecutionGateway";
+import { Reconciler } from "../core/Reconciler";
 import { DatabaseManager } from "../database/DatabaseManager";
 import { SystemConfig } from "../types/trading.types";
 
@@ -114,7 +115,62 @@ async function main() {
   assert(Math.abs(accountRecovered.realizedProfit - 6.9) < 1e-9, "gateway recovery must normalize PnL into account currency");
   db.raw().close();
 
-  console.log("Result: 5 passed, 0 failed");
+  const reconDb = new DatabaseManager(":memory:");
+  await reconDb.initialize();
+  const reconTradeId = reconDb.insertTrade({
+    ticket: 9100, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 1,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "BINANCE_RUNTIME_RECOVERY",
+  } as any);
+  reconDb.createExecutionLedger({
+    executionId: "binance-partial-unknown",
+    operationKey: operationKey,
+    action: "PARTIAL_CLOSE",
+    status: "UNKNOWN",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 0.4,
+    request: { tradeId: reconTradeId, volume: 0.4 },
+  });
+
+  const reconcilerExec = {
+    getBinancePosition: async () => ({
+      positionAmt: 0.6,
+      entryPrice: 50_000,
+      unrealizedProfit: 0,
+    }),
+    reconcileBinancePartialClose: async (opKey: string, symbol: string) => {
+      assert(opKey === operationKey && symbol === "BTCUSDT", "reconciler must use durable operation identity");
+      return {
+        ok: true,
+        orderId: 70001,
+        executedQty: 0.4,
+        remainingVolume: 0.6,
+        realizedProfit: 7.5,
+      };
+    },
+  } as any;
+  const reconciler = new Reconciler(
+    config(),
+    reconDb,
+    reconcilerExec,
+    { sendMessage: async () => {} } as any,
+    { recordClose: () => {} } as any,
+    {} as any,
+    { activate: async () => {} } as any,
+    () => {},
+  );
+  await (reconciler as any).reconcileOne(reconDb.getOpenTrades()[0]);
+
+  const reconciledTrade = reconDb.getOpenTrades()[0];
+  const reconciledLedger = reconDb.getExecutionByOperationKey(operationKey);
+  assert(reconciledTrade.volume === 0.6, "reconciler must persist broker-confirmed remaining Binance volume");
+  assert(reconciledTrade.realizedProfit === 7.5, "reconciler must persist cumulative realized PnL");
+  assert(reconciledLedger.status === "EXECUTED", "reconciler must resolve UNKNOWN Binance partial ledger");
+  assert(JSON.parse(reconciledLedger.resultJson).orderId === 70001, "reconciler must persist recovered broker order id");
+  reconDb.raw().close();
+
+  console.log("Result: 6 passed, 0 failed");
 }
 
 main().catch(error => {
