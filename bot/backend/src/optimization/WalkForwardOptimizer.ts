@@ -91,6 +91,8 @@ const TRAIN_BARS = 500;  // bars for training
 const TEST_BARS  = 125;  // bars for testing (25% of train)
 const STEP_BARS  = 125;  // slide step
 
+let WFO_PROCESS_LOCK = false;
+
 export class WalkForwardOptimizer {
   private logger = new Logger('WalkForward');
 
@@ -107,6 +109,13 @@ export class WalkForwardOptimizer {
     marketOverride?: MarketDefinition,
     costProfileOverride?: CostProfile,
   ): Promise<WalkForwardResult> {
+    if (WFO_PROCESS_LOCK) {
+      throw new Error('Another walk-forward optimization is already running in this process');
+    }
+
+    WFO_PROCESS_LOCK = true;
+    try {
+
     this.logger.info(`Walk-Forward: ${symbol} | ${allCandles.length} candles`);
 
     if (allCandles.length < TRAIN_BARS + TEST_BARS) {
@@ -204,6 +213,11 @@ export class WalkForwardOptimizer {
     }
 
     return this.buildResult(symbol, windows, planned.passed, planned.reason);
+  }
+
+    } finally {
+      WFO_PROCESS_LOCK = false;
+    }
   }
 
   // ─── Grid search on training data ────────────────────────────────────────
