@@ -213,9 +213,8 @@ export class WalkForwardOptimizer {
     }
 
     return this.buildResult(symbol, windows, planned.passed, planned.reason);
-  }
 
-    } finally {
+  } finally {
       WFO_PROCESS_LOCK = false;
     }
   }
