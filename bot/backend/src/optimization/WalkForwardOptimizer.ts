@@ -401,6 +401,8 @@ export class WalkForwardOptimizer {
     params: OptimParams,
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
+    marketOverride?: MarketDefinition,
+    costProfileOverride?: CostProfile,
   ): Promise<any> {
     const combined = [...warmupCandles, ...validationCandles];
     const evaluationStartTime = validationCandles[0]?.time;
@@ -423,6 +425,8 @@ export class WalkForwardOptimizer {
       timeframe,
       historicalCurrencyRates,
       evaluationStartTime,
+      marketOverride,
+      costProfileOverride,
     );
   }
 
