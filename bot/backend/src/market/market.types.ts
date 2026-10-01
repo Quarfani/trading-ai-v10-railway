@@ -61,6 +61,8 @@ export interface MarketEconomics {
 
 export interface MarketDefinition {
   symbol: string;
+  /** Exact broker symbol when the market originates from broker metadata. */
+  brokerSymbol?: string;
   baseAsset: string;
   quoteCurrency: string;
   assetClass: AssetClass;

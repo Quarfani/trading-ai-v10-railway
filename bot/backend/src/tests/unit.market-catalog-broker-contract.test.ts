@@ -38,4 +38,5 @@ assert(oil?.economics.contractSize === 1000, 'verified contract economics must b
 clearBrokerContracts();
 assert(getMarketDefinition('USOIL') === null, 'clearing broker registry must remove the override');
 
-console.log('Result: 5 passed, 0 failed');
+
+console.log('Result: 10 passed, 0 failed');

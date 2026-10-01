@@ -72,10 +72,18 @@ export function clearBrokerContracts(): void {
 }
 
 export function getMarketDefinition(symbol: string): MarketDefinition | null {
+  const raw = symbol.trim().toUpperCase();
+
+  // Broker metadata must be looked up using the exact broker symbol first.
+  // Never normalize away MT5 suffixes such as ".a" or ".raw".
+  const brokerDefinition = BROKER_CONTRACTS.getMarketDefinition(raw);
+  if (brokerDefinition) return brokerDefinition;
+
   const normalized = normalizeSymbol(symbol);
 
-  const brokerDefinition = BROKER_CONTRACTS.getMarketDefinition(normalized);
-  if (brokerDefinition) return brokerDefinition;
+  // A non-canonical symbol without broker metadata is unsafe to size: falling
+  // back to EURUSD/XAUUSD static economics could silently size the wrong CFD.
+  if (raw !== normalized) return null;
   const assetClass = inferAssetClass(normalized);
 
   if (!assetClass) return null;

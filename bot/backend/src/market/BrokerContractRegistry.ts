@@ -106,8 +106,10 @@ export function toMarketDefinition(
     );
   }
 
+  const brokerSymbol = definition.symbol.trim().toUpperCase();
   return {
-    symbol: definition.symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''),
+    symbol: brokerSymbol.replace(/[^A-Z0-9]/g, ''),
+    brokerSymbol,
     baseAsset: definition.baseAsset.trim().toUpperCase(),
     quoteCurrency: definition.quoteCurrency.trim().toUpperCase(),
     assetClass: definition.assetClass,
@@ -128,10 +130,7 @@ export class BrokerContractRegistry {
   private readonly definitions = new Map<string, BrokerContractDefinition>();
 
   register(definition: BrokerContractDefinition): void {
-    const normalized = definition.symbol
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '');
+    const normalized = definition.symbol.trim().toUpperCase();
 
     const errors = validateBrokerContract(definition);
 
@@ -157,7 +156,7 @@ export class BrokerContractRegistry {
   }
 
   get(symbol: string): BrokerContractDefinition | null {
-    const normalized = symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const normalized = symbol.trim().toUpperCase();
     const definition = this.definitions.get(normalized);
     if (!definition) return null;
 
