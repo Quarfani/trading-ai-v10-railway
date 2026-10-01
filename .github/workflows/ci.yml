@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
 
+# Prevent obsolete runs from consuming Actions minutes after a newer commit lands.
+concurrency:
+  group: trading-ai-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     runs-on: ubuntu-latest
