@@ -571,6 +571,19 @@ def account():
         })
 
 
+def simulation_tick(symbol: str) -> dict:
+    import random
+    mid = {"EURUSD": 1.0850, "GBPUSD": 1.2700, "USDJPY": 149.50,
+           "XAUUSD": 2020.0, "BTCUSDT": 50000.0}.get(symbol, 1.0)
+    spread = mid * 0.0002
+    return {
+        "symbol": symbol,
+        "bid": mid - spread / 2,
+        "ask": mid + spread / 2,
+        "time": int(datetime.now(timezone.utc).timestamp()),
+    }
+
+
 @app.route("/tick", methods=["GET"])
 def tick():
     if not auth_check():
@@ -581,12 +594,7 @@ def tick():
         return err("symbol required")
 
     if BRIDGE_MODE == 'simulation':
-        import random
-        mid = {"EURUSD": 1.0850, "GBPUSD": 1.2700, "USDJPY": 149.50,
-               "XAUUSD": 2020.0, "BTCUSDT": 50000.0}.get(symbol, 1.0)
-        spread = mid * 0.0002
-        return jsonify({"symbol": symbol, "bid": mid - spread/2,
-                        "ask": mid + spread/2, "time": int(datetime.now(timezone.utc).timestamp())})
+        return jsonify(simulation_tick(symbol))
     with _lock:
         if not ensure_connected():
             return err("MT5 not connected", 503)
@@ -754,11 +762,7 @@ def trade():
 
 
     if BRIDGE_MODE == 'simulation':
-        tick_r = tick()
-        if isinstance(tick_r, tuple):
-            tick_data = tick_r[0].get_json()
-        else:
-            tick_data = tick_r.get_json()
+        tick_data = simulation_tick(symbol)
         price = tick_data["ask"] if side == "BUY" else tick_data["bid"]
         pos = sim_open(symbol, side, volume, sl, tp, price)
         response_payload = {
