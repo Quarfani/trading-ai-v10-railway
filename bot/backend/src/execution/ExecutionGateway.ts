@@ -237,53 +237,141 @@ export class ExecutionGateway {
     }
   }
 
+  private async closeBrokerTrade(
+    t: Trade,
+    operationKey: string,
+  ): Promise<boolean> {
+    if (this.config.mode === 'mt5') {
+      if (!t.ticket) throw new Error('Trade has no broker ticket');
+      const response = await axios.post(
+        `${this.config.mt5.bridgeUrl}/close`,
+        { ticket: t.ticket, idempotency_key: operationKey },
+        { timeout: 8_000, headers: this.mt5Headers() },
+      );
+      if (response.data?.ok === false) {
+        throw new Error(
+          `MT5 close rejected: ${response.data?.error ?? 'unknown error'}`,
+        );
+      }
+      return true;
+    }
+
+    if (this.config.mode === 'binance') {
+      if (!t.ticket) throw new Error('Trade has no broker ticket');
+      const ok = await this.binance.closePosition(
+        t.ticket,
+        t.symbol,
+        t.volume,
+        t.side,
+      );
+      if (!ok) throw new Error('Binance close rejected');
+      return true;
+    }
+
+    throw new Error('Paper close must use closeAtMarket');
+  }
+
   async closeTrade(t: Trade) {
-    const key = this.stableKey('CLOSE', { id: t.id, ticket: t.ticket, symbol: t.symbol, volume: t.volume });
+    const key = this.stableKey('CLOSE', {
+      id: t.id,
+      ticket: t.ticket,
+      symbol: t.symbol,
+      volume: t.volume,
+    });
     const op = this.beginDestructive(key, 'CLOSE', t, {});
     if (op.existing) return op.existing.status === 'EXECUTED';
+
     try {
-      if (this.config.mode === 'mt5') {
-        if (!t.ticket) throw new Error('Trade has no broker ticket');
-        await axios.post(`${this.config.mt5.bridgeUrl}/close`, { ticket: t.ticket, idempotency_key: key }, { timeout: 8_000, headers: this.mt5Headers() });
-      } else if (this.config.mode === 'binance') {
-        if (
-          !t.ticket ||
-          !(await this.binance.closePosition(t.ticket, t.symbol, t.volume, t.side))
-        ) {
-          throw new Error('Binance close rejected');
-        }
-      } else {
-        throw new Error('Paper close requires closeAtMarket so the exit price is explicit');
-      }
+      await this.closeBrokerTrade(t, key);
       this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED' });
       return true;
     } catch (e: any) {
-      this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
+      this.db.updateExecutionLedger(op.executionId, {
+        status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN',
+        error: e?.message ?? String(e),
+      });
       this.logger.error(`closeTrade: ${e?.message ?? e}`);
       return false;
     }
   }
 
-  async closeAtMarket(t: Trade, exitPrice: number, reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL' = 'MANUAL') {
-    const key = this.stableKey('CLOSE_AT_MARKET', { id: t.id, ticket: t.ticket, symbol: t.symbol, volume: t.volume, exitPrice, reason });
-    const op = this.beginDestructive(key, 'CLOSE_AT_MARKET', t, { exitPrice, reason });
-    if (op.existing) return { ok: op.existing.status === 'EXECUTED', profit: undefined };
+  async closeAtMarket(
+    t: Trade,
+    exitPrice: number,
+    reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL' = 'MANUAL',
+  ) {
+    const key = this.stableKey('CLOSE_AT_MARKET', {
+      id: t.id,
+      ticket: t.ticket,
+      symbol: t.symbol,
+      volume: t.volume,
+      exitPrice,
+      reason,
+    });
+    const op = this.beginDestructive(
+      key,
+      'CLOSE_AT_MARKET',
+      t,
+      { exitPrice, reason },
+    );
+    if (op.existing) {
+      return {
+        ok: op.existing.status === 'EXECUTED',
+        profit: undefined,
+      };
+    }
+
     try {
       if (this.config.mode === 'paper') {
-        const quoteToAccount = await this.resolvePaperQuoteToAccount(t.symbol, t.timeframe ?? 'H1');
-        const result = this.settlePaperTrade(t, exitPrice, reason, quoteToAccount);
+        const quoteToAccount =
+          await this.resolvePaperQuoteToAccount(
+            t.symbol,
+            t.timeframe ?? 'H1',
+          );
+        const result = this.settlePaperTrade(
+          t,
+          exitPrice,
+          reason,
+          quoteToAccount,
+        );
         if (!result.ok) throw new Error('Paper settlement rejected');
-        if (t.id) this.db.updateTradeClose(t.id, result.profit, Date.now(), reason, quoteToAccount);
-        this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result });
+
+        if (t.id) {
+          this.db.updateTradeClose(
+            t.id,
+            result.profit,
+            Date.now(),
+            reason,
+            quoteToAccount,
+          );
+        }
+
+        this.db.updateExecutionLedger(
+          op.executionId,
+          { status: 'EXECUTED', result },
+        );
         return { ok: true, profit: result.profit };
       }
-      const ok = await this.closeTrade(t);
-      if (!ok) throw new Error('Broker close could not be verified');
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED' });
+
+      await this.closeBrokerTrade(t, key);
+      this.db.updateExecutionLedger(
+        op.executionId,
+        { status: 'EXECUTED' },
+      );
       return { ok: true };
     } catch (e: any) {
-      this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
-      this.logger.error(`closeAtMarket: ${e?.message ?? e}`);
+      this.db.updateExecutionLedger(
+        op.executionId,
+        {
+          status: this.config.mode === 'paper'
+            ? 'FAILED'
+            : 'UNKNOWN',
+          error: e?.message ?? String(e),
+        },
+      );
+      this.logger.error(
+        `closeAtMarket: ${e?.message ?? e}`,
+      );
       return { ok: false };
     }
   }
