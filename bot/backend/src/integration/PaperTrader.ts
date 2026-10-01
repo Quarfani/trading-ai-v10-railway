@@ -61,7 +61,7 @@ export class PaperTrader {
   restoreOpenTrades(rows: Trade[]) {
     for(const row of rows){
       if(!row.ticket||this.openTrades.has(row.ticket)) continue;
-      const spec=getSymbolSpec(row.symbol);
+      const economics=this.resolveEconomics(row.symbol, row.timeframe ?? 'H1');
       const profile=getCostProfile(row.symbol);
       const restoredEntryCost=estimateEntryCosts({price:row.entry,volume:row.volume,contractSize:economics.contractSize,quoteToAccount:1},profile);
       this.openTrades.set(row.ticket,{ticket:row.ticket,symbol:row.symbol,side:row.side,volume:row.volume,entry:row.entry,sl:row.sl,tp:row.tp,openedAt:row.openedAt,status:'open',source:row.source,timeframe:row.timeframe,realizedProfit:Number(row.realizedProfit??0),remainingEntryCost:restoredEntryCost});
