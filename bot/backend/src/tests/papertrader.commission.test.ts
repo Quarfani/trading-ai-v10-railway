@@ -6,8 +6,8 @@ import { getCostProfile } from '../market/CostProfiles';
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
-function assertClose(actual: number, expected: number, tolerance = 1e-9): void {
-  assert(Math.abs(actual - expected) <= tolerance, `expected ${expected}, got ${actual}`);
+function assertClose(actual: number, expected: number, tolerance = 1e-9, label = 'value'): void {
+  assert(Math.abs(actual - expected) <= tolerance, `${label}: expected ${expected}, got ${actual}`);
 }
 
 const trader = new PaperTrader(10_000);
@@ -51,7 +51,7 @@ const expectedPartial =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-assertClose(partial!.profit ?? 0, expectedPartial);
+assertClose(partial!.profit ?? 0, expectedPartial, 1e-9, 'partial');
 
 const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1);
 assert(Boolean(closed), 'final close should return a trade');
@@ -64,7 +64,7 @@ const expectedRemaining =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-assertClose(closed!.profit ?? 0, (partial!.profit ?? 0) + expectedRemaining);
+assertClose(closed!.profit ?? 0, (partial!.profit ?? 0) + expectedRemaining, 1e-9, 'final-cumulative');
 
 assertClose(
   (partial!.profit ?? 0) + (closed!.profit ?? 0),
@@ -115,6 +115,7 @@ const fxExitCost = estimateExitCosts({
   quoteToAccount: 1,
 }, fxProfile);
 
+console.log('DEBUG fx before close', nonCrypto.getOpenTrades());
 const fxClosed = nonCrypto.closeTrade(2, 1.01, 'MANUAL', openedAt + 1);
 assert(Boolean(fxClosed), 'FX close should return a trade');
 assertClose(
