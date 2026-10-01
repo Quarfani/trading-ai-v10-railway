@@ -392,6 +392,7 @@ export class RiskManager {
       qualityScore,
       currentEquity,
       tp,
+      livePrices,
     );
 
     if (volume <= 0) {
@@ -431,10 +432,9 @@ export class RiskManager {
     }
 
     reasons.push(
-      `Exposure ${(
-        (exposureCheck.snapshot?.resultingLeverage ?? 0) *
-        100
-      ).toFixed(2)}% of equity`,
+      `Gross leverage ${(
+        exposureCheck.snapshot?.resultingLeverage ?? 0
+      ).toFixed(3)}x`,
     );
 
     const heatCheck = this.heat.check(
