@@ -32,6 +32,7 @@ import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeries
 import { Logger } from '../utils/Logger';
 import { EvidenceSnapshotStore } from '../analytics/EvidenceSnapshotStore';
 import { evaluateEvidenceForPromotion } from '../consensus/EvidencePromotionPolicy';
+import { promotionPolicyForTarget } from '../consensus/StrategyLifecycle';
 import { COST_MODEL_VERSION, CostProfile } from '../market/CostModel';
 import { getCostProfile } from '../market/CostProfiles';
 
