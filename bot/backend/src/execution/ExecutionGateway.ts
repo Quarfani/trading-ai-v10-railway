@@ -324,7 +324,7 @@ export class ExecutionGateway {
   private async closeBrokerTrade(
     t: Trade,
     operationKey: string,
-  ): Promise<{ realizedProfit: number | null }> {
+  ): Promise<{ realizedProfit: number | null; brokerOrderId?: number }> {
     if (this.config.mode === 'mt5') {
       if (!t.ticket) throw new Error('Trade has no broker ticket');
 
@@ -358,6 +358,7 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        makeBinanceClientOrderId(operationKey),
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
@@ -367,7 +368,7 @@ export class ExecutionGateway {
             result.realizedProfit,
             result.realizedProfitCurrency,
           );
-      return { realizedProfit };
+      return { realizedProfit, brokerOrderId: result.orderId };
     }
 
     throw new Error('Paper close must use closeAtMarket');
@@ -376,7 +377,7 @@ export class ExecutionGateway {
   private settleLiveFullClose(
     t: Trade,
     executionId: string,
-    brokerResult: { realizedProfit: number | null },
+    brokerResult: { realizedProfit: number | null; brokerOrderId?: number },
     reason: string,
   ): number | null {
     if (!t.id) throw new Error('Live full close requires a persisted trade id');
@@ -413,7 +414,7 @@ export class ExecutionGateway {
       closedAt,
       reason,
       brokerResult,
-      t.ticket,
+      brokerResult.brokerOrderId ?? t.ticket,
     );
     if (!settled) {
       throw new Error(
@@ -752,6 +753,44 @@ export class ExecutionGateway {
   }
 
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
+
+  async reconcileBinanceFullClose(
+    operationKey: string,
+    symbol: string,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    realizedProfit: number;
+  }> {
+    if (this.config.mode !== 'binance') {
+      throw new Error('Binance full recovery requested outside Binance mode');
+    }
+    const recovered = await this.binance.reconcileFullCloseByClientOrderId(
+      symbol,
+      makeBinanceClientOrderId(operationKey),
+    );
+    if (!recovered.ok) {
+      throw new Error(
+        `Binance full-close recovery unavailable for operation=${operationKey}`,
+      );
+    }
+    const realizedProfit = await this.convertBrokerProfitToAccount(
+      recovered.realizedProfit,
+      recovered.realizedProfitCurrency,
+    );
+    if (!Number.isFinite(realizedProfit)) {
+      throw new Error(
+        `Binance full-close recovered PnL is invalid for operation=${operationKey}`,
+      );
+    }
+    return {
+      ok: true,
+      orderId: recovered.orderId,
+      executedQty: recovered.executedQty,
+      realizedProfit,
+    };
+  }
 
   async reconcileBinancePartialClose(
     operationKey: string,
