@@ -321,6 +321,46 @@ def test_fetch_closed_candles_rejects_unsafe_count():
         bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 5001)
 
 
+def test_close_endpoint_replays_idempotent_success(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "simulation"
+    bridge._sim_positions.clear()
+    bridge._sim_positions[900] = {
+        "symbol": "EURUSD.a",
+        "type": "BUY",
+        "volume": 1.0,
+        "price": 100.0,
+        "sl": 99.0,
+        "tp": 102.0,
+    }
+
+    calls = {"count": 0}
+
+    def fake_close(ticket, fraction=1.0):
+        calls["count"] += 1
+        return {
+            "ok": True,
+            "ticket": ticket,
+            "closed_volume": 1.0,
+            "remaining_volume": 0.0,
+            "profit": 1.0,
+        }
+
+    monkeypatch.setattr(bridge, "sim_close", fake_close)
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+
+    client = bridge.app.test_client()
+    payload = {"ticket": 900, "idempotency_key": "close-replay-1"}
+
+    first = client.post("/close", json=payload)
+    second = client.post("/close", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json() == second.get_json()
+    assert calls["count"] == 1
+
+
 def test_idempotency_cache_replays_success_and_unknown():
     bridge._idempotency_cache.clear()
 
