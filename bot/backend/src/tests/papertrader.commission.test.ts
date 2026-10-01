@@ -41,7 +41,7 @@ trader.restoreState([{
 }], []);
 
 const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL');
-assert(Boolean(partial), 'partial close should return a trade');
+console.log('DEBUG partial object', partial);\nassert(Boolean(partial), 'partial close should return a trade');
 const expectedPartial =
   (partialExit - entry) * 1
   - estimateExitCosts({
@@ -54,7 +54,7 @@ const expectedPartial =
 console.log('DEBUG partial', partial!.profit, expectedPartial);\nassertClose(partial!.profit ?? 0, expectedPartial);
 
 const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1);
-assert(Boolean(closed), 'final close should return a trade');
+console.log('DEBUG final object', closed);\nassert(Boolean(closed), 'final close should return a trade');
 const expectedRemaining =
   (finalExit - entry) * 1
   - estimateExitCosts({
