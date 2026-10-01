@@ -19,6 +19,7 @@ import {
 } from './types';
 import { DatabaseManager } from '../database/DatabaseManager';
 import { Logger }          from '../utils/Logger';
+import { StrategyDefinitionStore } from './StrategyDefinitionStore';
 
 const EMPTY_METRICS: StrategyMetrics = {
   win_rate: 0.50, sharpe_ratio: 0, max_drawdown: 0,
@@ -30,12 +31,14 @@ export class StrategyRegistry {
   private readonly logger   = new Logger('StrategyRegistry');
   private readonly entries  = new Map<string, RegistryEntry>();
   private readonly cfg:     ConsensusConfig;
+  private readonly definitionStore: StrategyDefinitionStore;
 
   constructor(
     private readonly db: DatabaseManager,
     cfg: Partial<ConsensusConfig> = {},
   ) {
     this.cfg = { ...DEFAULT_CONSENSUS_CONFIG, ...cfg, gate: { ...DEFAULT_CONSENSUS_CONFIG.gate, ...(cfg.gate ?? {}) } };
+    this.definitionStore = new StrategyDefinitionStore(db);
   }
 
   // ─── Registration ─────────────────────────────────────────────────────────
@@ -47,9 +50,11 @@ export class StrategyRegistry {
     }
 
     const persisted = this.loadMetrics(strategy.name);
+    const definition = this.definitionStore.getByName(strategy.name);
     const entry: RegistryEntry = {
       strategy,
-      enabled:     true,
+      enabled:     definition ? definition.enabled : true,
+      definition:  definition ?? undefined,
       metrics:     persisted ?? { ...EMPTY_METRICS },
       tradeWindow: [],
     };
@@ -158,6 +163,8 @@ export class StrategyRegistry {
       }));
   }
 
+  getDefinition(name: string) { return this.entries.get(name)?.definition ?? null; }
+
   getMetrics(name: string): StrategyMetrics | null {
     return this.entries.get(name)?.metrics ?? null;
   }
@@ -165,7 +172,7 @@ export class StrategyRegistry {
   getSnapshot(): Record<string, { enabled: boolean; metrics: StrategyMetrics }> {
     const snap: Record<string, { enabled: boolean; metrics: StrategyMetrics }> = {};
     for (const [name, entry] of this.entries) {
-      snap[name] = { enabled: entry.enabled, metrics: entry.metrics };
+      snap[name] = { enabled: entry.enabled, metrics: entry.metrics, definition: entry.definition };
     }
     return snap;
   }

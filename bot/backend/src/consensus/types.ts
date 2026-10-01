@@ -53,6 +53,7 @@ export interface StrategyContext {
 export interface RegistryEntry {
   strategy:    IStrategy;
   enabled:     boolean;
+  definition?: import('./strategyDefinition').StrategyDefinition;
   disabledAt?: number;
   disableReason?: string;
   metrics:     StrategyMetrics;

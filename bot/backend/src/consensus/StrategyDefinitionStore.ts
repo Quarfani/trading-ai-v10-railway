@@ -74,6 +74,13 @@ export class StrategyDefinitionStore {
     `).run(payload);
   }
 
+  getByName(name: string): StrategyDefinition | null {
+    const row = this.db.raw().prepare(
+      'SELECT * FROM strategy_definitions WHERE name=? ORDER BY updatedAt DESC LIMIT 1',
+    ).get(name) as DefinitionRow | undefined;
+    return row ? this.fromRow(row) : null;
+  }
+
   get(strategyId: string): StrategyDefinition | null {
     const row = this.db.raw().prepare(
       'SELECT * FROM strategy_definitions WHERE strategyId=?',
