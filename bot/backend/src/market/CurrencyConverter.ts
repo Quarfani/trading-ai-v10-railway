@@ -14,24 +14,27 @@ function normalizeCurrency(value: string): string {
 
 function readPrice(prices: Record<string, number>, symbol: string): number | null {
   const normalized = normalizeSymbol(symbol);
+  let suffixedMatch: number | null = null;
 
+  // Prefer an exact canonical pair over a broker-suffixed symbol. A price
+  // such as EURUSD.a may still be a valid fallback when EURUSD is absent, but
+  // it must not shadow an explicit conversion quote supplied separately.
   for (const [key, value] of Object.entries(prices)) {
+    if (!Number.isFinite(value) || value <= 0) continue;
+
     const keyNormalized = normalizeSymbol(key);
-    const sameCanonicalPair =
-      keyNormalized === normalized ||
-      keyNormalized.startsWith(normalized) &&
-      normalized.length === 6;
+    if (keyNormalized === normalized) return value;
 
     if (
-      sameCanonicalPair &&
-      Number.isFinite(value) &&
-      value > 0
+      suffixedMatch == null &&
+      normalized.length === 6 &&
+      keyNormalized.startsWith(normalized)
     ) {
-      return value;
+      suffixedMatch = value;
     }
   }
 
-  return null;
+  return suffixedMatch;
 }
 
 function resolveToUsd(currency: string, prices: Record<string, number>): number | null {

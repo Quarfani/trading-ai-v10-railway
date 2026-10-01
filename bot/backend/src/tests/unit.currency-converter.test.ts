@@ -25,4 +25,11 @@ assert(
   "broker-suffixed EURUSD must resolve as an inverse USD->EUR quote",
 );
 
-console.log("Result: 10 passed, 0 failed");
+assert(
+  Math.abs((resolveQuoteToAccount("USD", "EUR", {
+    "EURUSD.a": 1.0,
+    EURUSD: 1.25,
+  }) ?? 0) - 0.8) < 1e-12,
+  "explicit canonical FX quote must beat broker-suffixed symbol",
+);
+console.log("Result: 11 passed, 0 failed");
