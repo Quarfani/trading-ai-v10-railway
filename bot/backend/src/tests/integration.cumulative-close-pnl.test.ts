@@ -169,8 +169,49 @@ async function main() {
   assert(rollbackLedger?.status === "UNKNOWN", "gateway atomic failure must preserve UNKNOWN ledger state");
   rollbackDb.raw().close();
 
+  const partialRollbackDb = new DatabaseManager(":memory:");
+  await partialRollbackDb.initialize();
+  const partialRollbackGateway = new ExecutionGateway(config(), partialRollbackDb);
+  const partialRollbackTradeId = partialRollbackDb.insertTrade({
+    ticket: 8004, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 1,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "GATEWAY_PARTIAL_ATOMIC_ROLLBACK",
+  } as any);
+  partialRollbackDb.raw().prepare(
+    "CREATE TRIGGER fail_gateway_partial_ledger BEFORE UPDATE OF status ON execution_ledger " +
+    "WHEN NEW.status='EXECUTED' BEGIN SELECT RAISE(ABORT, 'forced gateway partial ledger failure'); END",
+  ).run();
+  (partialRollbackGateway as any).binance.closePartialPosition = async () => ({
+    ok: true,
+    orderId: 80004,
+    remainingVolume: 0.6,
+    realizedProfit: 100,
+    realizedProfitCurrency: "USDT",
+  });
+  const partialRollbackObject = {
+    id: partialRollbackTradeId, ticket: 8004, symbol: "BTCUSDT", timeframe: "H1",
+    side: "BUY", volume: 1, entry: 50_000, sl: 49_000, tp: 52_000,
+    status: "open", openedAt: Date.now(), source: "GATEWAY_PARTIAL_ATOMIC_ROLLBACK",
+    realizedProfit: 0,
+  } as any;
+  const partialRollbackResult = await partialRollbackGateway.closePartial(
+    partialRollbackObject, 0.4, 50_500, "PARTIAL",
+  );
+  assert(partialRollbackResult.ok === false, "partial close must fail when atomic ledger settlement fails");
+  const partialRollbackTrade = partialRollbackDb.raw().prepare(
+    "SELECT status, volume, realizedProfit FROM trades WHERE id=?",
+  ).get(partialRollbackTradeId) as any;
+  const partialRollbackLedger = partialRollbackDb.getLatestUnresolvedExecutionForTrade(
+    partialRollbackTradeId, ["PARTIAL_CLOSE"],
+  );
+  assert(partialRollbackTrade.status === "open", "partial atomic failure must keep trade open");
+  assert(partialRollbackTrade.volume === 1, "partial atomic failure must roll back volume");
+  assert(partialRollbackTrade.realizedProfit === 0, "partial atomic failure must roll back realized PnL");
+  assert(partialRollbackLedger?.status === "UNKNOWN", "partial atomic failure must preserve UNKNOWN ledger");
+  partialRollbackDb.raw().close();
+
   db.raw().close();
-  console.log("Result: 3 passed, 0 failed");
+  console.log("Result: 4 passed, 0 failed");
 }
 
 main().catch(error => {
