@@ -302,37 +302,37 @@ export function loadConfig(): SystemConfig {
   const evidencePromotion = {
     minSampleSize: validateRange(
       'EVIDENCE_MIN_SAMPLE_SIZE',
-      num('EVIDENCE_MIN_SAMPLE_SIZE', 1),
+      num('EVIDENCE_MIN_SAMPLE_SIZE', 100),
       1,
       1_000_000_000,
     ),
     minOutOfSampleTrades: validateRange(
       'EVIDENCE_MIN_OOS_TRADES',
-      num('EVIDENCE_MIN_OOS_TRADES', 1),
+      num('EVIDENCE_MIN_OOS_TRADES', 30),
       1,
       1_000_000_000,
     ),
     minOutOfSampleProfitFactor: validateRange(
       'EVIDENCE_MIN_OOS_PF',
-      num('EVIDENCE_MIN_OOS_PF', 1),
+      num('EVIDENCE_MIN_OOS_PF', 1.05),
       0,
       100,
     ),
     minWalkForwardStability: validateRange(
       'EVIDENCE_MIN_WFO_STABILITY',
-      num('EVIDENCE_MIN_WFO_STABILITY', 0),
+      num('EVIDENCE_MIN_WFO_STABILITY', 0.5),
       0,
       1,
     ),
     minParameterSensitivity: validateRange(
       'EVIDENCE_MIN_PARAMETER_SENSITIVITY',
-      num('EVIDENCE_MIN_PARAMETER_SENSITIVITY', 0),
+      num('EVIDENCE_MIN_PARAMETER_SENSITIVITY', 0.5),
       0,
       1,
     ),
     minRegimeCoverage: validateRange(
       'EVIDENCE_MIN_REGIME_COVERAGE',
-      num('EVIDENCE_MIN_REGIME_COVERAGE', 0),
+      num('EVIDENCE_MIN_REGIME_COVERAGE', 0.5),
       0,
       1,
     ),
