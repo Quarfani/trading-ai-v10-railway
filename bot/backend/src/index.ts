@@ -82,7 +82,13 @@ async function main() {
   (engine as any).tgCommands = tgCommands;
 
   // Scheduled monthly WFO
-  const scheduledWFO = new ScheduledWFO(config, db, engine['scanner'] as any, telegram);
+  const scheduledWFO = new ScheduledWFO(
+    config,
+    db,
+    engine['scanner'] as any,
+    telegram,
+    () => engine.isActive(),
+  );
   scheduledWFO.start();
   (engine as any).scheduledWFO = scheduledWFO;
 
