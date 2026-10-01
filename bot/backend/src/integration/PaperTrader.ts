@@ -195,7 +195,10 @@ export class PaperTrader {
   ): number {
     if (Number.isFinite(supplied) && supplied > 0) return supplied;
 
-    const market = this.resolveEconomics(symbol, timeframe);
+    const market = getMarketDefinition(symbol, timeframe);
+    if (!market) {
+      throw new Error(`Paper market definition missing for ${symbol}/${timeframe}`);
+    }
     const quote = market.quoteCurrency.trim().toUpperCase();
     const account = this.accountCurrency.trim().toUpperCase();
     if (quote === account) return 1;
