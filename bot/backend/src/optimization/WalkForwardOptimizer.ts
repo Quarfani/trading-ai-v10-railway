@@ -413,6 +413,10 @@ export class WalkForwardOptimizer {
       pnl: w.testMetrics.totalReturn,
       profitFactor: w.testMetrics.profitFactor,
       totalCost: w.testMetrics.totalCost,
+      parameterSensitivity: w.trainMetrics.parameterSensitivity,
+      regimeCoverage: w.testMetrics.regimeCoverage,
+      datasetQuality: w.testMetrics.dataQualityScore,
+      sampleSize: w.testMetrics.totalTrades > 0 ? w.testMetrics.totalTrades : 0,
       leakagePassed: w.leakagePassed,
     }));
     const evidence = summarizeWfoEvidence(evidenceMetrics);
