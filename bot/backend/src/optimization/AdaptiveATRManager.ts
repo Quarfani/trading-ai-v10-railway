@@ -44,7 +44,7 @@ export class AdaptiveATRManager {
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.updatedAt < 3_600_000) return cached.params; // 1h cache
 
-    const params = this.compute(symbol, candles);
+    const params = this.compute(symbol, candles, timeframe);
     const previous = this.cache.get(key)?.params ?? null;
     if (previous && (Math.abs(params.atrMult - previous.atrMult) > 0.8 || Math.abs(params.tpRatio - previous.tpRatio) > 1.0)) {
       this.logger.warn(`[${symbol}] Adaptive change exceeded bounded delta; retaining prior params`);
@@ -77,8 +77,9 @@ export class AdaptiveATRManager {
     return params;
   }
 
-  private compute(symbol: string, candles: Candle[]): AdaptiveParams {
+  private compute(symbol: string, candles: Candle[], timeframe: Timeframe): AdaptiveParams {
     const spec = getBaseSymbolSpec(symbol);
+    const wfo = this.loadWfoBaseline(symbol, timeframe);
 
     // ── 1. Volatility ratio ───────────────────────────────────────────
     const currentATR = calculateATR(candles.slice(-20), 14);
@@ -89,9 +90,10 @@ export class AdaptiveATRManager {
     const slHitRate = this.calcSlHitRate(symbol);
 
     // ── 3. Start from base params ─────────────────────────────────────
-    let atrMult = spec.atrMult;
-    let tpRatio = spec.tpRatio;
+    let atrMult = wfo?.atrMult ?? spec.atrMult;
+    let tpRatio = wfo?.tpRatio ?? spec.tpRatio;
     const reasons: string[] = [];
+    if (wfo) reasons.push('WFO baseline applied');
 
     // Adjust for volatility
     if (volRatio > 1.5) {
@@ -123,6 +125,46 @@ export class AdaptiveATRManager {
       atrMult, tpRatio, volRatio, slHitRate,
       reason: reasons.join(' | ') || 'Base params (stable)',
     };
+  }
+
+  private loadWfoBaseline(
+    symbol: string,
+    timeframe: Timeframe,
+  ): { atrMult: number; tpRatio: number } | null {
+    try {
+      const raw = this.db.getSetting(`wfo_params_${symbol.toUpperCase()}_${timeframe}`);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw) as {
+        atrMult?: number;
+        tpRatio?: number;
+        wfoValid?: boolean;
+        savedAt?: number;
+        updatedAt?: number;
+      };
+
+      if (parsed.wfoValid !== true) return null;
+      const updatedAt = parsed.updatedAt ?? parsed.savedAt ?? 0;
+      if (!(updatedAt > 0) || Date.now() - updatedAt > 30 * 24 * 3_600_000) {
+        return null;
+      }
+
+      if (
+        !Number.isFinite(parsed.atrMult) ||
+        !Number.isFinite(parsed.tpRatio) ||
+        (parsed.atrMult as number) <= 0 ||
+        (parsed.tpRatio as number) <= 0
+      ) {
+        return null;
+      }
+
+      return {
+        atrMult: parsed.atrMult as number,
+        tpRatio: parsed.tpRatio as number,
+      };
+    } catch {
+      return null;
+    }
   }
 
   private calcSlHitRate(symbol: string): number {
