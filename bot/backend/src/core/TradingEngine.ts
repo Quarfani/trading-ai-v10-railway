@@ -1297,12 +1297,28 @@ export class TradingEngine extends EventEmitter {
       );
 
     // ── Re-apply absolute risk cap ─────────────────────────────────────
+    const executableEntryPrice =
+      adjustedSignal.side === 'BUY'
+        ? ticker?.ask
+        : ticker?.bid;
+
+    if (
+      executableEntryPrice == null ||
+      !Number.isFinite(executableEntryPrice) ||
+      executableEntryPrice <= 0
+    ) {
+      this.logger.info(
+        '[PIPELINE_BLOCK] ' + symbol + '/' + tf + ' stage=EXECUTABLE_PRICE',
+      );
+      return;
+    }
+
     const volume =
       this.risk
         .getSizer()
         .capToAbsoluteRisk(
           symbol,
-          adjustedSignal.price,
+          executableEntryPrice,
           adjustedSignal.sl,
           adjustedVolume,
           equity,

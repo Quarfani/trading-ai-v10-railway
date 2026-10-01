@@ -411,7 +411,7 @@ export class RiskManager {
     const volume = this.sizer.size(
       signal.symbol,
       signal.side,
-      price,
+      execPrice,
       sl,
       qualityScore,
       currentEquity,
@@ -441,7 +441,7 @@ export class RiskManager {
       {
         symbol: signal.symbol,
         volume,
-        entry: price,
+        entry: execPrice,
         timeframe: signal.timeframe ?? 'H1',
       },
       currentEquity,
@@ -467,7 +467,7 @@ export class RiskManager {
     const heatCheck = this.heat.check(
       openTrades,
       volume,
-      price,
+      execPrice,
       sl,
       signal.symbol,
       currentEquity,
