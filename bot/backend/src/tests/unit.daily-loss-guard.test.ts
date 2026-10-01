@@ -84,8 +84,11 @@ const blockedDb = {
 } as any;
 const blockedGuard = new DailyLossGuard(anchorConfig, blockedDb, telegram);
 assert(await blockedGuard.canTrade({}, 20_000), "threshold fixture should establish its own daily anchor");
-blockedDb.getTodayStats = () => ({ pnl: -2100 });
-assert(!(await blockedGuard.canTrade({}, 20_000)), "daily loss should block once realized loss breaches the 10% anchor");
+blockedDb.getTodayStats = () => ({ pnl: 0 });
+assert(
+  !(await blockedGuard.canTrade({}, 17_900)),
+  "daily loss should block once live equity falls more than 10% below the daily anchor",
+);
 
 
 clearBrokerContracts();
