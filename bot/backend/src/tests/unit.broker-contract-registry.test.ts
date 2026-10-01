@@ -60,7 +60,45 @@ registry.register({ ...verified, symbol:'TEMP_OIL', expiresAt:Date.now() + 10 })
 await new Promise(resolve => setTimeout(resolve, 25));
 assert(registry.get('TEMP_OIL') === null, 'expired contract must be removed on read');
 
-console.log('Result: 6 passed, 0 failed');
+const now = Date.now();
+registry.clear();
+
+registry.register({
+  ...verified,
+  symbol: 'EURUSD.a',
+  source: 'mt5',
+  contractSize: 100000,
+  observedAt: now,
+});
+registry.register({
+  ...verified,
+  symbol: 'EURUSD.a',
+  source: 'mt5',
+  contractSize: 1,
+  observedAt: now - 1000,
+});
+assert(
+  registry.getMarketDefinition('EURUSD.a')?.economics.contractSize === 100000,
+  'older same-source broker metadata must not overwrite newer economics',
+);
+
+let chronologyRejected = false;
+try {
+  registry.register({
+    ...verified,
+    symbol: 'BADCHRONO',
+    observedAt: now + 200,
+    expiresAt: now + 100,
+  });
+} catch {
+  chronologyRejected = true;
+}
+assert(
+  chronologyRejected,
+  'broker contract expiry must be later than observedAt',
+);
+
+console.log('Result: 9 passed, 0 failed');
 }
 
 main().catch(error => {

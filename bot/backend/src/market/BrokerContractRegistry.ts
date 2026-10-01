@@ -77,8 +77,16 @@ export function validateBrokerContract(
     errors.push('maxVolume must be >= minVolume');
   }
 
-  if (definition.expiresAt != null && definition.expiresAt <= now) {
-    errors.push('contract definition is expired');
+  if (definition.expiresAt != null) {
+    if (definition.expiresAt <= now) {
+      errors.push('contract definition is expired');
+    }
+    if (
+      Number.isFinite(definition.observedAt) &&
+      definition.expiresAt <= definition.observedAt
+    ) {
+      errors.push('expiresAt must be later than observedAt');
+    }
   }
 
   if (!definition.verified) {
@@ -141,11 +149,7 @@ export class BrokerContractRegistry {
     }
 
     const existing = this.definitions.get(normalized);
-    if (
-      existing &&
-      existing.source !== definition.source &&
-      existing.observedAt >= definition.observedAt
-    ) {
+    if (existing && existing.observedAt >= definition.observedAt) {
       return;
     }
 
