@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { DatabaseManager } from '../database/DatabaseManager';
 import { StartupReconciler } from '../integration/StartupReconciler';
 import { TelegramBot } from '../notifications/TelegramBot';
@@ -81,6 +82,61 @@ async function main() {
   try { await new StartupReconciler(cfg, noTicket, telegram).run(); } catch { ticketBlocked = true; }
   assert(ticketBlocked, 'open paper trade without ticket must block startup');
 
+  const mt5Cfg = {
+    ...config(),
+    mode: 'mt5',
+    dataSource: 'mt5',
+    symbols: ['EURUSD'],
+    mt5: { login: 1, password: 'x', server: 'srv', bridgeUrl: 'http://mt5.test', bridgeApiKey: 'secret' },
+  } as SystemConfig;
+
+  const originalAxiosGet = axios.get;
+  try {
+    const mt5CloseDb = await newDb();
+    const tradeId = mt5CloseDb.insertTrade({
+      ticket: 77, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5CloseDb.createExecutionLedger({
+      executionId: 'mt5-close-unknown', operationKey: 'mt5-close-op',
+      action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+      request: { tradeId, exitPrice: 1.105, reason: 'MANUAL' },
+    });
+
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) return { data: { ok: true, positions: [] } };
+      if (url.endsWith('/history')) {
+        return {
+          data: {
+            closed: true, remaining_volume: 0, close_price: 1.105,
+            net_profit: 12.5, close_reason: 'manual',
+          },
+        };
+      }
+      throw new Error('unexpected URL');
+    };
+
+    await new StartupReconciler(mt5Cfg, mt5CloseDb, new TelegramBot(mt5Cfg)).run();
+    const resolvedLedger = mt5CloseDb.getExecutionByOperationKey('mt5-close-op');
+    assert(resolvedLedger.status === 'EXECUTED', 'authoritative MT5 close must clear UNKNOWN before startup completes');
+    assert(mt5CloseDb.getOpenTrades().length === 0, 'authoritative MT5 close must close the internal trade before startup completes');
+    mt5CloseDb.raw().close();
+
+    const mt5OpenDb = await newDb();
+    mt5OpenDb.createExecutionLedger({
+      executionId: 'mt5-open-unknown', operationKey: 'mt5-open-op',
+      action: 'OPEN', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+    });
+    let mt5OpenBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5OpenDb, new TelegramBot(mt5Cfg)).run();
+    } catch { mt5OpenBlocked = true; }
+    assert(mt5OpenBlocked, 'ambiguous MT5 OPEN must remain a startup blocker');
+    mt5OpenDb.raw().close();
+  } finally {
+    axios.get = originalAxiosGet;
+  }
+
   const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
   const originalPing = (BinanceExecutor.prototype as any).ping;
   const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
@@ -116,7 +172,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 9 passed, 0 failed');
+  console.log('Result: 11 passed, 0 failed');
 }
 
 main().catch(error => {
