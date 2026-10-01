@@ -10,6 +10,7 @@ const EUR = priceCandles([1.10, 1.11, 1.12, 1.11, 1.13, 1.14, 1.13, 1.15, 1.16, 
 const GBP = priceCandles([1.25, 1.26, 1.27, 1.26, 1.28, 1.29, 1.28, 1.30, 1.31, 1.30, 1.32, 1.33]);
 // Uncorrelated
 const JPY = priceCandles([110, 109, 111, 108, 112, 107, 113, 106, 114, 105, 115, 104]);
+const INVERSE = priceCandles([2.00,1.99,1.98,1.99,1.97,1.96,1.97,1.95,1.94,1.95,1.93,1.92]);
 
 const trade = (symbol: string): Trade => ({
   id: 1, symbol, side: 'BUY', volume: 0.1, entry: 1.0, sl: 0.99, tp: 1.01,
@@ -29,6 +30,19 @@ describe('CorrelationFilter', () => {
     const f = new CorrelationFilter();
     const r = f.isCorrelated('EURUSD', 'BUY', [trade('GBPUSD')]);
     expect(r.blocked).toBe(true); // static map blocks EURUSD+GBPUSD
+  });
+
+  test('blocks opposite directions when price correlation is strongly negative', () => {
+    const sellTrade = { ...trade('GBPUSD'), side: 'SELL' as const };
+    const f = new CorrelationFilter();
+    const r = f.isCorrelated(
+      'EURUSD',
+      'BUY',
+      [sellTrade],
+      { EURUSD: EUR, GBPUSD: INVERSE },
+    );
+    expect(r.blocked).toBe(true);
+    expect(r.correlation).toBeLessThan(-0.8);
   });
 
   test('allows different directions even if correlated', () => {
