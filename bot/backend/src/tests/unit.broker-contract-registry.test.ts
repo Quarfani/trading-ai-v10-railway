@@ -53,8 +53,8 @@ assert(
   'expired broker contract must fail closed on read',
 );
 
-registry.register({ ...verified, symbol:'TEMP_OIL', expiresAt:Date.now() + 1 });
-while (registry.get('TEMP_OIL')?.expiresAt != null) {}
+registry.register({ ...verified, symbol:'TEMP_OIL', expiresAt:Date.now() + 10 });
+await new Promise(resolve => setTimeout(resolve, 25));
 assert(registry.get('TEMP_OIL') === null, 'expired contract must be removed on read');
 
 console.log('Result: 6 passed, 0 failed');
