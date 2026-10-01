@@ -184,7 +184,12 @@ export class AdaptiveATRManager {
   }
 
   invalidate(symbol: string) {
-    this.cache.delete(symbol.toUpperCase());
+    const normalized = symbol.toUpperCase();
+    for (const key of this.cache.keys()) {
+      if (key === normalized || key.startsWith(normalized + '_')) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   getSummary(): Record<string, AdaptiveParams> {
