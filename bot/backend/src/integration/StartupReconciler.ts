@@ -263,10 +263,18 @@ export class StartupReconciler {
       if (!t.ticket) throw new Error(`Open DB trade id=${t.id} has no broker ticket`);
       const live = byTicket.get(Number(t.ticket));
       if (!live) {
+        const pendingAny = this.db.getLatestUnresolvedExecutionForTrade(
+          t.id!,
+        );
         const pendingClose = this.db.getLatestUnresolvedExecutionForTrade(
           t.id!,
           ['CLOSE', 'CLOSE_AT_MARKET'],
         );
+        if (pendingAny && !pendingClose) {
+          throw new Error(
+            `MT5 position missing while unresolved execution=${pendingAny.executionId} is not an attributable close; manual reconciliation is required`,
+          );
+        }
         const hist = await this.getMT5HistoryEntry(Number(t.ticket));
         if (!hist) throw new Error(`MT5 position missing and no authoritative close history for ticket=${t.ticket}`);
 
