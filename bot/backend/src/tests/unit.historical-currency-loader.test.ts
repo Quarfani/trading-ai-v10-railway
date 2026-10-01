@@ -23,7 +23,7 @@ async function main() {
     'direct pair should be preferred',
   );
   assert(
-    resolveHistoricalQuoteToAccount('GBP', 'USD', 2500, direct) === 1.25,
+    resolveHistoricalQuoteToAccount('GBP', 'USD', 86_402_000, direct) === 1.25,
     'loaded direct series must resolve historically',
   );
 
@@ -37,7 +37,7 @@ async function main() {
   );
 
   assert(
-    resolveHistoricalQuoteToAccount('JPY', 'USD', 1000, inverse) === 1 / 150,
+    resolveHistoricalQuoteToAccount('JPY', 'USD', 86_401_000, inverse) === 1 / 150,
     'inverse pair should be inverted',
   );
 
