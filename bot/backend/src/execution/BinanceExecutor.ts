@@ -557,11 +557,28 @@ export class BinanceExecutor {
       if (this.isFutures) {
         const pos = await this.getPosition(symbol);
         if (!pos || pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+          if (clientOrderId) {
+            const recovered = await this.reconcileFuturesCloseByClientOrderId(
+              symbol,
+              clientOrderId,
+            );
+            if (
+              recovered.found &&
+              recovered.status === 'FILLED' &&
+              recovered.realizedProfit != null &&
+              recovered.realizedProfitCurrency
+            ) {
+              return {
+                ok: true,
+                realizedProfit: recovered.realizedProfit,
+                realizedProfitCurrency: recovered.realizedProfitCurrency,
+              };
+            }
+          }
+
+          throw new Error(
+            `Binance position is absent before close for ${symbol}; authoritative close result is unresolved`,
+          );
         }
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
