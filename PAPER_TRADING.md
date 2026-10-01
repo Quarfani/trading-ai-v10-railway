@@ -12,4 +12,4 @@ Paper mode shares the main signal/risk/execution/reconciliation classes, but no 
 
 ## Limitation
 
-Paper and backtest cost modelling are still separate implementations. Until a single shared cost engine covers commission, spread, slippage, maker/taker, funding, market impact and partial fills, paper economics are not equivalent to production economics.
+Paper execution and backtesting now share the repository `CostModel`/`CostProfiles` accounting for commission, spread, market impact and holding cost, including partial fills. This establishes model-level economic consistency, but does not prove equivalence with live broker fees, fills, funding, latency or execution quality.
