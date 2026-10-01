@@ -22,7 +22,7 @@ export class PaperTrader {
   }
 
   placeOrder(signal: Signal, volume: number, timeframe: Timeframe='H1'): Trade {
-    const spec=getSymbolSpec(signal.symbol);
+    const spec=getSymbolSpec(signal.symbol, timeframe);
     if (!(volume>0) || ![signal.price,signal.sl,signal.tp].every(Number.isFinite)) throw new Error(`Invalid paper order ${signal.symbol}`);
     const profile=getCostProfile(signal.symbol);
     const slippage=Math.random()*spec.pip*0.3*(signal.side==='BUY'?1:-1);
@@ -44,7 +44,7 @@ export class PaperTrader {
     const openPartialRealized=openRows.reduce((s,t)=>s+Number(t.realizedProfit??0),0);
     this.balance=this.initialBal+realized+openPartialRealized;
     for(const row of openRows){
-      const spec=getSymbolSpec(row.symbol);
+      const spec=getSymbolSpec(row.symbol, row.timeframe ?? 'H1');
       const profile=getCostProfile(row.symbol);
       const entryCosts=estimateEntryCosts({price:row.entry,volume:row.volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
       this.balance-=entryCosts;
@@ -79,7 +79,7 @@ export class PaperTrader {
 
   partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL'): {ok:boolean;profit:number;remainingVolume:number}{
     const t=this.openTrades.get(ticket); if(!t || !(volume>0) || volume>=t.volume) return {ok:false,profit:0,remainingVolume:t?.volume??0};
-    const spec=getSymbolSpec(t.symbol);
+    const spec=getSymbolSpec(t.symbol, t.timeframe ?? 'H1');
     const closedVolume=Math.min(volume,t.volume);
     const profile=getCostProfile(t.symbol);
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:spec.contractSize,quoteToAccount:1,side:t.side});
