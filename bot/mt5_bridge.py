@@ -454,13 +454,22 @@ def account():
         return err("Unauthorized", 401)
 
     if BRIDGE_MODE == 'simulation':
-        return jsonify({"equity": 10000.0, "balance": 10000.0,
-                        "margin": 0.0, "free_margin": 10000.0, "margin_level": 0.0})
+        return jsonify({
+            "equity": 10000.0,
+            "balance": 10000.0,
+            "margin": 0.0,
+            "free_margin": 10000.0,
+            "margin_level": 0.0,
+        })
+
+    with _lock:
         if not ensure_connected():
             return err("MT5 not connected", 503)
+
         info = mt5.account_info()
         if not info:
             return err(f"Account info failed: {mt5.last_error()}")
+
         return jsonify({
             "equity":       info.equity,
             "balance":      info.balance,
@@ -468,7 +477,7 @@ def account():
             "free_margin":  info.margin_free,
             "margin_level": info.margin_level,
             "currency":     info.currency,
-            "server":        info.server,
+            "server":       info.server,
             "login":        info.login,
             "position_mode": account_position_mode(info, mt5),
         })
