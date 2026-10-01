@@ -112,9 +112,29 @@ export class StartupReconciler {
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
+
+    // Futures exposes position identity directly. Spot does not: an asset
+    // balance has no built-in link to a bot ticket and may include holdings
+    // that predate the bot. Never pretend that a raw Spot balance proves which
+    // trade owns the units.
+    if (!this.config.binance.futures) {
+      const openTrades = this.db.getOpenTrades();
+      if (openTrades.length > 0) {
+        throw new Error(
+          'Binance Spot restart reconciliation is ambiguous for open bot trades: ' +
+          'Spot balances do not preserve per-trade ownership. Manual reconciliation is required.',
+        );
+      }
+
+      const balances = await exec.getAllSpotBalancesForConfiguredSymbols?.();
+      return balances ?? [];
+    }
+
     const positions = await exec.getAllPositions();
     const openTrades = this.db.getOpenTrades();
-    const bySymbol = new Map<string, any>();
+    const bySymbol = new Map<string, any>(
+      positions.map(p => [p.symbol, p]),
+    );
     for (const p of positions) {
       if (Math.abs(p.positionAmt) > 0) bySymbol.set(p.symbol, p);
     }
