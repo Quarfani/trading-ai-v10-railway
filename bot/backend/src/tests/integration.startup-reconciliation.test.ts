@@ -495,8 +495,8 @@ async function main() {
   } as any;
   const binanceRecover = new StartupReconciler(binanceCfg, binanceRecoverDb, new TelegramBot(binanceCfg));
   assert(
-    makeBinanceClientOrderId('binance-close-unknown-1').startsWith('ta_'),
-    'Binance recovery must derive the deterministic client order id from the ledger execution id',
+    makeBinanceClientOrderId('binance-close-op-1').startsWith('ta_'),
+    'Binance recovery must derive the deterministic client order id from the ledger operation key',
   );
   await (binanceRecover as any).resolveAuthoritativeBinanceCloseLedgers(fakeFilledExecutor);
   assert(
