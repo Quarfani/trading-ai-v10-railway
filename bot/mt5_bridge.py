@@ -414,11 +414,37 @@ def trade():
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Trade failed: retcode={result.retcode} comment={result.comment}")
 
-        log.info(f"[LIVE] {side} {volume} {symbol} ticket={result.order} @ {result.price}")
+        # Resolve the actual position ticket from the executed deal. MT5
+        # distinguishes order, deal and position identifiers; downstream
+        # close/modify operations require the position ticket.
+        position_ticket = 0
+        deal_ticket = int(getattr(result, "deal", 0) or 0)
+        if deal_ticket:
+            deals = mt5.history_deals_get(ticket=deal_ticket)
+            if deals:
+                position_ticket = int(getattr(deals[-1], "position_id", 0) or 0)
+
+        if not position_ticket:
+            orders = mt5.history_orders_get(ticket=int(result.order))
+            if orders:
+                position_ticket = int(getattr(orders[-1], "position_id", 0) or 0)
+
+        if not position_ticket:
+            return err(
+                f"Trade executed but position identity could not be resolved: order={result.order} deal={deal_ticket}",
+                503,
+            )
+
+        log.info(
+            f"[LIVE] {side} {volume} {symbol} order={result.order} deal={deal_ticket} "
+            f"position={position_ticket} @ {result.price}"
+        )
         return jsonify({
-            "ok":     True,
-            "ticket": result.order,
-            "price":  result.price,
+            "ok": True,
+            "ticket": position_ticket,
+            "order_ticket": int(result.order),
+            "deal_ticket": deal_ticket,
+            "price": result.price,
             "volume": volume,
             "symbol": symbol,
             "retcode": result.retcode,
