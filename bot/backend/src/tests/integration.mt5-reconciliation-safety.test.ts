@@ -44,6 +44,7 @@ async function main() {
         close_price: 1.1000,
         net_profit: 25,
         close_reason: "manual",
+        close_time_msc: Date.now(),
       },
     });
     const unresolved = await (reconciler as any).getMT5History(77);
@@ -56,6 +57,7 @@ async function main() {
         close_price: 1.105,
         net_profit: 4.25,
         close_reason: "manual",
+        close_time_msc: Date.now(),
       },
     });
     const partialHistory = await (reconciler as any).getMT5History(77, false);
@@ -69,6 +71,7 @@ async function main() {
         close_price: 1.1000,
         net_profit: 25,
         close_reason: "sl",
+        close_time_msc: Date.now(),
       },
     });
     const resolved = await (reconciler as any).getMT5History(77);
@@ -105,6 +108,7 @@ async function main() {
           close_price: 1.11,
           net_profit: 12.5,
           close_reason: "manual",
+        close_time_msc: Date.now(),
         },
       };
     };
