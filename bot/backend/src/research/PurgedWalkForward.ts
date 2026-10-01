@@ -164,10 +164,11 @@ export function evaluatePurgedWalkForward<T, R>(
     foldIndex: number,
   ) => R,
 ): PurgedWalkForwardResult<T, R> {
-  const result = buildPurgedWalkForwardFolds(
-    observations,
-    options,
-  );
+  const planned = buildPurgedWalkForwardFolds(observations, options);
+  const result: PurgedWalkForwardResult<T, R> = {
+    ...planned,
+    folds: planned.folds as WfoFold<T, R>[],
+  };
 
   if (!result.passed) return result;
 
