@@ -235,6 +235,52 @@ async function main() {
   assert(JSON.parse(resolvedRow.resultJson).profit === 12.5, "resolved ledger must preserve authoritative result");
   resolveDb.raw().close();
 
+  const atomicDb = new DatabaseManager(":memory:");
+  await atomicDb.initialize();
+  const atomicTradeId = atomicDb.insertTrade({
+    ticket: 990, symbol: "EURUSD.a", timeframe: "H1", side: "BUY", volume: 1.0,
+    entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(), source: "ATOMIC_TEST",
+  } as any);
+  atomicDb.createExecutionLedger({
+    executionId: "atomic-fail",
+    operationKey: "atomic-fail-op",
+    action: "PARTIAL_CLOSE",
+    status: "UNKNOWN",
+    symbol: "EURUSD.a",
+    side: "BUY",
+    volume: 0.4,
+    request: { tradeId: atomicTradeId, volume: 0.4 },
+  });
+  atomicDb.raw().exec(`
+    CREATE TRIGGER fail_atomic_ledger
+    BEFORE UPDATE OF status ON execution_ledger
+    WHEN NEW.executionId='atomic-fail' AND NEW.status='EXECUTED'
+    BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END;
+  `);
+  let atomicFailed = false;
+  try {
+    atomicDb.resolveReconciledPartialClose(
+      atomicTradeId,
+      "atomic-fail",
+      0.6,
+      4.0,
+      { broker: "mt5", ticket: 990, profit: 4.0 },
+      123,
+    );
+  } catch {
+    atomicFailed = true;
+  }
+  assert(atomicFailed, "forced partial ledger failure must abort the atomic transaction");
+  assert(
+    atomicDb.getOpenTrades()[0].volume === 1.0,
+    "atomic partial recovery failure must roll back the trade volume update",
+  );
+  assert(
+    atomicDb.getExecutionByOperationKey("atomic-fail-op").status === "UNKNOWN",
+    "atomic partial recovery failure must preserve UNKNOWN ledger state",
+  );
+  atomicDb.raw().close();
+
   const corruptDb = new DatabaseManager(":memory:");
   await corruptDb.initialize();
 
@@ -319,7 +365,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 22 passed, 0 failed");
+  console.log("Result: 25 passed, 0 failed");
 }
 
 main().catch(error => {
