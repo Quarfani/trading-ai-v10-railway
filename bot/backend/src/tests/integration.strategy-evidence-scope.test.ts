@@ -152,7 +152,10 @@ async function main() {
     ...mcBase,
     strategyId: "mc.missing",
     name: "MC Missing",
-    evidence: { ...base.evidence! },
+    evidence: {
+      ...base.evidence!,
+      monteCarloStress: undefined,
+    },
   };
   mcStore.save(mcMissing);
   snapshots.save({
