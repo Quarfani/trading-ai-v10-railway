@@ -16,14 +16,17 @@ export class PaperTrader {
   private nextTicket = 1;
   private equityCurve: Array<{time:number; equity:number}> = [];
 
-  constructor(initialBalance=10_000) {
+  constructor(
+    initialBalance=10_000,
+    private readonly accountCurrency='USD',
+  ) {
     this.balance=initialBalance; this.initialBal=initialBalance;
     this.equityCurve=[{time:Date.now(),equity:initialBalance}];
   }
 
-  placeOrder(signal: Signal, volume: number, timeframe: Timeframe='H1', quoteToAccount=1): Trade {
+  placeOrder(signal: Signal, volume: number, timeframe: Timeframe='H1', quoteToAccount=Number.NaN): Trade {
     const economics=this.resolveEconomics(signal.symbol, timeframe);
-    if (!(quoteToAccount>0) || !Number.isFinite(quoteToAccount)) throw new Error(`Invalid paper FX conversion ${signal.symbol}`);
+    quoteToAccount=this.resolveQuoteToAccount(signal.symbol, timeframe, quoteToAccount);
     if (!(volume>0) || ![signal.price,signal.sl,signal.tp].every(Number.isFinite)) throw new Error(`Invalid paper order ${signal.symbol}`);
     const profile=getCostProfile(signal.symbol);
     const slippage=Math.random()*economics.priceIncrement*0.3*(signal.side==='BUY'?1:-1);
@@ -95,10 +98,14 @@ export class PaperTrader {
     return true;
   }
 
-  partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL',quoteToAccount=1,at=Date.now()): {ok:boolean;profit:number;remainingVolume:number}{
+  partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL',quoteToAccount=Number.NaN,at=Date.now()): {ok:boolean;profit:number;remainingVolume:number}{
     const t=this.openTrades.get(ticket); if(!t || !(volume>0) || volume>=t.volume) return {ok:false,profit:0,remainingVolume:t?.volume??0};
     const economics=this.resolveEconomics(t.symbol, t.timeframe ?? 'H1');
-    if (!(quoteToAccount>0) || !Number.isFinite(quoteToAccount)) return {ok:false,profit:0,remainingVolume:t.volume};
+    try {
+      quoteToAccount=this.resolveQuoteToAccount(t.symbol, t.timeframe ?? 'H1', quoteToAccount);
+    } catch {
+      return {ok:false,profit:0,remainingVolume:t.volume};
+    }
     const closedVolume=Math.min(volume,t.volume);
     const profile=getCostProfile(t.symbol);
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount,side:t.side});
@@ -120,10 +127,14 @@ export class PaperTrader {
     return {ok:true,profit,remainingVolume:t.volume};
   }
 
-  closeTrade(ticket:number,exitPrice:number,reason:'TP'|'SL'|'TIMEOUT'|'MANUAL'='MANUAL',at=Date.now(),quoteToAccount=1):{ok:boolean;profit:number}{
+  closeTrade(ticket:number,exitPrice:number,reason:'TP'|'SL'|'TIMEOUT'|'MANUAL'='MANUAL',at=Date.now(),quoteToAccount=Number.NaN):{ok:boolean;profit:number}{
     const t=this.openTrades.get(ticket); if(!t) return {ok:false,profit:0};
     const economics=this.resolveEconomics(t.symbol, t.timeframe ?? 'H1');
-    if (!(quoteToAccount>0) || !Number.isFinite(quoteToAccount)) return {ok:false,profit:0};
+    try {
+      quoteToAccount=this.resolveQuoteToAccount(t.symbol, t.timeframe ?? 'H1', quoteToAccount);
+    } catch {
+      return {ok:false,profit:0};
+    }
     let fill=exitPrice;
     if(reason==='SL'){const slip=Math.random()*0.5;fill+=t.side==='BUY'?-slip*economics.priceIncrement:slip*economics.priceIncrement;}
     const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
@@ -157,7 +168,7 @@ export class PaperTrader {
     return {ok:true,profit};
   }
 
-  updateTrades(candle:Candle){
+  updateTrades(candle:Candle, quoteToAccount=Number.NaN){
     for(const t of Array.from(this.openTrades.values())){
       const hitSL=t.side==='BUY'?candle.low<=t.sl:candle.high>=t.sl;
       const hitTP=t.side==='BUY'?candle.high>=t.tp:candle.low<=t.tp;
@@ -167,6 +178,23 @@ export class PaperTrader {
       const price=reason==='SL'?t.sl:reason==='TP'?t.tp:candle.close;
       this.closeTrade(t.ticket,price,reason,candle.time);
     }
+  }
+
+  private resolveQuoteToAccount(
+    symbol:string,
+    timeframe:Timeframe,
+    supplied:number,
+  ): number {
+    if (Number.isFinite(supplied) && supplied > 0) return supplied;
+
+    const market = this.resolveEconomics(symbol, timeframe);
+    const quote = market.quoteCurrency.trim().toUpperCase();
+    const account = this.accountCurrency.trim().toUpperCase();
+    if (quote === account) return 1;
+
+    throw new Error(
+      `Paper FX conversion is required for ${quote}->${account} on ${symbol}`,
+    );
   }
 
   getBalance(){return this.balance;}
