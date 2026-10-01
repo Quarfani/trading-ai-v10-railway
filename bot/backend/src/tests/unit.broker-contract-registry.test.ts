@@ -4,6 +4,7 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+async function main() {
 const registry = new BrokerContractRegistry();
 
 const unverified = {
@@ -58,3 +59,9 @@ await new Promise(resolve => setTimeout(resolve, 25));
 assert(registry.get('TEMP_OIL') === null, 'expired contract must be removed on read');
 
 console.log('Result: 6 passed, 0 failed');
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
