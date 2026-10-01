@@ -158,7 +158,19 @@ export class BrokerContractRegistry {
 
   get(symbol: string): BrokerContractDefinition | null {
     const normalized = symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    return this.definitions.get(normalized) ?? null;
+    const definition = this.definitions.get(normalized);
+    if (!definition) return null;
+
+    if (!definition.verified) return null;
+    if (
+      definition.expiresAt != null &&
+      definition.expiresAt <= Date.now()
+    ) {
+      this.definitions.delete(normalized);
+      return null;
+    }
+
+    return definition;
   }
 
   getMarketDefinition(symbol: string): MarketDefinition | null {
