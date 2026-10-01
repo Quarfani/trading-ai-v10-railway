@@ -545,6 +545,7 @@ const isTestnet=config.binance.env==='testnet';
     clientOrderId?: string,
   ):Promise<{
     ok:boolean;
+    orderId?: number;
     remainingVolume:number;
     realizedProfit:number;
     realizedProfitCurrency:string|null;
@@ -609,6 +610,7 @@ const isTestnet=config.binance.env==='testnet';
 
       return {
         ok:true,
+        orderId,
         remainingVolume,
         realizedProfit:realized.profit,
         realizedProfitCurrency:realized.currency,
