@@ -359,13 +359,10 @@ export class WalkForwardOptimizer {
     const oos_profit   = evaluatedWindows.reduce((s, w) => s + w.testMetrics.totalReturn, 0);
     const allFoldsValid = evaluatedWindows.length === windows.length && windows.every(w => w.trainMetrics.valid) && evidence.passed;
 
-    // Final params: average of best params from valid windows (or all if none valid)
-    const source = validWindows.length > 0 ? validWindows : windows;
+    // Deployment parameters come from the latest training window only.
+    // OOS results decide promotion eligibility but never select the values.
     const finalParams: OptimParams = {
-      atrMult:       +avg(source.map(w => w.bestParams.atrMult)).toFixed(2),
-      tpRatio:       +avg(source.map(w => w.bestParams.tpRatio)).toFixed(2),
-      minConfidence: +avg(source.map(w => w.bestParams.minConfidence)).toFixed(3),
-      rollingWindow: Math.round(avg(source.map(w => w.bestParams.rollingWindow))),
+      ...windows[windows.length - 1].bestParams,
     };
 
     const validPct = windows.length > 0 ? validWindows.length / windows.length : 0;
