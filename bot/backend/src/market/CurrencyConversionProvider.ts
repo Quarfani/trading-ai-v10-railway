@@ -44,16 +44,29 @@ export class CurrencyConversionProvider {
       return { ...cached.rates };
     }
 
-    // Preserve exact broker symbols (e.g. EURUSD.a) for scanner lookup.
-    // Canonical normalization is used only for synthetic fallback symbols.
-    const candidates = [
+    const directSymbols = [
       ...getBrokerConversionSymbols(quote, account),
       ...getBrokerConversionSymbols(account, quote),
       normalizeSymbol(quote + account),
       normalizeSymbol(account + quote),
     ];
 
-    for (const symbol of [...new Set(candidates)]) {
+    const bridgeSymbols = quote === 'USD' || account === 'USD'
+      ? []
+      : [
+          ...getBrokerConversionSymbols(quote, 'USD'),
+          ...getBrokerConversionSymbols('USD', quote),
+          ...getBrokerConversionSymbols(account, 'USD'),
+          ...getBrokerConversionSymbols('USD', account),
+          normalizeSymbol(quote + 'USD'),
+          normalizeSymbol('USD' + quote),
+          normalizeSymbol(account + 'USD'),
+          normalizeSymbol('USD' + account),
+        ];
+
+    const rates: Record<string, number> = {};
+
+    for (const symbol of [...new Set([...directSymbols, ...bridgeSymbols])]) {
       if (!symbol || normalizeSymbol(symbol).length < 6) continue;
 
       const candles = await this.scanner
@@ -63,9 +76,7 @@ export class CurrencyConversionProvider {
       const close = candles.at(-1)?.close;
       if (!Number.isFinite(close) || close <= 0) continue;
 
-      const rates: Record<string, number> = {
-        [symbol]: close,
-      };
+      rates[symbol] = close;
 
       const resolvedRate = resolveQuoteToAccount(
         quote,
