@@ -371,6 +371,47 @@ async function main() {
   );
   atomicDb.raw().close();
 
+  const atomicSuccessDb = new DatabaseManager(":memory:");
+  await atomicSuccessDb.initialize();
+  const atomicSuccessTradeId = atomicSuccessDb.insertTrade({
+    ticket: 992, symbol: "EURUSD.a", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(), source: "ATOMIC_FULL_SUCCESS",
+  } as any);
+  atomicSuccessDb.createExecutionLedger({
+    executionId: "atomic-full-success",
+    operationKey: "atomic-full-success-op",
+    action: "CLOSE_AT_MARKET",
+    status: "UNKNOWN",
+    symbol: "EURUSD.a",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId: atomicSuccessTradeId },
+  });
+  const atomicSuccessClosedAt = Date.now();
+  assert(
+    atomicSuccessDb.resolveReconciledFullClose(
+      atomicSuccessTradeId,
+      "atomic-full-success",
+      12.5,
+      atomicSuccessClosedAt,
+      "MANUAL",
+      { broker: "mt5", ticket: 992, profit: 12.5 },
+      992,
+    ) === true,
+    "authoritative full-close recovery must resolve the operation",
+  );
+  const closedRow = atomicSuccessDb.raw()
+    .prepare("SELECT status, profit, closedAt FROM trades WHERE id=?")
+    .get(atomicSuccessTradeId) as any;
+  const ledgerRow = atomicSuccessDb.getExecutionByOperationKey("atomic-full-success-op");
+  const dailyRow = atomicSuccessDb.raw()
+    .prepare("SELECT trades, wins, losses, pnl FROM daily_stats WHERE day=?")
+    .get(new Date(atomicSuccessClosedAt).toISOString().slice(0, 10)) as any;
+  assert(closedRow.status === "closed" && closedRow.profit === 12.5, "full-close recovery must persist final trade PnL");
+  assert(ledgerRow.status === "EXECUTED", "full-close recovery must execute the ledger");
+  assert(dailyRow.trades === 1 && dailyRow.wins === 1 && dailyRow.pnl === 12.5, "full-close recovery must update daily stats exactly once");
+  atomicSuccessDb.raw().close();
+
   const atomicFullDb = new DatabaseManager(":memory:");
   await atomicFullDb.initialize();
   const atomicFullTradeId = atomicFullDb.insertTrade({
