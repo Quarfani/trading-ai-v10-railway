@@ -547,9 +547,6 @@ export class BinanceExecutor {
 
         this.orderMap.delete(ticket);
       }
-        }
-        this.orderMap.delete(ticket);
-      }
 
       if (this.isFutures) {
         const pos = await this.getPosition(symbol);
