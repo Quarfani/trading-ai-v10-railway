@@ -77,6 +77,10 @@ app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
 _lock  = threading.Lock()
 _IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
 _idempotency_cache: dict[str, tuple[float, str, dict]] = {}
+_IDEMPOTENCY_STATE_PATH = os.getenv(
+    "MT5_IDEMPOTENCY_STATE_PATH",
+    os.path.join(os.getcwd(), "data", "mt5_idempotency.json"),
+)
 
 def _idempotency_load_disk():
     try:
