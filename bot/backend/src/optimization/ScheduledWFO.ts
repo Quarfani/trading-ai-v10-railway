@@ -31,6 +31,8 @@ import { getMarketDefinition }  from '../market/MarketCatalog';
 import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeriesLoader';
 import { Logger } from '../utils/Logger';
 import { EvidenceSnapshotStore } from '../analytics/EvidenceSnapshotStore';
+import { evaluateEvidenceForPromotion } from '../consensus/EvidencePromotionPolicy';
+import { COST_MODEL_VERSION } from '../market/CostModel';
 
 const WFO_HOUR_UTC   = 3;   // run at 03:00 UTC
 const WFO_DAY_OF_MONTH = 1; // run on the 1st of each month
@@ -155,21 +157,45 @@ export class ScheduledWFO {
 
           const p = result.finalParams;
 
-          const scopeKey = `${symbol}_${timeframe}_WFO`;
+          const policy = this.config.evidencePromotion;
+          const promotionEvidence = evaluateEvidenceForPromotion(
+            {
+              datasetVersion:
+                'WFO-' + symbol + '-' + timeframe + '-' + String(result.runAt),
+              costModelVersion: COST_MODEL_VERSION,
+              sampleSize: candles.length,
+              outOfSampleTrades: result.evidence.oosTrades,
+              outOfSampleProfitFactor: result.evidence.weightedProfitFactor,
+              walkForwardStability: result.evidence.walkForwardStability,
+              parameterSensitivity: 0,
+              regimeCoverage: 0,
+              passed: result.valid && result.evidence.passed,
+              evaluatedAt: result.runAt,
+            },
+            policy,
+          );
+
+          const scopeKey = symbol + '_' + timeframe + '_WFO';
           const promoted =
-            result.valid &&
-            result.recommendation === 'TRADE';
+            result.recommendation === 'TRADE' &&
+            promotionEvidence.passed;
 
           this.evidenceSnapshots.save({
             scopeKey,
             symbol,
             timeframe,
             source: 'WFO',
-            evidence: result.evidence,
+            evidence: {
+              ...result.evidence,
+              promotionPolicy: {
+                passed: promotionEvidence.passed,
+                reasons: promotionEvidence.reasons,
+              },
+            },
             promoted,
             promotionReason: promoted
-              ? 'valid WFO evidence and promotion threshold passed'
-              : result.reason,
+              ? 'valid WFO evidence and shared promotion policy passed'
+              : promotionEvidence.reasons.join('; ') || result.reason,
           });
 
           results.push(
@@ -177,7 +203,7 @@ export class ScheduledWFO {
             `conf=${p.minConfidence.toFixed(2)} OOS_WR=${(result.oos_winRate * 100).toFixed(1)}%`,
           );
 
-          if (result.valid && result.recommendation === 'TRADE') {
+          if (result.valid && result.recommendation === 'TRADE' && promotionEvidence.passed) {
             this.db.setSetting(
               `wfo_params_${symbol}_${timeframe}`,
               JSON.stringify({
