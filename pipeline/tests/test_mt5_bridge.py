@@ -556,7 +556,7 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
         "order_send",
         lambda request: (_ for _ in ()).throw(RuntimeError("transport reset")),
     )
-    monkeypatch.setattr(bridge.mt5, "last_error", lambda: (1, "transport reset"))
+    monkeypatch.setattr(bridge.mt5, "last_error", lambda: (1, "transport reset"), raising=False)
     monkeypatch.setattr(
         bridge,
         "calculate_order_estimates",
