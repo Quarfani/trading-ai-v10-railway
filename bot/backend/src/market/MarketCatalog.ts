@@ -106,8 +106,11 @@ export function getMarketDefinition(symbol: string, timeframe: Timeframe = 'H1')
     spec.contractSize <= 0 ||
     !Number.isFinite(spec.minVolume) ||
     !Number.isFinite(spec.maxVolume) ||
+    spec.maxVolume < spec.minVolume ||
     !Number.isFinite(spec.volumeStep) ||
-    spec.volumeStep <= 0
+    spec.volumeStep <= 0 ||
+    !Number.isFinite(spec.pip) ||
+    spec.pip <= 0
   ) {
     return null;
   }
