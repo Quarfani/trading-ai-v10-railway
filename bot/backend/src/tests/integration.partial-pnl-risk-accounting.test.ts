@@ -50,7 +50,7 @@ async function main() {
     request: { tradeId: openId, volume: 0.4 },
   });
   paperDb.updateExecutionLedger("partial-open-1", {
-    result: { remainingVolume: 0.6, profit: 300 }, status: "EXECUTED",
+    result: { remainingVolume: 0.6, profit: 600 }, status: "EXECUTED",
   });
   assert(paperTarget.reached() === true, "open-trade partial realized PnL must count toward the daily target");
 
