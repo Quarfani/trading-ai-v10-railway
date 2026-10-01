@@ -49,6 +49,32 @@ export class EvidenceSnapshotStore {
     };
   }
 
+
+  latestForStrategy(
+    strategyId: string,
+    symbol: string,
+    timeframe: string,
+  ): EvidenceSnapshotRecord | null {
+    const row = this.db.raw().prepare(
+      "SELECT * FROM evidence_snapshots WHERE strategyId=? AND symbol=? AND timeframe=? ORDER BY createdAt DESC, id DESC LIMIT 1",
+    ).get(strategyId, symbol, timeframe) as any;
+
+    if (!row) return null;
+
+    return {
+      scopeKey: row.scopeKey,
+      strategyId: row.strategyId ?? undefined,
+      strategyVersion: row.strategyVersion ?? undefined,
+      symbol: row.symbol,
+      timeframe: row.timeframe,
+      source: row.source,
+      evidence: row.evidenceJson ? JSON.parse(row.evidenceJson) : undefined,
+      promoted: row.promoted === 1,
+      promotionReason: row.promotionReason ?? undefined,
+      createdAt: row.createdAt,
+    };
+  }
+
   recent(limit = 50): EvidenceSnapshotRecord[] {
     const rows = this.db.raw().prepare(
       "SELECT * FROM evidence_snapshots ORDER BY createdAt DESC, id DESC LIMIT ?",
