@@ -1161,7 +1161,7 @@ export class TradingEngine extends EventEmitter {
         this.config.mode,
         adjustedSignal.symbol,
         tf,
-        regime,
+        regime.regime,
       );
 
     if (!lifecycleCheck.allowed) {
