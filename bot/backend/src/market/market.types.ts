@@ -49,6 +49,17 @@ export type MarginModel =
   | 'NOTIONAL_LEVERAGE'
   | 'BROKER_DEFINED';
 
+export const BROKER_TRADE_MODE = {
+  DISABLED: 0,
+  LONGONLY: 1,
+  SHORTONLY: 2,
+  CLOSEONLY: 3,
+  FULL: 4,
+} as const;
+
+export type BrokerTradeMode =
+  typeof BROKER_TRADE_MODE[keyof typeof BROKER_TRADE_MODE];
+
 export interface MarketEconomics {
   contractType: ContractType;
   contractSize: number;

@@ -21,6 +21,7 @@
  * ══════════════════════════════════════════════════════════════════════════
  */
 import { SystemConfig, Side, Timeframe } from '../types/trading.types';
+import { BROKER_TRADE_MODE } from '../market/market.types';
 import { DatabaseManager }      from '../database/DatabaseManager';
 import { getMarketDefinition }  from '../market/MarketCatalog';
 import { resolveQuoteToAccount } from '../market/CurrencyConverter';
@@ -69,14 +70,26 @@ export class PositionSizer {
 
     const tradeMode = market.economics.tradeMode;
     if (
-      tradeMode === 0 ||
-      tradeMode === 3 ||
-      (side === 'BUY' && tradeMode === 2) ||
-      (side === 'SELL' && tradeMode === 1)
+      tradeMode === BROKER_TRADE_MODE.DISABLED ||
+      tradeMode === BROKER_TRADE_MODE.CLOSEONLY ||
+      (side === 'BUY' && tradeMode === BROKER_TRADE_MODE.SHORTONLY) ||
+      (side === 'SELL' && tradeMode === BROKER_TRADE_MODE.LONGONLY)
     ) {
       this.logger.warn(
         '[' + symbol + '/' + timeframe + '] Broker trade mode=' +
         String(tradeMode) + ' rejects ' + side + ' opening — sizing blocked',
+      );
+      return 0;
+    }
+
+    if (
+      market.economics.stopsLevel != null &&
+      market.economics.stopsLevel > 0 &&
+      Math.abs(entry - sl) <
+        market.economics.stopsLevel * market.economics.priceIncrement
+    ) {
+      this.logger.warn(
+        '[' + symbol + '/' + timeframe + '] Stop distance is below broker stops level — sizing blocked',
       );
       return 0;
     }
@@ -139,7 +152,10 @@ export class PositionSizer {
     const maxVolByRisk = riskPerUnit > 0
       ? (equity * MAX_RISK_PER_TRADE) / riskPerUnit
       : 0;
-    vol = Math.min(vol, maxVolByRisk, market.economics.maxVolume);
+    const brokerVolumeCap = market.economics.volumeLimit != null && market.economics.volumeLimit > 0
+      ? Math.min(market.economics.maxVolume, market.economics.volumeLimit)
+      : market.economics.maxVolume;
+    vol = Math.min(vol, maxVolByRisk, brokerVolumeCap);
 
     // ── 8. Broker/static market constraints ────────────────────────────
     if (!(vol > 0) || !Number.isFinite(vol)) return 0;
@@ -230,7 +246,10 @@ export class PositionSizer {
     const riskPerUnit = Math.abs(entry - sl) * market.economics.contractSize * quoteToAccount;
     if (!(riskPerUnit > 0)) return 0;
     const maxVolume = (equity * MAX_RISK_PER_TRADE) / riskPerUnit;
-    const capped = Math.min(volume, maxVolume, market.economics.maxVolume);
+    const brokerVolumeCap = market.economics.volumeLimit != null && market.economics.volumeLimit > 0
+      ? Math.min(market.economics.maxVolume, market.economics.volumeLimit)
+      : market.economics.maxVolume;
+    const capped = Math.min(volume, maxVolume, brokerVolumeCap);
     const steps = Math.floor(capped / market.economics.volumeStep + 1e-12);
     const rounded = +(steps * market.economics.volumeStep).toFixed(8);
     return rounded >= market.economics.minVolume ? rounded : 0;

@@ -194,7 +194,66 @@ async function main() {
   );
 
   clearBrokerContracts();
-  console.log("Result: 10 passed, 0 failed");
+
+  registerBrokerContract({
+    symbol: "EURUSD",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:test-volume-limit",
+    observedAt: Date.now(),
+    verified: true,
+    volumeLimit: 0.02,
+  });
+
+  const volumeLimited = sizer.size(
+    "EURUSD", "BUY", 1.1000, 1.0900, 70, 10_000, 1.1200,
+    { EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    volumeLimited === 0.02,
+    `broker volume_limit must cap the order; got ${volumeLimited}`,
+  );
+
+  clearBrokerContracts();
+  registerBrokerContract({
+    symbol: "EURUSD",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:test-stops-level",
+    observedAt: Date.now(),
+    verified: true,
+    stopsLevel: 10,
+  });
+
+  const tooCloseStop = sizer.size(
+    "EURUSD", "BUY", 1.1000, 1.09995, 70, 10_000, 1.1010,
+    { EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    tooCloseStop === 0,
+    "PositionSizer must block stop distance below broker stops level",
+  );
+
+  clearBrokerContracts();
+  console.log("Result: 12 passed, 0 failed");
 }
 
 main().catch(error => {
