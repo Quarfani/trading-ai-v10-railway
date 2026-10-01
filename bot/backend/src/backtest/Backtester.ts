@@ -21,7 +21,7 @@ import { COST_MODEL_VERSION, calculateGrossPnlAccount, estimateCosts } from '../
 import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
 import { getMarketDefinition }         from '../market/MarketCatalog';
-import { HistoricalRateSeries, resolveHistoricalQuoteToAccount } from '../market/HistoricalCurrencySeries';
+import { HistoricalRateSeries, resolveHistoricalQuoteToAccount, validateHistoricalRateSeries } from '../market/HistoricalCurrencySeries';
 import { Logger }                      from '../utils/Logger';
 import * as path                       from 'path';
 import * as fs                         from 'fs';
@@ -107,7 +107,64 @@ export class Backtester {
     let valid = true;
     let blockedReason: string | undefined;
     const conversionAt = (time: number): number | null =>
-      resolveHistoricalQuoteToAccount(quoteCurrency, accountCurrency, time, historicalCurrencyRates);
+      resolveHistoricalQuoteToAccount(
+        quoteCurrency,
+        accountCurrency,
+        time,
+        historicalCurrencyRates,
+      );
+
+    const currencyValidation = validateHistoricalRateSeries(
+      historicalCurrencyRates,
+    );
+
+    const requiresConversion =
+      quoteCurrency !== accountCurrency &&
+      !(
+        accountCurrency === 'USD' &&
+        ['USD', 'USDT', 'USDC', 'BUSD'].includes(quoteCurrency)
+      );
+
+    if (!market) {
+      valid = false;
+      blockedReason = `Missing market definition for ${symbol}`;
+    } else if (!currencyValidation.valid) {
+      valid = false;
+      blockedReason =
+        `Invalid historical currency series: ${currencyValidation.errors.join('; ')}`;
+    } else if (requiresConversion && !Object.keys(historicalCurrencyRates).length) {
+      valid = false;
+      blockedReason =
+        `Missing historical ${quoteCurrency}->${accountCurrency} conversion series`;
+    } else if (requiresConversion) {
+      const probe = conversionAt(candles[WARMUP]?.time ?? candles[0]?.time ?? Date.now());
+      if (probe == null) {
+        valid = false;
+        blockedReason =
+          `Missing historical ${quoteCurrency}->${accountCurrency} conversion coverage`;
+      }
+    }
+
+    if (!valid) {
+      try { fs.unlinkSync(tmpDb); } catch { /* pass */ }
+      return this.buildResult(
+        symbol,
+        timeframe,
+        startBalance,
+        balance,
+        trades,
+        equityCurve,
+        Array.from(monthlyMap.values()),
+        maxDDPct,
+        maxDDUsd,
+        totalComm,
+        totalSpread,
+        simulationErrors,
+        totalCost,
+        false,
+        blockedReason,
+      );
+    }
 
     const trades: BacktestTrade[]                    = [];
     const equityCurve: Array<{ t: number; equity: number }> = [];
