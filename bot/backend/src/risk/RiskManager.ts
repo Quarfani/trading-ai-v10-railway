@@ -328,7 +328,7 @@ export class RiskManager {
     );
 
     const maxSlip = this.config.maxSlippagePips ?? 3;
-    const spec = getSymbolSpec(signal.symbol);
+    const spec = getSymbolSpec(signal.symbol, signal.timeframe ?? 'H1');
     const execPrice =
       signal.side === 'BUY' ? ticker.ask : ticker.bid;
     const slippagePips =
@@ -402,6 +402,7 @@ export class RiskManager {
       currentEquity,
       tp,
       livePrices,
+      signal.timeframe ?? 'H1',
     );
 
     if (volume <= 0) {
