@@ -500,3 +500,67 @@ def test_simulation_tick_helper_is_independent_of_flask_request():
     tick = bridge.simulation_tick("EURUSD")
     assert tick["symbol"] == "EURUSD"
     assert tick["ask"] > tick["bid"] > 0
+
+def test_live_trade_order_send_exception_is_unknown(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    monkeypatch.setattr(bridge, "ensure_connected", lambda: True)
+
+    sym_info = types.SimpleNamespace(
+        point=0.00001,
+        trade_stops_level=0,
+        volume_min=0.01,
+        volume_max=100.0,
+        volume_step=0.01,
+        volume_limit=0,
+        trade_mode=4,
+        trade_exemode=1,
+        filling_mode=3,
+    )
+    tick = types.SimpleNamespace(bid=1.0999, ask=1.1001)
+
+    monkeypatch.setattr(bridge.mt5, "symbol_info", lambda symbol: sym_info)
+    monkeypatch.setattr(bridge.mt5, "symbol_info_tick", lambda symbol: tick)
+    monkeypatch.setattr(bridge.mt5, "positions_get", lambda **kwargs: [])
+    monkeypatch.setattr(
+        bridge.mt5,
+        "order_check",
+        lambda request: types.SimpleNamespace(retcode=0, comment="ok"),
+    )
+    monkeypatch.setattr(
+        bridge.mt5,
+        "order_send",
+        lambda request: (_ for _ in ()).throw(RuntimeError("transport reset")),
+    )
+    monkeypatch.setattr(bridge.mt5, "last_error", lambda: (1, "transport reset"))
+    monkeypatch.setattr(
+        bridge,
+        "calculate_order_estimates",
+        lambda *args, **kwargs: (10.0, 100.0),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "validate_trade_permissions",
+        lambda *args, **kwargs: (True, "OK"),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "validate_aggregate_volume",
+        lambda *args, **kwargs: (True, "OK"),
+    )
+
+    client = bridge.app.test_client()
+    payload = {
+        "symbol": "EURUSD",
+        "side": "BUY",
+        "volume": 0.01,
+        "sl": 1.09,
+        "tp": 1.12,
+        "idempotency_key": "live-order-send-exception-1",
+    }
+    first = client.post("/trade", json=payload)
+    assert first.status_code == 503
+    cached = bridge._idempotency_lookup(payload["idempotency_key"])
+    assert cached is not None
+    assert cached[1] == "UNKNOWN"
