@@ -380,16 +380,42 @@ export class BinanceExecutor {
   // ─── Get position ────────────────────────────────────────────────────
 
   async getPosition(symbol: string): Promise<{ positionAmt: number; entryPrice: number; unrealizedProfit: number } | null> {
-    const res = await this.signedGet('/fapi/v2/positionRisk', { symbol });
-    const pos = Array.isArray(res) ? res.find((p: any) => p.symbol === symbol) : res;
-    if (!pos) return null;
-    const positionAmt = Number(pos.positionAmt);
-    const entryPrice = Number(pos.entryPrice);
-    const unrealizedProfit = Number(pos.unRealizedProfit);
-    if (![positionAmt, entryPrice, unrealizedProfit].every(Number.isFinite))
-      throw new Error(`Binance returned invalid position metadata for ${symbol}`);
-    return { positionAmt, entryPrice, unrealizedProfit };
+    if (this.isFutures) {
+      const res = await this.signedGet('/fapi/v2/positionRisk', { symbol });
+      const pos = Array.isArray(res) ? res.find((p: any) => p.symbol === symbol) : res;
+      if (!pos) return null;
+      const positionAmt = Number(pos.positionAmt);
+      const entryPrice = Number(pos.entryPrice);
+      const unrealizedProfit = Number(pos.unRealizedProfit);
+      if (![positionAmt, entryPrice, unrealizedProfit].every(Number.isFinite)) {
+        throw new Error(`Binance returned invalid futures position metadata for ${symbol}`);
+      }
+      return { positionAmt, entryPrice, unrealizedProfit };
+    }
+
+    // Spot has no positionRisk endpoint. Reconciliation treats the base-asset
+    // free+locked balance as the authoritative open position amount.
+    const quote = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
+    if (!quote) throw new Error(`Unsupported Binance Spot quote asset for ${symbol}`);
+    const baseAsset = symbol.slice(0, -quote.length);
+    const account = await this.signedGet('/api/v3/account', {});
+    const balance = (account.balances as any[])?.find(
+      (b: any) => String(b.asset).toUpperCase() === baseAsset,
+    );
+    if (!balance) return { positionAmt: 0, entryPrice: 0, unrealizedProfit: 0 };
+
+    const free = Number(balance.free ?? 0);
+    const locked = Number(balance.locked ?? 0);
+    if (![free, locked].every(Number.isFinite) || free < 0 || locked < 0) {
+      throw new Error(`Binance returned invalid spot balance for ${baseAsset}`);
+    }
+    return {
+      positionAmt: free + locked,
+      entryPrice: 0,
+      unrealizedProfit: 0,
+    };
   }
+
 
   // ─── Account equity ──────────────────────────────────────────────────
 
