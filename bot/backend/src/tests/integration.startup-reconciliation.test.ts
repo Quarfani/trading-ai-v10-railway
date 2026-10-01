@@ -301,6 +301,25 @@ async function main() {
       request: { tradeId: duplicateTradeId },
     });
 
+    // DUPLICATE_CLOSE_HISTORY_MOCK
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) {
+        return { data: { ok: true, positions: [] } };
+      }
+      if (url.endsWith('/history')) {
+        return { data: {
+          ok: true,
+          closed: true,
+          remaining_volume: 0,
+          close_price: 1.105,
+          net_profit: 12.5,
+          close_reason: 'manual',
+          close_time_msc: Date.now(),
+        } };
+      }
+      throw new Error('unexpected URL');
+    };
+
     const duplicateReconciler = new StartupReconciler(
       mt5Cfg,
       mt5DuplicateDb,
