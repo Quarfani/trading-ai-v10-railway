@@ -155,7 +155,7 @@ async function main() {
   } as any;
 
   const originalClosePost = (axios as any).post;
-  (axios as any).post = async () => ({ data: { ok: true, closed: true } });
+  (axios as any).post = async () => ({ data: { ok: true, closed: true, profit: 12.5 } });
   try {
     const closed = await closeGateway.closeAtMarket(
       closeTrade,
