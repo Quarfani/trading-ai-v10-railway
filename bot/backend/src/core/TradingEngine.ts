@@ -706,6 +706,23 @@ export class TradingEngine extends EventEmitter {
     symbol: string,
     tf: Timeframe,
   ) {
+    const market = getMarketDefinition(symbol, tf);
+    if (!market) {
+      this.logger.info(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=MARKET_DEFINITION`,
+      );
+      return;
+    }
+    if (
+      market.supportedTimeframes &&
+      !market.supportedTimeframes.includes(tf)
+    ) {
+      this.logger.info(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=UNSUPPORTED_TIMEFRAME`,
+      );
+      return;
+    }
+
     const rateLimitKey = `${symbol}_${tf}`;
 
     if (
