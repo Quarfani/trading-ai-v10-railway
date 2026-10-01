@@ -102,9 +102,13 @@ const MAP: Record<string, Partial<SymbolSpec>> = {
 
 function envOverride(symbol: string, timeframe: Timeframe = 'H1'): Partial<SymbolSpec> {
   const o: Partial<SymbolSpec> = {};
+  const normalized = symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const get = (k: string) => {
-    const scoped = process.env[`SPEC_${symbol}_${timeframe}_${k}`];
-    return scoped ?? process.env[`SPEC_${symbol}_${k}`];
+    const rawScoped = process.env[`SPEC_${symbol}_${timeframe}_${k}`];
+    const raw = process.env[`SPEC_${symbol}_${k}`];
+    const normalizedScoped = process.env[`SPEC_${normalized}_${timeframe}_${k}`];
+    const normalizedRaw = process.env[`SPEC_${normalized}_${k}`];
+    return rawScoped ?? raw ?? normalizedScoped ?? normalizedRaw;
   };
 
   if (get('SPREAD_MAX_PIPS')) o.spreadMaxPips = Number(get('SPREAD_MAX_PIPS'));
@@ -128,16 +132,21 @@ export function getBaseSymbolSpec(symbol: string): SymbolSpec {
 }
 
 export function hasExplicitSpreadPolicy(symbol: string, timeframe: Timeframe = 'H1'): boolean {
-  const normalized = symbol.trim().toUpperCase();
+  const raw = symbol.trim().toUpperCase();
+  const normalized = raw.replace(/[^A-Z0-9]/g, '');
   if (isConfiguredSymbol(normalized)) return true;
 
   return (
+    process.env[`SPEC_${raw}_${timeframe}_SPREAD_MAX_PIPS`] != null ||
+    process.env[`SPEC_${raw}_SPREAD_MAX_PIPS`] != null ||
     process.env[`SPEC_${normalized}_${timeframe}_SPREAD_MAX_PIPS`] != null ||
     process.env[`SPEC_${normalized}_SPREAD_MAX_PIPS`] != null
   );
 }
 
 export function getSymbolSpec(symbol: string, timeframe: Timeframe = 'H1'): SymbolSpec {
-  const base = getBaseSymbolSpec(symbol);
-  return { ...base, ...envOverride(symbol.toUpperCase(), timeframe) };
+  const raw = symbol.trim().toUpperCase();
+  const normalized = raw.replace(/[^A-Z0-9]/g, '');
+  const base = getBaseSymbolSpec(normalized);
+  return { ...base, ...envOverride(raw, timeframe) };
 }
