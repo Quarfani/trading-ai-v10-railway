@@ -29,6 +29,7 @@ Install:
 import json
 import threading
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -72,6 +73,22 @@ ALLOW_ANON   = os.getenv("MT5_BRIDGE_ALLOW_ANONYMOUS", "false").lower() == "true
 app    = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
 _lock  = threading.Lock()
+_IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
+_idempotency_cache: dict[str, tuple[float, str, dict]] = {}
+
+def _idempotency_lookup(key: str):
+    if not key:
+        return None
+    now = time.time()
+    stale = [k for k, (ts, _status, _payload) in _idempotency_cache.items() if now - ts > _IDEMPOTENCY_TTL_SEC]
+    for k in stale:
+        _idempotency_cache.pop(k, None)
+    return _idempotency_cache.get(key)
+
+def _idempotency_record(key: str, status: str, payload: dict):
+    if not key:
+        return
+    _idempotency_cache[key] = (time.time(), status, dict(payload))
 
 
 def auth_check() -> bool:
@@ -439,7 +456,29 @@ def account():
     if BRIDGE_MODE == 'simulation':
         return jsonify({"equity": 10000.0, "balance": 10000.0,
                         "margin": 0.0, "free_margin": 10000.0, "margin_level": 0.0})
+    cached = _idempotency_lookup(idempotency_key)
+    if cached:
+        _, cached_status, cached_payload = cached
+        if cached_status == "SUCCESS":
+            return jsonify(cached_payload)
+        if cached_status == "UNKNOWN":
+            return err(
+                "Previous execution with this idempotency_key is unresolved; reconciliation is required",
+                503,
+            )
+
     with _lock:
+        cached = _idempotency_lookup(idempotency_key)
+        if cached:
+            _, cached_status, cached_payload = cached
+            if cached_status == "SUCCESS":
+                return jsonify(cached_payload)
+            if cached_status == "UNKNOWN":
+                return err(
+                    "Previous execution with this idempotency_key is unresolved; reconciliation is required",
+                    503,
+                )
+
         if not ensure_connected():
             return err("MT5 not connected", 503)
         info = mt5.account_info()
@@ -610,9 +649,12 @@ def trade():
     sl     = float(data.get("sl", 0))
     tp     = float(data.get("tp", 0))
     comment= str(data.get("comment", "bot"))[:31]
+    idempotency_key = str(data.get("idempotency_key", "")).strip()
 
     if not symbol or side not in ("BUY", "SELL") or volume <= 0:
         return err("Invalid parameters: symbol, side, volume required")
+    if BRIDGE_MODE == 'live' and not idempotency_key:
+        return err("idempotency_key is required in live mode", 422)
 
     if BRIDGE_MODE == 'simulation':
         # Simulation mode
@@ -763,16 +805,21 @@ def trade():
         position_ticket, deal_ticket = resolve_position_ticket(result, mt5)
 
         if not position_ticket:
-            return err(
-                f"Trade executed but position identity could not be resolved: order={result.order} deal={deal_ticket}",
-                503,
-            )
+            payload = {
+                "ok": False,
+                "error": (
+                    f"Trade executed but position identity could not be resolved: "
+                    f"order={result.order} deal={deal_ticket}"
+                ),
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
 
         log.info(
             f"[LIVE] {side} {volume} {symbol} order={result.order} deal={deal_ticket} "
             f"position={position_ticket} @ {result.price}"
         )
-        return jsonify({
+        response_payload = {
             "ok": True,
             "ticket": position_ticket,
             "order_ticket": int(result.order),
@@ -785,7 +832,9 @@ def trade():
             "risk_limit": risk_limit,
             "estimated_margin": float(estimated_margin),
             "free_margin": free_margin,
-        })
+        }
+        _idempotency_record(idempotency_key, "SUCCESS", response_payload)
+        return jsonify(response_payload)
 
 
 @app.route("/modify", methods=["POST"])
