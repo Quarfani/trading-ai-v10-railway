@@ -590,3 +590,51 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
     cached = bridge._idempotency_lookup(payload["idempotency_key"])
     assert cached is not None
     assert cached[1] == "UNKNOWN"
+
+
+def test_live_close_partial_fill_persists_unknown_and_blocks_replay(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+
+    fake = types.SimpleNamespace(
+        TRADE_RETCODE_DONE_PARTIAL=10010,
+        TRADE_ACTION_DEAL=1,
+        ORDER_TYPE_SELL=1,
+        ORDER_TIME_GTC=0,
+        ORDER_FILLING_IOC=1,
+        TRADE_RETCODE_DONE=10009,
+        POSITION_TYPE_BUY=0,
+    )
+    position = types.SimpleNamespace(ticket=501, symbol="EURUSD", type=0, volume=1.0)
+    sym = info(trade_exemode=2, filling_mode=2, visible=True, point=0.00001)
+    tick = types.SimpleNamespace(bid=1.0999, ask=1.1001)
+    send_calls = {"n": 0}
+    fake.symbol_info = lambda symbol: sym
+    fake.symbol_info_tick = lambda symbol: tick
+    fake.positions_get = lambda **kwargs: [position]
+    fake.last_error = lambda: (1, "partial")
+    fake.order_check = lambda request: types.SimpleNamespace(retcode=0, comment="ok")
+    def order_send(request):
+        send_calls["n"] += 1
+        return types.SimpleNamespace(retcode=fake.TRADE_RETCODE_DONE_PARTIAL, deal=777)
+    fake.order_send = order_send
+
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    monkeypatch.setattr(bridge, "MT5_AVAILABLE", True)
+
+    client = bridge.app.test_client()
+    payload = {"ticket": 501, "idempotency_key": "full-close-partial-fill-1"}
+    first = client.post("/close", json=payload)
+    assert first.status_code == 503
+    assert first.get_json()["status"] == "UNKNOWN"
+    assert send_calls["n"] == 1
+
+    cached = bridge._idempotency_lookup(payload["idempotency_key"])
+    assert cached is not None
+    assert cached[1] == "UNKNOWN"
+    assert cached[2]["remaining_volume"] == 1.0
+
+    replay = client.post("/close", json=payload)
+    assert replay.status_code == 503
+    assert send_calls["n"] == 1
