@@ -1227,11 +1227,18 @@ def close():
                 float(getattr(position, "volume", 0.0) or 0.0)
                 for position in remaining_after_close
             )
-            return err(
-                f"Position {ticket} was partially closed; authoritative reconciliation required "
-                f"(remaining_volume={remaining_volume})",
-                503,
-            )
+            payload = {
+                "ok": False,
+                "error": (
+                    f"Position {ticket} was partially closed; authoritative "
+                    f"reconciliation required (remaining_volume={remaining_volume})"
+                ),
+                "ticket": ticket,
+                "remaining_volume": remaining_volume,
+                "status": "UNKNOWN",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
 
         summary = summarize_position_deals(
             mt5.history_deals_get(position=ticket) or []
