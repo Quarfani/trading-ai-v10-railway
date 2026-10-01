@@ -430,6 +430,9 @@ export class ExecutionGateway {
     return cumulativeProfit;
   }
   async closeTrade(t: Trade) {
+    if (this.config.mode !== 'paper' && !t.id) {
+      throw new Error('Live close requires a persisted trade id before broker execution');
+    }
     const key = this.stableKey('CLOSE', {
       id: t.id,
       ticket: t.ticket,
@@ -464,6 +467,9 @@ export class ExecutionGateway {
     exitPrice: number,
     reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL' = 'MANUAL',
   ) {
+    if (this.config.mode !== 'paper' && !t.id) {
+      throw new Error('Live market close requires a persisted trade id before broker execution');
+    }
     const key = this.stableKey('CLOSE_AT_MARKET', {
       id: t.id,
       ticket: t.ticket,
@@ -618,6 +624,9 @@ export class ExecutionGateway {
 
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
     let brokerOrderId: number | undefined;
+    if (this.config.mode !== 'paper' && !t.id) {
+      return { ok: false, profit: 0, remainingVolume: t.volume };
+    }
     if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
 
     // A replay of the same operation is safe and must return the persisted
