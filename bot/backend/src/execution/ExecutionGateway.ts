@@ -26,7 +26,10 @@ export class ExecutionGateway {
     private db: DatabaseManager,
     private currencyRates?: CurrencyConversionProvider,
   ) {
-    this.paper = new PaperTrader(config.accountBalance);
+    this.paper = new PaperTrader(
+      config.accountBalance,
+      config.accountCurrency ?? 'USD',
+    );
     this.binance = new BinanceExecutor(config);
   }
 
