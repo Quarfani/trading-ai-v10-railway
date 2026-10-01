@@ -24,6 +24,8 @@
  * ══════════════════════════════════════════════════════════════════════════
  */
 import { Candle, Timeframe } from '../types/trading.types';
+import { CostProfile } from '../market/CostModel';
+import { MarketDefinition } from '../market/market.types';
 import { Backtester }      from '../backtest/Backtester';
 import { DatabaseManager } from '../database/DatabaseManager';
 import { Logger } from '../utils/Logger';
@@ -92,7 +94,14 @@ export class WalkForwardOptimizer {
 
   constructor(private dbPath: string) {}
 
-  async run(symbol: string, allCandles: Candle[], timeframe: Timeframe = 'H1', historicalCurrencyRates: HistoricalRateSeries = {}): Promise<WalkForwardResult> {
+  async run(
+    symbol: string,
+    allCandles: Candle[],
+    timeframe: Timeframe = 'H1',
+    historicalCurrencyRates: HistoricalRateSeries = {},
+    marketOverride?: MarketDefinition,
+    costProfileOverride?: CostProfile,
+  ): Promise<WalkForwardResult> {
     this.logger.info(`Walk-Forward: ${symbol} | ${allCandles.length} candles`);
 
     if (allCandles.length < TRAIN_BARS + TEST_BARS) {
@@ -299,6 +308,8 @@ export class WalkForwardOptimizer {
         timeframe,
         historicalCurrencyRates,
         evaluationStartTime,
+        marketOverride,
+        costProfileOverride,
       );
 
       if (!res.valid) {

@@ -94,7 +94,7 @@ import { AITradeJournal } from '../journal/AITradeJournal';
 
 import { getSymbolSpec } from '../config/symbolConfig';
 import { detectFalseSignal } from '../filters/FalseSignalEngine';
-import { getBrokerContractStatus, getMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerContractStatus, getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 
 type Broadcaster = (event: string, data: unknown) => void;
