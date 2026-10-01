@@ -89,7 +89,11 @@ export class StartupReconciler {
       const trade = this.db.raw().prepare(
         `SELECT * FROM trades WHERE id=? LIMIT 1`,
       ).get(tradeId) as any;
-      if (!trade?.ticket) continue;
+      if (!trade?.ticket || String(trade.status) !== 'open') {
+        // Once the internal trade is already closed, never let a second
+        // unresolved close operation attach itself to the same broker close.
+        continue;
+      }
 
       const history = await this.getMT5HistoryEntry(Number(trade.ticket));
       if (!history) continue;
