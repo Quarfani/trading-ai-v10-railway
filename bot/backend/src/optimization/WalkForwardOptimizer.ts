@@ -94,7 +94,10 @@ const STEP_BARS  = 125;  // slide step
 export class WalkForwardOptimizer {
   private logger = new Logger('WalkForward');
 
-  constructor(private dbPath: string) {}
+  constructor(
+    private dbPath: string,
+    private readonly accountCurrency = String(process.env.ACCOUNT_CURRENCY ?? 'USD').toUpperCase(),
+  ) {}
 
   async run(
     symbol: string,
@@ -298,7 +301,7 @@ export class WalkForwardOptimizer {
       process.env[envAtrKey] = String(params.atrMult);
       process.env[envTpKey] = String(params.tpRatio);
 
-      const accountCurrency = String(process.env.ACCOUNT_CURRENCY ?? 'USD').toUpperCase();
+      const accountCurrency = this.accountCurrency;
 
       const bt = new Backtester({
         mode: 'paper',
