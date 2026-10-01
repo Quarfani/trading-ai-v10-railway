@@ -150,3 +150,31 @@ def test_account_position_mode_fails_closed_unknown():
         ACCOUNT_MARGIN_MODE_EXCHANGE=1,
     )
     assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=99), mt5) == "UNKNOWN"
+
+def test_aggregate_volume_limit_blocks_same_direction():
+    mt5 = types.SimpleNamespace(POSITION_TYPE_BUY=0)
+    positions = [
+        types.SimpleNamespace(type=0, volume=1.5),
+        types.SimpleNamespace(type=1, volume=3.0),
+    ]
+    mt5.positions_get = lambda symbol: positions
+    ok, reason = bridge.validate_aggregate_volume(
+        "EURUSD.a", "BUY", 1.0,
+        info(volume_limit=2.0), mt5
+    )
+    assert not ok
+    assert "volume_limit" in reason
+
+
+def test_aggregate_volume_limit_allows_other_direction():
+    mt5 = types.SimpleNamespace(POSITION_TYPE_BUY=0)
+    positions = [
+        types.SimpleNamespace(type=0, volume=1.5),
+        types.SimpleNamespace(type=1, volume=3.0),
+    ]
+    mt5.positions_get = lambda symbol: positions
+    ok, _ = bridge.validate_aggregate_volume(
+        "EURUSD.a", "SELL", 1.0,
+        info(volume_limit=2.0), mt5
+    )
+    assert ok

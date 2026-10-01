@@ -203,6 +203,31 @@ def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
         return False, f"Volume {volume} is not aligned to broker step {step}"
     return True, "OK"
 
+def validate_aggregate_volume(symbol: str, side: str, volume: float, symbol_info, mt5_module) -> tuple[bool, str]:
+    """Validate the broker's aggregate per-direction volume limit."""
+    limit = float(getattr(symbol_info, "volume_limit", 0) or 0)
+    if not (limit > 0):
+        return True, "OK"
+
+    positions = mt5_module.positions_get(symbol=symbol) or []
+    buy_type = getattr(mt5_module, "POSITION_TYPE_BUY", 0)
+    current = 0.0
+    wanted_type = buy_type if side == "BUY" else 1
+
+    for pos in positions:
+        if int(getattr(pos, "type", 1)) == wanted_type:
+            current += float(getattr(pos, "volume", 0) or 0)
+
+    projected = current + float(volume)
+    eps = max(1e-9, limit * 1e-8)
+    if projected > limit + eps:
+        return False, (
+            f"Aggregate {side} volume {projected} exceeds "
+            f"broker volume_limit {limit}"
+        )
+    return True, "OK"
+
+
 def calculate_order_estimates(mt5_module, order_type, symbol, volume, open_price, stop_price) -> tuple[float, float]:
     """Return estimated stop-loss loss and required margin in account currency."""
     profit = mt5_module.order_calc_profit(
@@ -436,6 +461,12 @@ def trade():
         volume_ok, volume_reason = validate_trade_volume(volume, sym_info)
         if not volume_ok:
             return err(volume_reason, 422)
+
+        aggregate_ok, aggregate_reason = validate_aggregate_volume(
+            symbol, side, volume, sym_info, mt5
+        )
+        if not aggregate_ok:
+            return err(aggregate_reason, 422)
 
         order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
         tick_data  = mt5.symbol_info_tick(symbol)
