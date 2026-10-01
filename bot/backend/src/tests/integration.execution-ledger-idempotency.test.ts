@@ -459,6 +459,41 @@ async function main() {
   );
   atomicFullDb.raw().close();
 
+  const stateDb = new DatabaseManager(":memory:");
+  await stateDb.initialize();
+  stateDb.createExecutionLedger({
+    executionId: "state-1",
+    operationKey: "state-op",
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+  });
+  assert(
+    stateDb.updateExecutionLedger("state-1", { status: "UNKNOWN", error: "transport ambiguous" }) === true,
+    "PENDING must transition to UNKNOWN",
+  );
+  assert(
+    stateDb.updateExecutionLedger("state-1", {
+      status: "EXECUTED",
+      result: { broker: "paper", ticket: 123 },
+      brokerOrderId: 123,
+    }) === true,
+    "UNKNOWN must transition to EXECUTED",
+  );
+  assert(
+    stateDb.updateExecutionLedger("state-1", { status: "UNKNOWN", error: "late callback" }) === false,
+    "EXECUTED must be immutable and reject rollback to UNKNOWN",
+  );
+  assert(
+    stateDb.updateExecutionLedger("state-1", { status: "PENDING" }) === false,
+    "terminal execution must reject transition back to PENDING",
+  );
+  const stateRow = stateDb.getExecutionByOperationKey("state-op");
+  assert(stateRow.status === "EXECUTED", "illegal transitions must preserve terminal EXECUTED state");
+  stateDb.raw().close();
+
   const corruptDb = new DatabaseManager(":memory:");
   await corruptDb.initialize();
 
