@@ -15,6 +15,11 @@ if not exist "%~dp0.runtime" (
   exit /b 0
 )
 
+if exist "%~dp0.runtime\ai-handoff.pid" (
+  for /f %%P in (%~dp0.runtime\ai-handoff.pid) do taskkill /PID %%P /T /F >nul 2>&1
+  del "%~dp0.runtime\ai-handoff.pid" >nul 2>&1
+)
+
 for %%F in (backend frontend) do (
   if exist "%~dp0.runtime\%%F.pid" (
     for /f %%P in (%~dp0.runtime\%%F.pid) do (
