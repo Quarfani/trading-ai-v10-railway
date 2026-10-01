@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { SystemConfig } from '../types/trading.types';
 import { Logger } from './Logger';
+import { registerBrokerContract } from '../market/MarketCatalog';
+import { AssetClass } from '../market/market.types';
 
 /**
  * On startup, verify each symbol is tradeable on the configured broker/data source.
