@@ -479,6 +479,7 @@ export class BinanceExecutor {
     volume?: number,
     side?: 'BUY' | 'SELL',
   ): Promise<{ ok: boolean; realizedProfit: number | null }> {
+    let realizedProfit: number | null = null;
     try {
       // Cancel SL/TP first
       const ids = this.orderMap.get(ticket);
@@ -511,7 +512,7 @@ export class BinanceExecutor {
         if (!(closeOrderId > 0) || !Number.isFinite(closeOrderId)) {
           throw new Error('Binance full close returned invalid orderId');
         }
-        const realizedProfit = await this.getFuturesOrderNetPnl(symbol, closeOrderId);
+        realizedProfit = await this.getFuturesOrderNetPnl(symbol, closeOrderId);
         if (realizedProfit == null) {
           throw new Error(
             `Binance full close ${symbol} executed but authoritative fills/PnL are unavailable`,
