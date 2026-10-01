@@ -306,6 +306,14 @@ export function extendApiV8(app: Express, engine: any) {
   // Walk-Forward (async, returns cached result or triggers new run)
   app.post('/api/walkforward', requireRole('admin'), async (req: any, res: any) => {
     try {
+      // WFO temporarily sets strategy parameters in process.env. Never allow
+      // that research mutation while the live/paper execution loop is active.
+      if (engine.isActive()) {
+        return res.status(409).json({
+          error: 'Stop the trading engine before running walk-forward optimization',
+        });
+      }
+
       const { symbol = 'EURUSD', timeframe = 'H1', count = 1500 } = req.body;
       if (engine.config.mode !== 'paper' && process.env.LIVE_WFO_ACK !== 'I_UNDERSTAND_LIVE_WFO_RISK') {
         return res.status(403).json({ error: 'Live parameter mutation requires explicit LIVE_WFO_ACK' });
