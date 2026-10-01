@@ -13,7 +13,7 @@
  *   SL hitRate < 20%              → SL بعيد جداً → تخفيض المضاعف
  * ══════════════════════════════════════════════════════════════════════════
  */
-import { Candle }          from '../types/trading.types';
+import { Candle, Timeframe } from '../types/trading.types';
 import { calculateATR }    from '../utils/ATR';
 import { getBaseSymbolSpec } from '../config/symbolConfig';
 import { DatabaseManager } from '../database/DatabaseManager';
@@ -38,8 +38,9 @@ export class AdaptiveATRManager {
 
   constructor(private db: DatabaseManager) {}
 
-  getParams(symbol: string, candles: Candle[]): AdaptiveParams {
-    const key    = symbol.toUpperCase();
+  getParams(symbol: string, candles: Candle[], timeframe: Timeframe = 'H1'): AdaptiveParams {
+    const symbolKey = symbol.toUpperCase();
+    const key = `${symbolKey}_${timeframe}`;
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.updatedAt < 3_600_000) return cached.params; // 1h cache
 
@@ -57,7 +58,7 @@ export class AdaptiveATRManager {
 ).run(
   'ADAPTIVE_PARAMS_UPDATED',
   'INFO',
-  JSON.stringify({ symbol: key, previous, next: params }),
+  JSON.stringify({ symbol: symbolKey, timeframe, previous, next: params }),
   Date.now(),
 );
     } catch (e) {
