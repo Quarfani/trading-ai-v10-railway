@@ -15,9 +15,9 @@ export interface BacktestWfoMetrics {
   trades: number;
   pnl: number;
   profitFactor: number;
-  /** Exact OOS gross components when available; used for aggregate PF. */
-  grossProfit?: number;
-  grossLoss?: number;
+  /** Exact net OOS positive/negative PnL components when available. */
+  positivePnl?: number;
+  negativePnl?: number;
   totalCost: number;
   parameterSensitivity: number;
   regimeCoverage: number;
@@ -34,8 +34,8 @@ export interface WfoEvidenceSummary {
   profitableFoldRate: number;
   walkForwardStability: number;
   weightedProfitFactor: number;
-  aggregateGrossProfit: number;
-  aggregateGrossLoss: number;
+  aggregatePositivePnl: number;
+  aggregateNegativePnl: number;
   totalCost: number;
   averageParameterSensitivity: number;
   averageRegimeCoverage: number;
@@ -68,8 +68,8 @@ export function summarizeWfoEvidence(
       profitableFoldRate: 0,
       walkForwardStability: 0,
       weightedProfitFactor: 0,
-      aggregateGrossProfit: 0,
-      aggregateGrossLoss: 0,
+      aggregatePositivePnl: 0,
+      aggregateNegativePnl: 0,
       totalCost: 0,
       averageParameterSensitivity: 0,
       averageRegimeCoverage: 0,
@@ -105,21 +105,19 @@ export function summarizeWfoEvidence(
   const aggregatePnl = folds.reduce((sum, fold) => sum + fold.pnl, 0);
   const averageFoldPnl = aggregatePnl / folds.length;
 
-  const aggregateGrossProfit = folds.reduce(
-    (sum, fold) =>
-      sum + Math.max(0, Number(fold.grossProfit ?? 0)),
+  const aggregatePositivePnl = folds.reduce(
+    (sum, fold) => sum + Math.max(0, Number(fold.positivePnl ?? 0)),
     0,
   );
-  const aggregateGrossLoss = folds.reduce(
-    (sum, fold) =>
-      sum + Math.max(0, Number(fold.grossLoss ?? 0)),
+  const aggregateNegativePnl = folds.reduce(
+    (sum, fold) => sum + Math.max(0, Number(fold.negativePnl ?? 0)),
     0,
   );
 
   const weightedProfitFactor =
-    aggregateGrossLoss > 0
-      ? aggregateGrossProfit / aggregateGrossLoss
-      : aggregateGrossProfit > 0
+    aggregateNegativePnl > 0
+      ? aggregatePositivePnl / aggregateNegativePnl
+      : aggregatePositivePnl > 0
         ? Infinity
         : 0;
 
@@ -172,8 +170,8 @@ export function summarizeWfoEvidence(
     weightedProfitFactor: Number.isFinite(weightedProfitFactor)
       ? Number(weightedProfitFactor.toFixed(6))
       : weightedProfitFactor,
-    aggregateGrossProfit,
-    aggregateGrossLoss,
+    aggregatePositivePnl,
+    aggregateNegativePnl,
     totalCost,
     averageParameterSensitivity: Number(averageParameterSensitivity.toFixed(6)),
     averageRegimeCoverage: Number(averageRegimeCoverage.toFixed(6)),
@@ -225,8 +223,8 @@ export function metricsFromPurgedWfoFold<T>(
     trades: metrics.trades,
     pnl: metrics.pnl,
     profitFactor: metrics.profitFactor,
-    grossProfit: metrics.pnl > 0 ? metrics.pnl : 0,
-    grossLoss: metrics.pnl < 0 ? Math.abs(metrics.pnl) : 0,
+    positivePnl: metrics.pnl > 0 ? metrics.pnl : 0,
+    negativePnl: metrics.pnl < 0 ? Math.abs(metrics.pnl) : 0,
     totalCost: metrics.totalCost,
     parameterSensitivity: metrics.parameterSensitivity ?? 0,
     regimeCoverage: metrics.regimeCoverage ?? 0,
