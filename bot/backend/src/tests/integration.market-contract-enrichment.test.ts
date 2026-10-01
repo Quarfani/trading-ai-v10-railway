@@ -44,25 +44,31 @@ assert(oil!.economics.marginModel === "BROKER_DEFINED", "Oil margin model must r
 
 clearBrokerContracts();
 
-registerBrokerContract({
-  symbol: "USOIL",
-  baseAsset: "OIL",
-  quoteCurrency: "USD",
-  assetClass: "ENERGY",
-  contractType: "CFD",
-  venue: "MT5",
-  contractSize: 1000,
-  priceIncrement: 0.01,
-  minVolume: 0.01,
-  maxVolume: 20,
-  volumeStep: 0.01,
-  marginModel: "BROKER_DEFINED",
-  source: "mt5-symbol-info:test-broker",
-  observedAt: now,
-  expiresAt: now - 1,
-  verified: true,
-});
+let expiredRejected = false;
+try {
+  registerBrokerContract({
+    symbol: "USOIL",
+    baseAsset: "OIL",
+    quoteCurrency: "USD",
+    assetClass: "ENERGY",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 1000,
+    priceIncrement: 0.01,
+    minVolume: 0.01,
+    maxVolume: 20,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:test-broker",
+    observedAt: now,
+    expiresAt: now - 1,
+    verified: true,
+  });
+} catch {
+  expiredRejected = true;
+}
 
+assert(expiredRejected, "expired Oil contract must be rejected at registration");
 assert(
   getMarketDefinition("USOIL") === null,
   "expired Oil contract must fail closed",

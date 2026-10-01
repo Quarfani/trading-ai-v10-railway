@@ -1,1 +1,69 @@
-import axios from "axios";\nimport { SymbolValidator } from "../utils/SymbolValidator";\nimport { clearBrokerContracts, getMarketDefinition } from "../market/MarketCatalog";\n\nfunction assert(condition: unknown, message: string): asserts condition {\n  if (!condition) throw new Error(message);\n}\n\nasync function main() {\n  const originalGet = (axios as any).get;\n\n  const config = {\n    mode: "paper",\n    dataSource: "mt5",\n    symbols: ["EURUSD.a"],\n    mt5: { bridgeUrl: "http://mt5.test", bridgeApiKey: "secret" },\n  } as any;\n\n  try {\n    clearBrokerContracts();\n    (axios as any).get = async (url: string) => {\n      if (url.endsWith("/tick")) return { data: { bid: 1.1, ask: 1.1001 } };\n      if (url.endsWith("/contract")) {\n        return { data: {\n          symbol: "EURUSD.a",\n          description: "Euro vs US Dollar",\n          currency_base: "EUR",\n          currency_profit: "USD",\n          trade_contract_size: 100000,\n          point: 0.00001,\n          volume_min: 0.01,\n          volume_max: 100,\n          volume_step: 0.01,\n          time: Math.floor(Date.now() / 1000),\n        }};\n      }\n      throw new Error("unexpected endpoint: " + url);\n    };\n\n    const valid = await new SymbolValidator(config).validate();\n    assert(valid.length === 1 && valid[0] === "EURUSD.a", "MT5 symbol with broker suffix should validate");\n    assert(\n      getMarketDefinition("EURUSD.a")?.economics.contractSize === 100000,\n      "broker contract should be registered for suffixed Forex symbol",\n    );\n\n    clearBrokerContracts();\n    (axios as any).get = async (url: string) => {\n      if (url.endsWith("/tick")) return { data: { bid: 1.1, ask: 1.1001 } };\n      return { data: {\n        symbol: "EURUSD.a",\n        description: "Euro vs US Dollar",\n        currency_base: "EUR",\n        currency_profit: "USD",\n        trade_contract_size: 0,\n        point: 0.00001,\n        volume_min: 0.01,\n        volume_max: 100,\n        volume_step: 0.01,\n        time: Math.floor(Date.now() / 1000),\n      }};\n    };\n\n    const blocked = await new SymbolValidator(config).validate();\n    assert(blocked.length === 0, "invalid broker contract economics must block MT5 symbol");\n    assert(getMarketDefinition("EURUSD.a") === null, "invalid contract must not remain registered");\n\n    console.log("Result: 4 passed, 0 failed");\n  } finally {\n    (axios as any).get = originalGet;\n    clearBrokerContracts();\n  }\n}\n\nmain().catch(error => {\n  console.error(error);\n  process.exitCode = 1;\n});\n
+import {
+  buildMT5BrokerContractDefinition,
+  inferMT5AssetClass,
+} from "../utils/SymbolValidator";
+import { clearBrokerContracts, getMarketDefinition, registerBrokerContract } from "../market/MarketCatalog";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+const now = Date.now();
+
+assert(
+  inferMT5AssetClass("EURUSD.a", "Euro vs US Dollar", "EUR", "USD") === "FOREX",
+  "broker-suffixed Forex symbol should be recognized from currencies",
+);
+assert(
+  inferMT5AssetClass("XAUUSD.a", "Gold Spot", "XAU", "USD") === "METAL",
+  "Gold broker symbol should be recognized as METAL",
+);
+assert(
+  inferMT5AssetClass("WTI.cash", "West Texas Intermediate Oil", "WTI", "USD") === "ENERGY",
+  "Oil broker symbol should be recognized as ENERGY",
+);
+
+const definition = buildMT5BrokerContractDefinition("EURUSD.a", {
+  symbol: "EURUSD.a",
+  description: "Euro vs US Dollar",
+  currency_base: "EUR",
+  currency_profit: "USD",
+  trade_contract_size: 100000,
+  point: 0.00001,
+  volume_min: 0.01,
+  volume_max: 100,
+  volume_step: 0.01,
+  time: Math.floor(now / 1000),
+}, now);
+
+assert(definition.symbol === "EURUSD.a", "broker symbol must be preserved");
+assert(definition.assetClass === "FOREX", "payload must produce FOREX definition");
+assert(definition.contractSize === 100000, "contract size must be mapped");
+assert(definition.volumeStep === 0.01, "volume step must be mapped");
+assert(definition.expiresAt === now + 24 * 3_600_000, "broker payload must receive bounded TTL");
+
+clearBrokerContracts();
+registerBrokerContract(definition);
+assert(getMarketDefinition("EURUSD.a")?.economics.contractSize === 100000, "mapped broker definition must register");
+clearBrokerContracts();
+
+let invalidRejected = false;
+try {
+  registerBrokerContract(buildMT5BrokerContractDefinition("EURUSD.a", {
+    symbol: "EURUSD.a",
+    description: "Euro vs US Dollar",
+    currency_base: "EUR",
+    currency_profit: "USD",
+    trade_contract_size: 0,
+    point: 0.00001,
+    volume_min: 0.01,
+    volume_max: 100,
+    volume_step: 0.01,
+  }, now));
+} catch {
+  invalidRejected = true;
+}
+assert(invalidRejected, "invalid contract economics must be rejected");
+assert(getMarketDefinition("EURUSD.a") === null, "invalid broker metadata must never remain active");
+
+console.log("Result: 9 passed, 0 failed");
