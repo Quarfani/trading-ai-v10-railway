@@ -163,6 +163,17 @@ export class StartupReconciler {
       if (!history || history.closed || !(history.remainingVolume > 0) ||
           history.remainingVolume >= Number(trade.volume)) continue;
 
+      const positionTolerance = Math.max(
+        1e-8,
+        Number(trade.volume) * 0.02,
+      );
+      if (Math.abs(brokerVolume - history.remainingVolume) > positionTolerance) {
+        this.logger.warn(
+          `[MT5] Partial-close position/history mismatch for trade id=${tradeId}; leaving operation unresolved`,
+        );
+        continue;
+      }
+
       const requestedVolume = Number(request?.volume);
       if (!(requestedVolume > 0) || !Number.isFinite(requestedVolume)) continue;
 
