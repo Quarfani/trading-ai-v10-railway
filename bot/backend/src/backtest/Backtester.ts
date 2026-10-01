@@ -447,7 +447,6 @@ export class Backtester {
       // ── Signal generation ─────────────────────────────────────────────
       if (
         !openPos &&
-        i % 4 === 0 &&
         (evaluationStartTime == null || cur.time >= evaluationStartTime)
       ) {
         try {
