@@ -1185,7 +1185,7 @@ export class TradingEngine extends EventEmitter {
 
     // ── Apply time & recovery volume multipliers ───────────────────────
     const spec =
-      getSymbolSpec(symbol);
+      getSymbolSpec(symbol, tf);
 
     const rawVolume =
       risk.volume *
@@ -1221,6 +1221,7 @@ export class TradingEngine extends EventEmitter {
           adjustedVolume,
           equity,
           livePrices,
+          tf,
         );
 
     if (!(volume > 0)) {
