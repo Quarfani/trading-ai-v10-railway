@@ -220,6 +220,44 @@ def tick():
         })
 
 
+@app.route("/contract", methods=["GET"])
+def contract():
+    """Return broker-confirmed symbol economics from MT5 symbol_info."""
+    if not auth_check():
+        return err("Unauthorized", 401)
+    symbol = request.args.get("symbol", "").strip()
+    if not symbol:
+        return err("symbol required")
+    if BRIDGE_MODE == "simulation":
+        return err("Broker contract metadata is unavailable in simulation mode", 503)
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+        info = mt5.symbol_info(symbol)
+        if not info:
+            return err(f"Symbol {symbol} not found")
+        if not info.visible:
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol)
+        if not info:
+            return err(f"Symbol {symbol} unavailable after selection")
+        return jsonify({
+            "symbol": info.name,
+            "description": getattr(info, "description", ""),
+            "currency_base": getattr(info, "currency_base", ""),
+            "currency_profit": getattr(info, "currency_profit", ""),
+            "trade_contract_size": getattr(info, "trade_contract_size", 0),
+            "point": getattr(info, "point", 0),
+            "digits": getattr(info, "digits", 0),
+            "volume_min": getattr(info, "volume_min", 0),
+            "volume_max": getattr(info, "volume_max", 0),
+            "volume_step": getattr(info, "volume_step", 0),
+            "trade_calc_mode": getattr(info, "trade_calc_mode", None),
+            "trade_mode": getattr(info, "trade_mode", None),
+            "currency_margin": getattr(info, "currency_margin", ""),
+            "time": int(datetime.now(timezone.utc).timestamp()),
+        })
+
 @app.route("/trade", methods=["POST"])
 def trade():
     if not auth_check():
