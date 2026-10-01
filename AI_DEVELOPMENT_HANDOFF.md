@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current commit: c37ad360f5a9415482f9cdd494ad53765abbc47d
-Current message: refactor: use shared evidence promotion default policy
+Current commit: 4e50d6ac3d07e7ee9ac5e3ee39ecf0c668ab3bd7
+Current message: fix: persist WFO Monte Carlo stress in evidence snapshots
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -44,7 +44,7 @@ Latest CI on main is green after c37ad360f5a9415482f9cdd494ad53765abbc47d.
 6. Long paper/testnet/cloud E2E evidence remains outstanding.
 
 ## NEXT TASK
-Wire Monte Carlo Stress outputs into StrategyEvidence/promotion evidence, then harden non-USD live broker E2E and long paper/testnet/cloud E2E.
+Wire Monte Carlo Stress metrics into typed StrategyEvidence/promotion policy, then harden non-USD live broker E2E and long paper/testnet/cloud E2E.
 
 ## STOP PROTOCOL
 Verify main SHA and CI; record blockers; update this file; keep the local AI_DEVELOPMENT_HANDOFF_CURRENT.md checkpoint; define one concrete NEXT TASK.
