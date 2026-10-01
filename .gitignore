@@ -43,3 +43,6 @@ bot/backend/test-output.txt
 
 # Local AI development checkpoint
 AI_DEVELOPMENT_HANDOFF_CURRENT.md
+
+# MT5 bridge runtime idempotency state
+bot/data/
