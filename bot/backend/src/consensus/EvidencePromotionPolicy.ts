@@ -9,10 +9,10 @@ export interface EvidencePromotionPolicy {
   minParameterSensitivity: number;
   minRegimeCoverage: number;
   maxAgeMs: number;
-  requireMonteCarlo: boolean;
-  maxMonteCarloDD95: number;
-  maxMonteCarloRuinProbability: number;
-  maxMonteCarloUnrecoveredRate: number;
+  requireMonteCarlo?: boolean;
+  maxMonteCarloDD95?: number;
+  maxMonteCarloRuinProbability?: number;
+  maxMonteCarloUnrecoveredRate?: number;
 }
 
 export const DEFAULT_EVIDENCE_PROMOTION_POLICY: EvidencePromotionPolicy = {
@@ -45,18 +45,23 @@ export function evaluateEvidenceForPromotion(
   if (!(evidence.walkForwardStability >= policy.minWalkForwardStability)) reasons.push("walkForwardStability below policy");
   if (!(evidence.parameterSensitivity >= policy.minParameterSensitivity)) reasons.push("parameterSensitivity below policy");
   if (!(evidence.regimeCoverage >= policy.minRegimeCoverage)) reasons.push("regimeCoverage below policy");
-  if (policy.requireMonteCarlo) {
+  const requireMonteCarlo = policy.requireMonteCarlo ?? false;
+  const maxMonteCarloDD95 = policy.maxMonteCarloDD95 ?? 0.30;
+  const maxMonteCarloRuinProbability = policy.maxMonteCarloRuinProbability ?? 0.05;
+  const maxMonteCarloUnrecoveredRate = policy.maxMonteCarloUnrecoveredRate ?? 0.25;
+
+  if (requireMonteCarlo) {
     const mc = evidence.monteCarloStress;
     if (!mc) {
       reasons.push("missing Monte Carlo stress evidence");
     } else {
-      if (!(mc.maxDDP95 <= policy.maxMonteCarloDD95)) {
+      if (!(mc.maxDDP95 <= maxMonteCarloDD95)) {
         reasons.push("Monte Carlo P95 drawdown above policy");
       }
-      if (!(mc.probabilityRuin <= policy.maxMonteCarloRuinProbability)) {
+      if (!(mc.probabilityRuin <= maxMonteCarloRuinProbability)) {
         reasons.push("Monte Carlo ruin probability above policy");
       }
-      if (!(mc.unrecoveredRate <= policy.maxMonteCarloUnrecoveredRate)) {
+      if (!(mc.unrecoveredRate <= maxMonteCarloUnrecoveredRate)) {
         reasons.push("Monte Carlo unrecovered rate above policy");
       }
     }
