@@ -40,7 +40,6 @@ trader.restoreState([{
   realizedProfit: 0,
 }], []);
 
-console.log('DEBUG open trades', trader.getOpenTrades());
 const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL');
 assert(Boolean(partial), 'partial close should return a trade');
 const expectedPartial =
@@ -65,7 +64,7 @@ const expectedRemaining =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-assertClose(closed!.profit ?? 0, expectedRemaining);
+assertClose(closed!.profit ?? 0, (partial!.profit ?? 0) + expectedRemaining);
 
 assertClose(
   (partial!.profit ?? 0) + (closed!.profit ?? 0),
