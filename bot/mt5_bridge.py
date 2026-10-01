@@ -179,6 +179,45 @@ def account_position_mode(info, mt5_module):
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
+def validate_trade_permissions(side: str, symbol_info, mt5_module) -> tuple[bool, str]:
+    """Validate broker trade-mode permission for the requested direction."""
+    mode = int(getattr(symbol_info, "trade_mode", 4) or 0)
+    disabled = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_DISABLED", 0))
+    long_only = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_LONGONLY", 1))
+    short_only = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_SHORTONLY", 2))
+    close_only = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_CLOSEONLY", 3))
+
+    if mode in (disabled, close_only):
+        return False, f"symbol trade mode {mode} does not allow opening positions"
+    if side == "BUY" and mode == short_only:
+        return False, "symbol is short-only"
+    if side == "SELL" and mode == long_only:
+        return False, "symbol is long-only"
+    return True, "OK"
+
+
+def validate_stop_distance(side: str, price: float, sl: float, tp: float, symbol_info) -> tuple[bool, str]:
+    """Validate SL/TP against broker-declared stop distance in points."""
+    point = float(getattr(symbol_info, "point", 0) or 0)
+    stops_level = float(getattr(symbol_info, "trade_stops_level", 0) or 0)
+    if not (point > 0 and stops_level > 0):
+        return True, "OK"
+
+    minimum = stops_level * point
+    if side == "BUY":
+        sl_distance = price - sl
+        tp_distance = tp - price
+    else:
+        sl_distance = sl - price
+        tp_distance = price - tp
+
+    if sl_distance < minimum - max(1e-12, minimum * 1e-9):
+        return False, f"SL distance {sl_distance} below broker minimum {minimum}"
+    if tp_distance < minimum - max(1e-12, minimum * 1e-9):
+        return False, f"TP distance {tp_distance} below broker minimum {minimum}"
+    return True, "OK"
+
+
 def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
     """Validate requested lots against broker symbol limits."""
     import math
@@ -458,6 +497,12 @@ def trade():
         if getattr(sym_info, "trade_mode", None) == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", object()):
             return err(f"Symbol {symbol} trading is disabled", 409)
 
+        permission_ok, permission_reason = validate_trade_permissions(
+            side, sym_info, mt5
+        )
+        if not permission_ok:
+            return err(permission_reason, 409)
+
         volume_ok, volume_reason = validate_trade_volume(volume, sym_info)
         if not volume_ok:
             return err(volume_reason, 422)
@@ -481,6 +526,14 @@ def trade():
             return err("Live MT5 orders require a positive stop-loss", 422)
         if (side == "BUY" and sl >= price) or (side == "SELL" and sl <= price):
             return err("Stop-loss direction is invalid for the requested side", 422)
+        if (side == "BUY" and tp <= price) or (side == "SELL" and tp >= price):
+            return err("Take-profit direction is invalid for the requested side", 422)
+
+        stops_ok, stops_reason = validate_stop_distance(
+            side, price, sl, tp, sym_info
+        )
+        if not stops_ok:
+            return err(stops_reason, 422)
 
         account = mt5.account_info()
         if not account:

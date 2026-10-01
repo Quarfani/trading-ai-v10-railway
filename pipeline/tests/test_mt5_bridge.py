@@ -155,7 +155,7 @@ def test_aggregate_volume_limit_blocks_same_direction():
     mt5 = types.SimpleNamespace(POSITION_TYPE_BUY=0)
     positions = [
         types.SimpleNamespace(type=0, volume=1.5),
-        types.SimpleNamespace(type=1, volume=3.0),
+        types.SimpleNamespace(type=1, volume=0.5),
     ]
     mt5.positions_get = lambda symbol: positions
     ok, reason = bridge.validate_aggregate_volume(
@@ -178,3 +178,28 @@ def test_aggregate_volume_limit_allows_other_direction():
         info(volume_limit=2.0), mt5
     )
     assert ok
+
+def test_trade_permissions_respect_direction():
+    mt5 = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        SYMBOL_TRADE_MODE_LONGONLY=1,
+        SYMBOL_TRADE_MODE_SHORTONLY=2,
+        SYMBOL_TRADE_MODE_CLOSEONLY=3,
+    )
+    assert bridge.validate_trade_permissions(
+        "BUY", info(trade_mode=1), mt5
+    )[0]
+    assert not bridge.validate_trade_permissions(
+        "SELL", info(trade_mode=1), mt5
+    )[0]
+    assert not bridge.validate_trade_permissions(
+        "BUY", info(trade_mode=3), mt5
+    )[0]
+
+
+def test_stop_distance_uses_broker_points():
+    symbol = info(point=0.01, trade_stops_level=10)
+    ok, _ = bridge.validate_stop_distance("BUY", 100.0, 99.9, 100.1, symbol)
+    assert ok
+    assert not bridge.validate_stop_distance("BUY", 100.0, 99.95, 100.1, symbol)[0]
+    assert not bridge.validate_stop_distance("SELL", 100.0, 100.1, 99.95, symbol)[0]
