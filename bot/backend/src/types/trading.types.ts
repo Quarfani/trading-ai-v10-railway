@@ -108,6 +108,15 @@ export interface StrategyPerformance {
 export interface SystemConfig {
   accountName?: string;
   accountCurrency?: string;
+  evidencePromotion?: {
+    minSampleSize: number;
+    minOutOfSampleTrades: number;
+    minOutOfSampleProfitFactor: number;
+    minWalkForwardStability: number;
+    minParameterSensitivity: number;
+    minRegimeCoverage: number;
+    maxAgeMs: number;
+  };
   mode: Mode;
   accountBalance: number;
   dataSource: DataSource;
