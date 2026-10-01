@@ -59,6 +59,7 @@ export class ScheduledWFO {
     this.wfo = new WalkForwardOptimizer(
       db.path,
       (config.accountCurrency ?? 'USD').toUpperCase(),
+      config.riskPerTrade,
     );
     this.evidenceSnapshots = new EvidenceSnapshotStore(db);
   }
