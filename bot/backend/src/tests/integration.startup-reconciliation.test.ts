@@ -267,11 +267,18 @@ async function main() {
       await new StartupReconciler(mt5Cfg, mt5DuplicateDb, new TelegramBot(mt5Cfg)).run();
     } catch { duplicateBlocked = true; }
     assert(duplicateBlocked, 'multiple unresolved MT5 close operations for one trade must remain a startup blocker');
+    const duplicateUnresolved = mt5DuplicateDb.raw().prepare(
+      `SELECT COUNT(*) c FROM execution_ledger
+       WHERE operationKey IN ('mt5-close-op-a','mt5-close-op-b')
+         AND status IN ('PENDING','UNKNOWN')`,
+    ).get().c;
     assert(
-      mt5DuplicateDb.raw().prepare(
-        `SELECT COUNT(*) c FROM execution_ledger WHERE status IN ('PENDING','UNKNOWN')`,
-      ).get().c === 1,
-      'duplicate MT5 close recovery must resolve at most one operation',
+      duplicateUnresolved === 1,
+      'duplicate MT5 close recovery must resolve exactly one operation and leave one unresolved',
+    );
+    assert(
+      mt5DuplicateDb.getExecutionByOperationKey('mt5-close-op-a').status === 'EXECUTED',
+      'earliest duplicate MT5 close operation must be the one reconciled',
     );
     assert(mt5DuplicateDb.getOpenTrades().length === 0, 'duplicate-close recovery may settle the internal trade once');
     mt5DuplicateDb.raw().close();
