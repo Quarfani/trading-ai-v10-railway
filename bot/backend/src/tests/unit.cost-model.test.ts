@@ -82,4 +82,31 @@ const cryptoCosts = estimateCosts(
 );
 approx(cryptoCosts.commission, 201);
 
-console.log('Result: 10 passed, 0 failed');
+
+const varyingFx = estimateCosts(
+  {
+    entryPrice: 1,
+    exitPrice: 1.01,
+    volume: 1,
+    contractSize: 100_000,
+    quoteToAccount: 1,
+    entryQuoteToAccount: 1.10,
+    exitQuoteToAccount: 1.25,
+  },
+  fx,
+);
+const flatFx = estimateCosts(
+  {
+    entryPrice: 1,
+    exitPrice: 1.01,
+    volume: 1,
+    contractSize: 100_000,
+    quoteToAccount: 1,
+  },
+  fx,
+);
+assert(varyingFx.entryCommission !== flatFx.entryCommission, 'entry conversion must affect entry cost');
+assert(varyingFx.exitCommission !== flatFx.exitCommission, 'exit conversion must affect exit cost');
+assert(varyingFx.spread !== flatFx.spread, 'distinct conversion rates must affect spread');
+
+console.log('Result: 13 passed, 0 failed');
