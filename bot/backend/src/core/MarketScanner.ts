@@ -100,9 +100,35 @@ export class MarketScanner {
     for(let page=0;all.length<target&&page<20;page++){
       const limit=Math.min(1000,target-all.length),params:any={symbol,interval:MAP[tf],limit}; if(endTime!==undefined)params.endTime=endTime;
       const r=await axios.get(base,{params,timeout:10000});
-      const batch:Candle[]=(r.data??[]).map((k:any[])=>({time:Number(k[0]),open:Number(k[1]),high:Number(k[2]),low:Number(k[3]),close:Number(k[4]),volume:Number(k[5])}));
-      if(!batch.length)break; all.unshift(...batch); endTime=batch[0].time-1; if(batch.length<limit)break; await sleep(100);
+      const rawBatch = r.data ?? [];
+      const batch:Candle[]=rawBatch
+        .map((k:any[])=>({
+          time:Number(k[0]),
+          open:Number(k[1]),
+          high:Number(k[2]),
+          low:Number(k[3]),
+          close:Number(k[4]),
+          volume:Number(k[5]),
+        }))
+        .filter((c:Candle)=>
+          Number.isFinite(c.time) &&
+          Number.isFinite(c.open) &&
+          Number.isFinite(c.high) &&
+          Number.isFinite(c.low) &&
+          Number.isFinite(c.close) &&
+          c.high >= Math.max(c.open, c.close) &&
+          c.low <= Math.min(c.open, c.close) &&
+          c.high >= c.low &&
+          c.volume >= 0 &&
+          c.time + TIMEFRAME_MS[tf] <= Date.now()
+        );
+      if(!batch.length && !rawBatch.length)break;
+      if(batch.length) all.unshift(...batch);
+      endTime=Number(rawBatch[0]?.[0])-1;
+      if(rawBatch.length<limit)break;
+      await sleep(100);
     }
+
     const dedup=new Map<number,Candle>();for(const c of all){c.source='binance';dedup.set(c.time,c);}return Array.from(dedup.values()).sort((a,b)=>a.time-b.time).slice(-target);
   }
 
