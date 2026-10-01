@@ -297,19 +297,5 @@ export class SymbolValidator {
       buildMT5BrokerContractDefinition(symbol, response.data),
     );
   }
-  private async enrichBrokerContract(symbol: string): Promise<void> {
-    const response = await axios.get(
-      this.config.mt5.bridgeUrl + '/contract',
-      {
-        params: { symbol },
-        timeout: 5000,
-        headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
-      },
-    );
-
-    registerBrokerContract(
-      buildMT5BrokerContractDefinition(symbol, response.data),
-    );
-  }
 
 }
