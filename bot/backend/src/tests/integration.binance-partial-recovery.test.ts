@@ -268,7 +268,36 @@ async function main() {
   assert(fullLedger.status === "EXECUTED", "full runtime recovery must resolve UNKNOWN close ledger");
   fullReconDb.raw().close();
 
-  console.log("Result: 9 passed, 0 failed");
+  const nullVerifyPartial = new BinanceExecutor(config());
+  let partialPositionCalls = 0;
+  (nullVerifyPartial as any).getPosition = async () => {
+    partialPositionCalls += 1;
+    if (partialPositionCalls === 1) {
+      return { positionAmt: 1, entryPrice: 50_000, unrealizedProfit: 0 };
+    }
+    return null;
+  };
+  (nullVerifyPartial as any).signedPost = async () => ({ orderId: 70003 });
+  (nullVerifyPartial as any).getFuturesOrderNetPnl = async () => ({
+    profit: 5,
+    currency: "USDT",
+  });
+  const nullPartial = await nullVerifyPartial.closePartialPosition(9300, "BTCUSDT", 0.4, "ta_test_partial");
+  assert(nullPartial.ok === false, "partial close must fail closed when post-fill position verification is unavailable");
+
+  const nullVerifyFull = new BinanceExecutor(config());
+  (nullVerifyFull as any).getPosition = async () => null;
+  (nullVerifyFull as any).signedPost = async () => ({ orderId: 70004 });
+  const nullFull = await nullVerifyFull.closePosition(
+    9301,
+    "BTCUSDT",
+    1,
+    "BUY",
+    makeBinanceClientOrderId("null-verify-full"),
+  );
+  assert(nullFull.ok === false, "full close must fail closed when position verification is unavailable");
+
+  console.log("Result: 11 passed, 0 failed");
 }
 
 main().catch(error => {
