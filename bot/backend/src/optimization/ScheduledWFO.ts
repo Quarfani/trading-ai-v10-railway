@@ -124,13 +124,23 @@ export class ScheduledWFO {
           `conf=${p.minConfidence.toFixed(2)} OOS_WR=${(result.oos_winRate * 100).toFixed(1)}%`
         );
 
-        // Persist optimal params to DB for AdaptiveATRManager to pick up
-        this.db.setSetting(
-          `wfo_params_${symbol}`,
-          JSON.stringify({ ...p, updatedAt: Date.now() }),
-        );
+        if (result.valid && result.recommendation === 'TRADE') {
+          // Persist only a fully valid WFO result that passed the live promotion
+          // threshold. CAUTION/DO_NOT_TRADE results never mutate active params.
+          this.db.setSetting(
+            `wfo_params_${symbol}`,
+            JSON.stringify({ ...p, updatedAt: Date.now(), wfoValid: true }),
+          );
+          successCount++;
+          this.logger.info(
+            `WFO ${symbol}: params promoted after valid OOS evaluation`,
+          );
+        } else {
+          this.logger.warn(
+            `WFO ${symbol}: params NOT promoted valid=${result.valid} recommendation=${result.recommendation} reason=${result.reason}`,
+          );
+        }
 
-        successCount++;
         this.logger.info(`WFO ${symbol}: ${results[results.length - 1]}`);
 
       } catch (e: any) {
