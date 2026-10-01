@@ -538,9 +538,9 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
     )
     monkeypatch.setattr(bridge, "mt5", fake_mt5, raising=False)
     monkeypatch.setattr(bridge, "MT5_AVAILABLE", True)
-    monkeypatch.setattr(bridge.mt5, "symbol_info", lambda symbol: sym_info)
-    monkeypatch.setattr(bridge.mt5, "symbol_info_tick", lambda symbol: tick)
-    monkeypatch.setattr(bridge.mt5, "positions_get", lambda **kwargs: [])
+    monkeypatch.setattr(bridge.mt5, "symbol_info", lambda symbol: sym_info, raising=False)
+    monkeypatch.setattr(bridge.mt5, "symbol_info_tick", lambda symbol: tick, raising=False)
+    monkeypatch.setattr(bridge.mt5, "positions_get", lambda **kwargs: [], raising=False)
     monkeypatch.setattr(
         bridge.mt5,
         "account_info",
