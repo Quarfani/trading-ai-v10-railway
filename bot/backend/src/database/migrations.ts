@@ -310,6 +310,46 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_equity_snapshots_ts ON equity_snapshots(timestamp);
     `,
   },
+    {
+    version: 11, name: 'strategy_lifecycle_registry',
+    up: `
+      CREATE TABLE IF NOT EXISTS strategy_definitions (
+        strategyId TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        lifecycle TEXT NOT NULL,
+        assetClassesJson TEXT NOT NULL,
+        symbolsJson TEXT NOT NULL,
+        timeframesJson TEXT NOT NULL,
+        regimesJson TEXT NOT NULL,
+        sessionsJson TEXT NOT NULL,
+        requiredDataJson TEXT NOT NULL,
+        parametersVersion TEXT NOT NULL,
+        baseRiskFraction REAL NOT NULL,
+        minimumRiskReward REAL NOT NULL,
+        maximumDrawdown REAL NOT NULL,
+        maximumCorrelatedExposure REAL,
+        evidenceJson TEXT,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS strategy_lifecycle_transitions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        strategyId TEXT NOT NULL,
+        fromState TEXT NOT NULL,
+        toState TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        reason TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_strategy_lifecycle_strategy
+        ON strategy_lifecycle_transitions(strategyId, at);
+      CREATE INDEX IF NOT EXISTS idx_strategy_definitions_lifecycle
+        ON strategy_definitions(lifecycle, enabled);
+    `
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
