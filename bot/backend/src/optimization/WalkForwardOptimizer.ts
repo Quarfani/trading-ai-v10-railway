@@ -221,8 +221,8 @@ export class WalkForwardOptimizer {
     maxDD: number;
     valid: boolean;
   }> {
-    const envAtrKey = `SPEC_${symbol}_ATR_MULT`;
-    const envTpKey = `SPEC_${symbol}_TP_RATIO`;
+    const envAtrKey = `SPEC_${symbol}_${timeframe}_ATR_MULT`;
+    const envTpKey = `SPEC_${symbol}_${timeframe}_TP_RATIO`;
     const originalEnv = {
       atrMult: process.env[envAtrKey],
       tpRatio: process.env[envTpKey],
@@ -361,8 +361,8 @@ export class WalkForwardOptimizer {
   saveParams(db: DatabaseManager, symbol: string, params: OptimParams, timeframe: Timeframe = 'H1'): void {
     db.setSetting(`wfo_params_${symbol}_${timeframe}`, JSON.stringify({ ...params, savedAt: Date.now(), timeframe }));
     // Also set env vars so symbolConfig picks them up
-    process.env[`SPEC_${symbol}_ATR_MULT`] = String(params.atrMult);
-    process.env[`SPEC_${symbol}_TP_RATIO`] = String(params.tpRatio);
+    process.env[`SPEC_${symbol}_${timeframe}_ATR_MULT`] = String(params.atrMult);
+    process.env[`SPEC_${symbol}_${timeframe}_TP_RATIO`] = String(params.tpRatio);
     this.logger.info(`Saved WFO params for ${symbol}: atrMult=${params.atrMult} tpRatio=${params.tpRatio}`);
   }
 
