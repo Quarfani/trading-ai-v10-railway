@@ -209,9 +209,38 @@ async function main() {
 
   const corruptDb = new DatabaseManager(":memory:");
   await corruptDb.initialize();
+
+  const corruptGateway = new ExecutionGateway(
+    baseConfig("paper"),
+    corruptDb,
+    new PaperTrader(10_000),
+  );
+  const corruptSignal = {
+    symbol: "EURUSD",
+    side: "BUY",
+    timestamp: 123456,
+    price: 1.1,
+    sl: 1.09,
+    tp: 1.12,
+    confidence: 0.9,
+    source: "CORRUPT_LEDGER_TEST",
+    timeframe: "H1",
+  } as any;
+  const corruptOperationKey = (corruptGateway as any).stableKey('OPEN', {
+    account: "ledger-test",
+    mode: "paper",
+    symbol: "EURUSD",
+    side: "BUY",
+    timestamp: 123456,
+    timeframe: "H1",
+    volume: 0.01,
+    source: "CORRUPT_LEDGER_TEST",
+    sl: 1.09,
+    tp: 1.12,
+  });
   corruptDb.createExecutionLedger({
     executionId: "corrupt-1",
-    operationKey: "corrupt-operation",
+    operationKey: corruptOperationKey,
     action: "OPEN",
     status: "EXECUTED",
     symbol: "EURUSD",
@@ -222,23 +251,8 @@ async function main() {
     .prepare("UPDATE execution_ledger SET resultJson=? WHERE executionId=?")
     .run("{invalid-json", "corrupt-1");
 
-  const corruptGateway = new ExecutionGateway(
-    baseConfig("paper"),
-    corruptDb,
-    new PaperTrader(10_000),
-  );
   const corruptResult = await corruptGateway.execute(
-    {
-      symbol: "EURUSD",
-      side: "BUY",
-      timestamp: 123456,
-      price: 1.1,
-      sl: 1.09,
-      tp: 1.12,
-      confidence: 0.9,
-      source: "CORRUPT_LEDGER_TEST",
-      timeframe: "H1",
-    } as any,
+    corruptSignal,
     0.01,
     "H1",
   );
