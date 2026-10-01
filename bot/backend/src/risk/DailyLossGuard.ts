@@ -6,12 +6,13 @@
  * Result: the daily loss limit tripped immediately on any open gold/crypto trade,
  * blocking all new positions even when the account was barely negative.
  *
- * Fix: use getSymbolSpec(symbol).contractSize per trade.
+ * Fix: use canonical MarketDefinition economics and account-currency conversion.
  */
 import { DatabaseManager }        from '../database/DatabaseManager';
 import { SystemConfig, Trade }    from '../types/trading.types';
 import { TelegramBot }            from '../notifications/TelegramBot';
-import { getSymbolSpec }          from '../config/symbolConfig';
+import { getMarketDefinition }    from '../market/MarketCatalog';
+import { resolveQuoteToAccount }  from '../market/CurrencyConverter';
 import { Logger }                 from '../utils/Logger';
 
 export class DailyLossGuard {
@@ -35,6 +36,10 @@ export class DailyLossGuard {
     const realizedPnl = stats?.pnl ?? 0;
 
     const floatingPnl = this.calcFloating(currentPrices);
+    if (floatingPnl == null) {
+      this.logger.warn('Daily loss guard: floating P&L state unavailable — trading blocked');
+      return false;
+    }
     const totalLoss   = realizedPnl + floatingPnl;
     const lossPct     = -totalLoss / this.config.accountBalance;
 
@@ -57,28 +62,49 @@ export class DailyLossGuard {
     return true;
   }
 
-  /**
-   * Calculate floating P&L from all open trades.
-   * FIX: uses per-symbol contractSize from symbolConfig — not hardcoded 100,000.
-   */
-  private calcFloating(prices?: Record<string, number>): number {
-    if (!prices || Object.keys(prices).length === 0) return 0;
-
+  /** Calculate floating P&L in account currency using canonical market economics. */
+  private calcFloating(prices?: Record<string, number>): number | null {
     const open: Trade[] = this.db.getOpenTrades();
+    if (!open.length) return 0;
+    if (!prices || Object.keys(prices).length === 0) return null;
+
+    const accountCurrency = this.config.accountCurrency ?? 'USD';
     let floating = 0;
 
     for (const t of open) {
-      const price = prices[t.symbol];
-      if (!price || !t.entry) continue;
+      const price = Number(prices[t.symbol]);
+      if (
+        !(price > 0) ||
+        !Number.isFinite(price) ||
+        !Number.isFinite(t.entry) ||
+        !(t.entry > 0)
+      ) return null;
 
-      // FIX BUG-C2: per-symbol contractSize
-      const spec        = getSymbolSpec(t.symbol);
-      const priceDelta  = t.side === 'BUY'
+      const market = getMarketDefinition(
+        t.symbol,
+        t.timeframe ?? 'H1',
+      );
+      if (!market) return null;
+
+      const quoteToAccount = resolveQuoteToAccount(
+        market.quoteCurrency,
+        accountCurrency,
+        prices,
+      );
+      if (quoteToAccount == null) return null;
+
+      const priceDelta = t.side === 'BUY'
         ? price - t.entry
         : t.entry - price;
 
-      // P&L in account currency (USD)
-      floating += priceDelta * t.volume * spec.contractSize;
+      const pnl =
+        priceDelta *
+        Number(t.volume) *
+        market.economics.contractSize *
+        quoteToAccount;
+
+      if (!Number.isFinite(pnl)) return null;
+      floating += pnl;
     }
 
     return floating;
