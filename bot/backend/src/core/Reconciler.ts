@@ -157,6 +157,17 @@ export class Reconciler {
         const hist = await this.getMT5History(t.ticket);
         if (!hist) throw new Error(`MT5 position ${t.ticket} is absent but authoritative close history is unavailable`);
         await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
+        this.resolveReconciledLedger(
+          t.id,
+          ['CLOSE', 'CLOSE_AT_MARKET'],
+          {
+            broker: 'mt5',
+            ticket: t.ticket,
+            profit: hist.profit,
+            reason: hist.reason,
+            closePrice: hist.price,
+          },
+        );
       } else {
         // Handle partial close: volume reduced on broker side
         const brokerVolume = Number(live.volume);
@@ -197,6 +208,20 @@ export class Reconciler {
           ) {
             this.logger.info(
               `[${t.symbol}] Reconciled cumulative realized PnL=${cumulativeRealized.toFixed(8)}`,
+            );
+          }
+
+          if (Number.isFinite(cumulativeRealized)) {
+            this.resolveReconciledLedger(
+              t.id,
+              ['PARTIAL_CLOSE'],
+              {
+                broker: 'mt5',
+                ticket: t.ticket,
+                closedVolume: volumeDelta,
+                remainingVolume: brokerVolume,
+                cumulativeRealizedProfit: cumulativeRealized,
+              },
             );
           }
         }
@@ -243,6 +268,27 @@ export class Reconciler {
       };
     } catch (e) {
       throw new Error(`MT5 history lookup failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private resolveReconciledLedger(
+    tradeId: number | undefined,
+    actions: string[],
+    result: Record<string, unknown>,
+  ): void {
+    if (!tradeId) return;
+    const operation = this.db.getLatestUnresolvedExecutionForTrade(tradeId, actions);
+    if (!operation) return;
+
+    const resolved = this.db.resolveExecutionLedger(
+      String(operation.executionId),
+      result,
+      result.ticket as string | number | undefined,
+    );
+    if (resolved) {
+      this.logger.info(
+        `[${operation.action}] reconciled execution-ledger operation=${operation.operationKey}`,
+      );
     }
   }
 
