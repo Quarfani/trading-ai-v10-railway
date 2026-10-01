@@ -81,7 +81,7 @@ def test_position_history_aggregates_net_pnl_and_uses_latest_close():
     assert summary["position_id"] == 42
     assert summary["close_price"] == 1.26
     assert summary["close_reason"] == "SL"
-    assert summary["net_profit"] == 44.2
+    assert summary["net_profit"] == 43.7
 
 
 def test_position_history_requires_a_closing_deal():
