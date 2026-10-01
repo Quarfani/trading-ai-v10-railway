@@ -65,7 +65,18 @@ export function createApi(engine: TradingEngine) {
   app.post('/api/auth/login', validate(LoginSchema), login);
 
   // ── Health (public) ───────────────────────────────────────────────────
-  const healthPayload = () => ({ ok: true, running: engine.isActive(), mode: engine.config.mode, ts: Date.now(), version: '9.2' });
+  const healthPayload = () => {
+    const readiness = engine.readiness();
+    return {
+      ok: true,
+      running: engine.isActive(),
+      mode: engine.config.mode,
+      ts: Date.now(),
+      version: '9.2',
+      contractsReady: readiness.contractsReady,
+      brokerContracts: readiness.brokerContracts,
+    };
+  };
   app.get('/api/health', (_: Request, res: Response) => res.json(healthPayload()));
   app.get('/health', (_: Request, res: Response) => res.json(healthPayload()));
   app.get('/liveness', (_: Request, res: Response) => res.json(healthPayload()));

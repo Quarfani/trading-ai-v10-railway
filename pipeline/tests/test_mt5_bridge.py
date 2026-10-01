@@ -377,3 +377,78 @@ def test_idempotency_cache_replays_success_and_unknown():
     assert cached_unknown is not None
     assert cached_unknown[1] == "UNKNOWN"
     assert cached_unknown[2] == unknown_payload
+
+
+def test_account_position_mode_requires_known_constants():
+    mt5 = types.SimpleNamespace()
+    assert bridge.account_position_mode(
+        types.SimpleNamespace(margin_mode=0), mt5
+    ) == "UNKNOWN"
+
+
+def test_simulation_trade_replays_success(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "simulation"
+    bridge._sim_positions.clear()
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    client = bridge.app.test_client()
+    payload = {
+        "symbol": "EURUSD",
+        "side": "BUY",
+        "volume": 1.0,
+        "sl": 0.99,
+        "tp": 1.02,
+        "idempotency_key": "sim-open-replay-1",
+    }
+    first = client.post("/trade", json=payload)
+    second = client.post("/trade", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json() == second.get_json()
+    assert bridge._sim_ticket == 1001
+
+
+def test_simulation_partial_close_replays_success(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "simulation"
+    bridge._sim_positions.clear()
+    bridge._sim_positions[901] = {
+        "symbol": "EURUSD", "type": "BUY", "volume": 1.0,
+        "price": 100.0, "sl": 99.0, "tp": 102.0,
+    }
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    monkeypatch.setattr(
+        bridge, "sim_close",
+        lambda ticket, fraction=1.0: {
+            "ok": True, "ticket": ticket, "closed_volume": 0.5,
+            "remaining_volume": 0.5, "profit": 0.5,
+        },
+    )
+    client = bridge.app.test_client()
+    payload = {"ticket": 901, "fraction": 0.5, "idempotency_key": "sim-partial-replay-1"}
+    first = client.post("/close_partial", json=payload)
+    second = client.post("/close_partial", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json() == second.get_json()
+
+
+def test_simulation_modify_replays_success(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "simulation"
+    bridge._sim_positions.clear()
+    bridge._sim_positions[902] = {
+        "symbol": "EURUSD", "type": "BUY", "volume": 1.0,
+        "price": 100.0, "sl": 99.0, "tp": 102.0,
+    }
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    client = bridge.app.test_client()
+    payload = {
+        "ticket": 902, "sl": 98.0, "tp": 103.0,
+        "idempotency_key": "sim-modify-replay-1",
+    }
+    first = client.post("/modify", json=payload)
+    second = client.post("/modify", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json() == second.get_json()

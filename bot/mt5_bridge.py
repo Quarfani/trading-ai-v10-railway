@@ -245,12 +245,16 @@ def resolve_position_ticket(order_result, mt5_module):
 def account_position_mode(info, mt5_module):
     """Return explicit MT5 position-account mode for execution safety."""
     margin_mode = getattr(info, "margin_mode", None)
+    if margin_mode is None:
+        return "UNKNOWN"
     hedging_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", None)
     netting_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_RETAIL_NETTING", None)
     exchange_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_EXCHANGE", None)
     if hedging_mode is not None and margin_mode == hedging_mode:
         return "HEDGING"
-    if margin_mode in (netting_mode, exchange_mode):
+    if netting_mode is not None and margin_mode == netting_mode:
+        return "NETTING_OR_EXCHANGE"
+    if exchange_mode is not None and margin_mode == exchange_mode:
         return "NETTING_OR_EXCHANGE"
     return "UNKNOWN"
 
@@ -443,26 +447,43 @@ def validate_aggregate_volume(symbol: str, side: str, volume: float, symbol_info
 
 def calculate_order_estimates(mt5_module, order_type, symbol, volume, open_price, stop_price) -> tuple[float, float]:
     """Return estimated stop-loss loss and required margin in account currency."""
-    profit = mt5_module.order_calc_profit(
-        order_type, symbol, volume, open_price, stop_price
-    )
+    try:
+        profit = mt5_module.order_calc_profit(
+            order_type, symbol, volume, open_price, stop_price
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(f"order_calc_profit returned invalid data: {exc}") from exc
     if profit is None:
         raise RuntimeError(
             f"order_calc_profit failed: {mt5_module.last_error()}"
         )
+    try:
+        profit_value = float(profit)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(f"order_calc_profit returned non-numeric data: {exc}") from exc
+    if not math.isfinite(profit_value):
+        raise RuntimeError("MT5 returned non-finite order_calc_profit")
 
-    margin = mt5_module.order_calc_margin(
-        order_type, symbol, volume, open_price
-    )
+    try:
+        margin = mt5_module.order_calc_margin(
+            order_type, symbol, volume, open_price
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(f"order_calc_margin returned invalid data: {exc}") from exc
     if margin is None:
         raise RuntimeError(
             f"order_calc_margin failed: {mt5_module.last_error()}"
         )
-
-    loss = max(0.0, -float(profit))
-    margin_value = float(margin)
-    if loss != loss or margin_value != margin_value or margin_value < 0:
+    try:
+        margin_value = float(margin)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(f"order_calc_margin returned non-numeric data: {exc}") from exc
+    if not math.isfinite(margin_value) or margin_value < 0:
         raise RuntimeError("MT5 returned invalid risk estimates")
+
+    loss = max(0.0, -profit_value)
+    if not math.isfinite(loss):
+        raise RuntimeError("MT5 returned invalid stop-loss estimate")
     return loss, margin_value
 
 def choose_market_filling_mode(symbol_info, mt5_module):
@@ -732,17 +753,20 @@ def trade():
 
 
     if BRIDGE_MODE == 'simulation':
-        # Simulation mode
         tick_r = tick()
         if isinstance(tick_r, tuple):
             tick_data = tick_r[0].get_json()
         else:
             tick_data = tick_r.get_json()
         price = tick_data["ask"] if side == "BUY" else tick_data["bid"]
-        pos   = sim_open(symbol, side, volume, sl, tp, price)
+        pos = sim_open(symbol, side, volume, sl, tp, price)
+        response_payload = {
+            "ok": True, "ticket": pos["ticket"], "price": price,
+            "volume": volume, "symbol": symbol, "mode": "simulation",
+        }
+        _idempotency_record(idempotency_key, "SUCCESS", response_payload)
         log.info(f"[SIM] {side} {volume} {symbol} @ {price} SL={sl} TP={tp}")
-        return jsonify({"ok": True, "ticket": pos["ticket"], "price": price,
-                        "volume": volume, "symbol": symbol, "mode": "simulation"})
+        return jsonify(response_payload)
 
     with _lock:
         cached = _idempotency_lookup(idempotency_key)
@@ -832,7 +856,12 @@ def trade():
                 422,
             )
 
-        free_margin = float(getattr(account, "margin_free", 0.0))
+        try:
+            free_margin = float(getattr(account, "margin_free", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            return err("Invalid account free margin for risk guard", 503)
+        if not math.isfinite(free_margin) or free_margin < 0:
+            return err("Invalid account free margin for risk guard", 503)
         if estimated_margin > free_margin + max(0.01, free_margin * 1e-9):
             return err(
                 f"Estimated margin {estimated_margin:.2f} exceeds "
@@ -965,10 +994,13 @@ def modify():
     if BRIDGE_MODE == 'simulation':
         if sl <= 0 or tp <= 0:
             return err("simulation SL/TP must be positive", 422)
-        if ticket in _sim_positions:
-            _sim_positions[ticket]["sl"] = sl
-            _sim_positions[ticket]["tp"] = tp
-        return jsonify({"ok": True, "ticket": ticket, "sl": sl, "tp": tp})
+        if ticket not in _sim_positions:
+            return err(f"Position {ticket} not found", 404)
+        _sim_positions[ticket]["sl"] = sl
+        _sim_positions[ticket]["tp"] = tp
+        response_payload = {"ok": True, "ticket": ticket, "sl": sl, "tp": tp}
+        _idempotency_record(idempotency_key, "SUCCESS", response_payload)
+        return jsonify(response_payload)
 
     with _lock:
         cached = _idempotency_lookup(idempotency_key)
@@ -1232,6 +1264,8 @@ def close_partial():
 
     if BRIDGE_MODE == 'simulation':
         result = sim_close(ticket, fraction)
+        if result.get("ok"):
+            _idempotency_record(idempotency_key, "SUCCESS", result)
         return jsonify(result)
 
     with _lock:

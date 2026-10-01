@@ -55,3 +55,23 @@ def test_calculate_order_estimates_fails_closed_when_margin_is_unavailable():
     else:
         raise AssertionError('missing margin estimate must fail closed')
 
+
+
+def test_calculate_order_estimates_rejects_non_finite_profit():
+    mt5 = FakeMT5(profit=float("inf"), margin=100.0)
+    try:
+        calculate_order_estimates(mt5, 0, "EURUSD", 1.0, 1.10, 1.095)
+    except RuntimeError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("non-finite profit estimate must fail closed")
+
+
+def test_calculate_order_estimates_rejects_non_finite_margin():
+    mt5 = FakeMT5(profit=-25.0, margin=float("inf"))
+    try:
+        calculate_order_estimates(mt5, 0, "EURUSD", 1.0, 1.10, 1.095)
+    except RuntimeError as exc:
+        assert "invalid risk estimates" in str(exc)
+    else:
+        raise AssertionError("non-finite margin estimate must fail closed")
