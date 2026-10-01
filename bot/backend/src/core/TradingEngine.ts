@@ -42,7 +42,7 @@ import { Reconciler } from './Reconciler';
 import { D1TrendBiasFilter } from './D1TrendBiasFilter';
 import { AutoSymbolDiscovery } from './AutoSymbolDiscovery';
 import { PositionTracker } from './PositionTracker';
-import { RaceConditionSafety } from './RaceConditionSafety';
+import { AsyncMutex, RaceConditionSafety } from './RaceConditionSafety';
 
 import { RiskManager } from '../risk/RiskManager';
 import { WeekendGuard } from '../risk/WeekendGuard';
@@ -136,6 +136,7 @@ export class TradingEngine extends EventEmitter {
   private readonly spreadAdj = new SpreadAdjustment();
   private readonly gapProtect = new GapProtection();
   private readonly slippageGuard = new SlippageGuard();
+  private readonly executionAdmission = new AsyncMutex();
   private slippageBlockCount = 0;
 
   private nvidiaAI: NvidiaAI;
@@ -782,7 +783,7 @@ export class TradingEngine extends EventEmitter {
       this.timeFilter.getMultiplier();
 
     // ── Drawdown recovery ──────────────────────────────────────────────
-    const equity =
+    let equity =
       await this.exec.getCurrentEquity();
 
     if (
@@ -1227,9 +1228,31 @@ export class TradingEngine extends EventEmitter {
       }
     }
 
-    // ── Risk pipeline ──────────────────────────────────────────────────
-    const openTrades =
-      this.db.getOpenTrades();
+    // ── Risk/execution admission ───────────────────────────────────────
+    // Multiple symbols are scanned concurrently, but shared portfolio limits
+    // must be evaluated and executed atomically.
+    const acquiredAdmission = await this.executionAdmission.acquire(30_000);
+    if (!acquiredAdmission) {
+      this.logger.warn(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=EXECUTION_ADMISSION_LOCK_TIMEOUT`,
+      );
+      return;
+    }
+
+    try {
+      const openTrades = this.db.getOpenTrades();
+      const freshEquity = await this.exec.getCurrentEquity();
+      if (freshEquity != null && freshEquity > 0 && Number.isFinite(freshEquity)) {
+        equity = freshEquity;
+      } else {
+        this.logger.error(
+          `[PIPELINE_BLOCK] ${symbol}/${tf} stage=EQUITY ` +
+            `reason=current_equity_unavailable_inside_admission`,
+        );
+        return;
+      }
+
+      // Risk pipeline
 
     const livePrices: Record<string, number> = ticker
       ? {
@@ -1540,6 +1563,9 @@ export class TradingEngine extends EventEmitter {
       'trade_open',
       result.trade,
     );
+    } finally {
+      this.executionAdmission.release();
+    }
   }
 
   // ─── Heartbeat ────────────────────────────────────────────────────────────
