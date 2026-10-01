@@ -104,18 +104,12 @@ export class StartupReconciler {
         continue;
       }
 
-      if (String(trade.status) === 'open') {
-        const changed = this.db.updateTradeClose(
-          Number(trade.id),
-          history.profit,
-          Date.now(),
-          history.reason,
-        );
-        if (!changed) continue;
-      }
-
-      const resolved = this.db.resolveExecutionLedger(
+      const resolved = this.db.resolveReconciledFullClose(
+        Number(trade.id),
         String(row.executionId),
+        history.profit,
+        Date.now(),
+        history.reason,
         {
           broker: 'mt5',
           ticket: Number(trade.ticket),
@@ -256,13 +250,19 @@ export class StartupReconciler {
       if (!t.ticket) throw new Error(`Open DB trade id=${t.id} has no broker ticket`);
       const live = byTicket.get(Number(t.ticket));
       if (!live) {
+        const pendingClose = this.db.getLatestUnresolvedExecutionForTrade(
+          t.id!,
+          ['CLOSE', 'CLOSE_AT_MARKET'],
+        );
         const hist = await this.getMT5HistoryEntry(Number(t.ticket));
         if (!hist) throw new Error(`MT5 position missing and no authoritative close history for ticket=${t.ticket}`);
-        if (!this.isHistoryValidForUnresolvedClose(t.id!, hist.closeTimeMsc)) {
-          throw new Error(
-            `MT5 close history predates unresolved execution for ticket=${t.ticket}; reconciliation is required`,
-          );
+
+        if (pendingClose) {
+          // Let resolveAuthoritativeMT5CloseLedgers atomically settle the
+          // trade + ledger after validating history timing.
+          continue;
         }
+
         const changed = this.db.updateTradeClose(t.id!, hist.profit, Date.now(), hist.reason);
         if (!changed) throw new Error(`Could not close DB trade id=${t.id} during reconciliation`);
         continue;
