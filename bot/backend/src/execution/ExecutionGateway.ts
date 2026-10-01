@@ -391,6 +391,47 @@ export class ExecutionGateway {
     throw new Error('Paper close must use closeAtMarket');
   }
 
+  private resolveLiveFullClose(
+    t: Trade,
+    executionId: string,
+    brokerResult: { realizedProfit: number | null },
+    reason: string,
+  ): number {
+    if (!t.id) throw new Error('Live close requires a persisted trade id');
+    if (brokerResult.realizedProfit == null ||
+        !Number.isFinite(brokerResult.realizedProfit)) {
+      throw new Error('Authoritative broker realized PnL is unavailable');
+    }
+
+    const cumulativeProfit = this.config.mode === 'binance'
+      ? Number(t.realizedProfit ?? 0) + brokerResult.realizedProfit
+      : brokerResult.realizedProfit;
+    if (!Number.isFinite(cumulativeProfit)) {
+      throw new Error('Cumulative broker realized PnL is not finite');
+    }
+
+    const resolved = this.db.resolveReconciledFullClose(
+      t.id,
+      executionId,
+      cumulativeProfit,
+      Date.now(),
+      reason,
+      {
+        broker: this.config.mode,
+        ticket: t.ticket,
+        brokerProfit: brokerResult.realizedProfit,
+        cumulativeProfit,
+        normalExecution: true,
+      },
+      t.ticket,
+    );
+    if (!resolved) {
+      throw new Error(
+        `Broker close succeeded but atomic trade/ledger settlement failed for id=${t.id}`,
+      );
+    }
+    return cumulativeProfit;
+  }
   async closeTrade(t: Trade) {
     const key = this.stableKey('CLOSE', {
       id: t.id,
@@ -403,39 +444,13 @@ export class ExecutionGateway {
 
     try {
       const brokerResult = await this.closeBrokerTrade(t, key);
-
-      if (
-        brokerResult.realizedProfit != null &&
-        Number.isFinite(brokerResult.realizedProfit) &&
-        t.id
-      ) {
-        const cumulativeProfit = this.config.mode === 'binance'
-          ? Number(t.realizedProfit ?? 0) + brokerResult.realizedProfit
-          : brokerResult.realizedProfit;
-        if (!Number.isFinite(cumulativeProfit)) {
-          throw new Error(
-            'Cumulative broker realized PnL is not finite',
-          );
-        }
-
-        const changed = this.db.updateTradeClose(
-          t.id,
-          cumulativeProfit,
-          Date.now(),
-          'MANUAL',
-        );
-        if (!changed) {
-          throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
-          );
-        }
-      }
-
-      this.db.updateExecutionLedger(op.executionId, {
-        status: 'EXECUTED',
-        result: brokerResult,
-      });
-      return true;
+      const cumulativeProfit = this.resolveLiveFullClose(
+        t,
+        op.executionId,
+        brokerResult,
+        'MANUAL',
+      );
+      return Number.isFinite(cumulativeProfit);
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, {
         status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN',
@@ -518,32 +533,15 @@ export class ExecutionGateway {
       }
 
       const brokerResult = await this.closeBrokerTrade(t, key);
-
-      if (
-        brokerResult.realizedProfit != null &&
-        Number.isFinite(brokerResult.realizedProfit) &&
-        t.id
-      ) {
-        const changed = this.db.updateTradeClose(
-          t.id,
-          brokerResult.realizedProfit,
-          Date.now(),
-          reason,
-        );
-        if (!changed) {
-          throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
-          );
-        }
-      }
-
-      this.db.updateExecutionLedger(
+      const cumulativeProfit = this.resolveLiveFullClose(
+        t,
         op.executionId,
-        { status: 'EXECUTED', result: brokerResult },
+        brokerResult,
+        reason,
       );
       return {
         ok: true,
-        profit: brokerResult.realizedProfit ?? undefined,
+        profit: cumulativeProfit,
       };
     } catch (e: any) {
       this.db.updateExecutionLedger(
