@@ -10,6 +10,7 @@ import {
   StrategyLifecycleState,
 } from './strategyDefinition';
 import { promoteStrategy } from './StrategyLifecycle';
+import { EvidencePromotionPolicy, DEFAULT_EVIDENCE_PROMOTION_POLICY } from './EvidencePromotionPolicy';
 
 type DefinitionRow = {
   strategyId: string;
@@ -34,7 +35,10 @@ type DefinitionRow = {
 };
 
 export class StrategyDefinitionStore {
-  constructor(private readonly db: DatabaseManager) {}
+  constructor(
+    private readonly db: DatabaseManager,
+    private readonly evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
+  ) {}
 
   save(definition: StrategyDefinition): void {
     const payload = this.toRow(definition);
@@ -115,6 +119,7 @@ export class StrategyDefinitionStore {
       to,
       reason,
       at,
+      this.evidencePolicy,
     );
 
     this.db.raw().transaction(() => {
