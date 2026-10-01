@@ -31,6 +31,7 @@ const definition = buildMT5BrokerContractDefinition("EURUSD.a", {
   currency_profit: "USD",
   trade_contract_size: 100000,
   point: 0.00001,
+  digits: 5,
   volume_min: 0.01,
   volume_max: 100,
   volume_step: 0.01,
@@ -41,6 +42,7 @@ assert(definition.symbol === "EURUSD.a", "broker symbol must be preserved");
 assert(definition.assetClass === "FOREX", "payload must produce FOREX definition");
 assert(definition.contractSize === 100000, "contract size must be mapped");
 assert(definition.volumeStep === 0.01, "volume step must be mapped");
+assert(definition.pipSize === 0.0001, "5-digit Forex broker point must map to a 0.0001 pip");
 assert(definition.observedAt === observedAt, "broker observation timestamp must be preserved");
 assert(definition.expiresAt === observedAt + 24 * 3_600_000, "fresh broker payload must expire 24h after observation");
 
@@ -81,4 +83,4 @@ assert(stale.expiresAt <= now, "broker metadata observed over 24h ago must alrea
 assert(invalidRejected, "invalid contract economics must be rejected");
 assert(getMarketDefinition("EURUSD.a") === null, "invalid broker metadata must never remain active");
 
-console.log("Result: 9 passed, 0 failed");
+console.log("Result: 10 passed, 0 failed");
