@@ -32,6 +32,11 @@ interface OpenOrderIds {
   quantity?: number;
 }
 
+export function makeBinanceClientOrderId(operationKey: string): string {
+  const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
+  return `ta_${digest}`.slice(0, 36);
+}
+
 export class BinanceExecutor {
   private logger = new Logger('BinanceExecutor');
   private http:  AxiosInstance;
@@ -511,6 +516,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -551,11 +557,28 @@ export class BinanceExecutor {
       if (this.isFutures) {
         const pos = await this.getPosition(symbol);
         if (!pos || pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+          if (clientOrderId) {
+            const recovered = await this.reconcileFuturesCloseByClientOrderId(
+              symbol,
+              clientOrderId,
+            );
+            if (
+              recovered.found &&
+              recovered.status === 'FILLED' &&
+              recovered.realizedProfit != null &&
+              recovered.realizedProfitCurrency
+            ) {
+              return {
+                ok: true,
+                realizedProfit: recovered.realizedProfit,
+                realizedProfitCurrency: recovered.realizedProfitCurrency,
+              };
+            }
+          }
+
+          throw new Error(
+            `Binance position is absent before close for ${symbol}; authoritative close result is unresolved`,
+          );
         }
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
@@ -570,6 +593,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
@@ -615,6 +639,7 @@ export class BinanceExecutor {
             closeQty,
             getSymbolSpec(symbol).volumeStep,
           ),
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
       }
 
@@ -635,6 +660,52 @@ export class BinanceExecutor {
     }
   }
 
+
+  async reconcileFuturesCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+  ): Promise<{
+    found: boolean;
+    status?: string;
+    orderId?: number;
+    executedQty?: number;
+    updatedAt?: number;
+    realizedProfit?: number | null;
+    realizedProfitCurrency?: string | null;
+  }> {
+    if (!this.isFutures || !clientOrderId) return { found: false };
+
+    const order = await this.findOrderByClientId(symbol, clientOrderId);
+    if (!order) return { found: false };
+
+    const status = String(order.status ?? '').toUpperCase();
+    const orderId = Number(order.orderId);
+    const executedQty = Number(order.executedQty ?? 0);
+    const updatedAt = Number(order.updateTime ?? order.time ?? 0);
+
+    if (!(orderId > 0) || !Number.isFinite(orderId)) {
+      return {
+        found: true,
+        status,
+        executedQty: Number.isFinite(executedQty) ? executedQty : 0,
+        updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : undefined,
+      };
+    }
+
+    const realized = ['FILLED', 'PARTIALLY_FILLED'].includes(status)
+      ? await this.getFuturesOrderNetPnl(symbol, orderId)
+      : null;
+
+    return {
+      found: true,
+      status,
+      orderId,
+      executedQty: Number.isFinite(executedQty) ? executedQty : 0,
+      updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : undefined,
+      realizedProfit: realized?.profit ?? null,
+      realizedProfitCurrency: realized?.currency ?? null,
+    };
+  }
 
   // ─── Get position ────────────────────────────────────────────────────
 

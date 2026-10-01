@@ -64,12 +64,15 @@ export class DailyLossGuard {
         this.logger.warn('Daily loss guard: floating P&L state unavailable — trading blocked');
         return false;
       }
+      const today = new Date().toISOString().slice(0, 10);
+      const since = Date.parse(`${today}T00:00:00.000Z`);
+      const openPartialRealizedPnl = this.db.getOpenPartialRealizedPnlSince(since);
       denominator = this.resolveDailyStartEquity(undefined);
       if (!(denominator > 0) || !Number.isFinite(denominator)) {
         this.logger.warn('Daily loss guard: daily start equity unavailable — trading blocked');
         return false;
       }
-      dailyLossNumerator = realizedPnl + floatingPnl;
+      dailyLossNumerator = realizedPnl + openPartialRealizedPnl + floatingPnl;
       floatingPnlForMessage = floatingPnl;
     }
 

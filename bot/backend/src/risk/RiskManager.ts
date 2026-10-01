@@ -111,6 +111,11 @@ export class RiskManager {
     candleMap?: Record<string, Candle[]>,
   ): Promise<RiskResult> {
     const reasons: string[] = [];
+    if (this.db.hasUnresolvedExecutionLedger()) {
+      return this.block('execution_reconciliation', [
+        'Unresolved broker execution exists; entry trading is blocked until reconciliation completes',
+      ]);
+    }
 
     if (this.emergency.isActive()) {
       return this.block('emergency_stop', [

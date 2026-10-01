@@ -270,6 +270,121 @@ async function main() {
     clearBrokerContracts();
   }
 
+  const directBinanceExecutor = new BinanceExecutor({
+    ...baseConfig('paper'),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...baseConfig('paper').binance, futures: true, secret: 'test-secret' },
+  } as SystemConfig);
+  const directCloseUrls: string[] = [];
+  (directBinanceExecutor as any).getPosition = async () => ({
+    positionAmt: 0.01, entryPrice: 50000, unrealizedProfit: 0,
+  });
+  (directBinanceExecutor as any).http = {
+    post: async (url: string) => {
+      directCloseUrls.push(url);
+      return { data: { status: 'FILLED', orderId: 4321, executedQty: '0.01' } };
+    },
+    get: async (_url: string) => ({
+      data: [{ realizedPnl: '10', commission: '0.01', commissionAsset: 'USDT' }],
+    }),
+    delete: async () => ({ data: { ok: true } }),
+  };
+  const directClose = await directBinanceExecutor.closePosition(
+    4321, 'BTCUSDT', 0.01, 'BUY', 'ta_direct_close_test',
+  );
+  assert(directClose.ok === true, 'direct Binance executor close must succeed');
+  assert(
+    directCloseUrls.some(url => url.includes('newClientOrderId=ta_direct_close_test')),
+    'Binance close HTTP request must contain the deterministic client order id',
+  );
+  assert(directClose.realizedProfit === 9.99, 'Binance close must report fill PnL net of commission');
+  const noPositionExecutor = new BinanceExecutor({
+    ...baseConfig('paper'),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...baseConfig('paper').binance, futures: true },
+  } as SystemConfig);
+  (noPositionExecutor as any).getPosition = async () => null;
+  (noPositionExecutor as any).reconcileFuturesCloseByClientOrderId = async () => ({ found: false });
+  const noPositionClose = await noPositionExecutor.closePosition(
+    4322, 'BTCUSDT', 0.01, 'BUY', 'ta_no_position_test',
+  );
+  assert(noPositionClose.ok === false, 'Binance close with absent position and unresolved order must fail closed');
+  const binanceCloseDb = new DatabaseManager(":memory:");
+  await binanceCloseDb.initialize();
+  const binanceCloseCfg = {
+    ...baseConfig("paper"),
+    mode: "binance",
+    dataSource: "binance",
+    accountCurrency: "USD",
+  } as SystemConfig;
+  const binanceCloseGateway = new ExecutionGateway(binanceCloseCfg, binanceCloseDb);
+  const binanceCloseTradeId = binanceCloseDb.insertTrade({
+    ticket: 1201, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open",
+    openedAt: Date.now(), source: "BINANCE_CLIENT_ORDER_ID_TEST",
+  } as any);
+  const capturedCloseIds: string[] = [];
+  (binanceCloseGateway as any).binance.closePosition = async (
+    _ticket: number,
+    _symbol: string,
+    _volume: number,
+    _side: string,
+    clientOrderId?: string,
+  ) => {
+    capturedCloseIds.push(String(clientOrderId ?? ""));
+    return {
+      ok: true,
+      realizedProfit: 10,
+      realizedProfitCurrency: "USDT",
+    };
+  };
+  const binanceCloseTrade = {
+    id: binanceCloseTradeId, ticket: 1201, symbol: "BTCUSDT", timeframe: "H1",
+    side: "BUY", volume: 0.01, entry: 50_000, sl: 49_000, tp: 52_000,
+    status: "open", openedAt: Date.now(), source: "BINANCE_CLIENT_ORDER_ID_TEST",
+  } as any;
+  assert(
+    await binanceCloseGateway.closeTrade(binanceCloseTrade) === true,
+    "Binance close fixture must settle",
+  );
+  assert(
+    capturedCloseIds.length === 1 && /^ta_[a-f0-9]{28}$/.test(capturedCloseIds[0]),
+    "Binance close must pass the deterministic clientOrderId",
+  );
+  binanceCloseDb.raw().close();
+
+  const spotUnknownDb = new DatabaseManager(":memory:");
+  await spotUnknownDb.initialize();
+  const spotUnknownCfg = {
+    ...baseConfig('paper'),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...baseConfig('paper').binance, futures: false },
+  } as SystemConfig;
+  const spotUnknownGateway = new ExecutionGateway(spotUnknownCfg, spotUnknownDb);
+  const spotUnknownTradeId = spotUnknownDb.insertTrade({
+    ticket: 1301, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_SPOT_PNL_UNKNOWN',
+  } as any);
+  (spotUnknownGateway as any).binance.closePosition = async () => ({
+    ok: true, realizedProfit: null, realizedProfitCurrency: null,
+  });
+  const spotUnknownResult = await spotUnknownGateway.closeTrade({
+    id: spotUnknownTradeId, ticket: 1301, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_SPOT_PNL_UNKNOWN',
+  } as any);
+  assert(spotUnknownResult === false, 'Binance Spot close without authoritative PnL must fail closed');
+  assert(spotUnknownDb.getOpenTrades().length === 1, 'Binance Spot unknown close must not close the internal trade');
+  const spotLedger = spotUnknownDb.raw().prepare(
+    "SELECT status FROM execution_ledger WHERE operationKey LIKE ? LIMIT 1",
+  ).get('%') as any;
+  assert(spotLedger.status === 'UNKNOWN', 'Binance Spot unknown close must remain UNKNOWN');
+  spotUnknownDb.raw().close();
   const modifyDb = new DatabaseManager(":memory:");
   await modifyDb.initialize();
   const modifyGateway = new ExecutionGateway(baseConfig("mt5"), modifyDb);
@@ -471,6 +586,7 @@ async function main() {
     volume: 0.01,
   });
   assert(invalidStateCreated === false, "ledger creation must reject unknown execution states");
+  await stateDb.initialize();
   stateDb.createExecutionLedger({
     executionId: "state-1",
     operationKey: "state-op",
