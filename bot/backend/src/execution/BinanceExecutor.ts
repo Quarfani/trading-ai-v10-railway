@@ -511,6 +511,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -570,6 +571,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
@@ -615,6 +617,7 @@ export class BinanceExecutor {
             closeQty,
             getSymbolSpec(symbol).volumeStep,
           ),
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
       }
 
@@ -635,6 +638,48 @@ export class BinanceExecutor {
     }
   }
 
+
+  async reconcileFuturesCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+  ): Promise<{
+    found: boolean;
+    status?: string;
+    orderId?: number;
+    executedQty?: number;
+    realizedProfit?: number | null;
+    realizedProfitCurrency?: string | null;
+  }> {
+    if (!this.isFutures || !clientOrderId) return { found: false };
+
+    const order = await this.findOrderByClientId(symbol, clientOrderId);
+    if (!order) return { found: false };
+
+    const status = String(order.status ?? '').toUpperCase();
+    const orderId = Number(order.orderId);
+    const executedQty = Number(order.executedQty ?? 0);
+
+    if (!(orderId > 0) || !Number.isFinite(orderId)) {
+      return {
+        found: true,
+        status,
+        executedQty: Number.isFinite(executedQty) ? executedQty : 0,
+      };
+    }
+
+    const realized = ['FILLED', 'PARTIALLY_FILLED'].includes(status)
+      ? await this.getFuturesOrderNetPnl(symbol, orderId)
+      : null;
+
+    return {
+      found: true,
+      status,
+      orderId,
+      executedQty: Number.isFinite(executedQty) ? executedQty : 0,
+      realizedProfit: realized?.profit ?? null,
+      realizedProfitCurrency: realized?.currency ?? null,
+    };
+  }
 
   // ─── Get position ────────────────────────────────────────────────────
 
