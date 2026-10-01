@@ -48,7 +48,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\AI-Development-Handoff-Watcher.ps1" -IntervalSeconds 60
+powershell -NoProfile -Command "$p=Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%~dp0scripts\AI-Development-Handoff-Watcher.ps1','-IntervalSeconds','60' -WindowStyle Hidden -PassThru"
 timeout /t 5 /nobreak >nul
 start "" http://localhost:3000
 
