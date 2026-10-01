@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current commit: 8e9145d2147f0ef656ce8bbb64af1bd11f08a929
-Current message: test: cover non-USD position sizing conversion
+Current commit: b441e837ba392db82fe641d9da42bdbf6c922bef
+Current message: test: enforce broker-confirmed Oil contract enrichment
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -44,7 +44,7 @@ Latest CI on main is green after c37ad360f5a9415482f9cdd494ad53765abbc47d.
 6. Long paper/testnet/cloud E2E evidence remains outstanding.
 
 ## NEXT TASK
-Validate broker-confirmed MT5 contract enrichment end-to-end for Forex/Metals and add explicit Oil/CFD contract tests; then extend long paper/testnet/cloud E2E.
+Extend broker-confirmed MT5 contract E2E to Forex/Metals runtime symbol-info flows and verify PositionSizer consumes refreshed contract economics; then extend long paper/testnet/cloud E2E.
 
 ## STOP PROTOCOL
 Verify main SHA and CI; record blockers; update this file; keep the local AI_DEVELOPMENT_HANDOFF_CURRENT.md checkpoint; define one concrete NEXT TASK.
