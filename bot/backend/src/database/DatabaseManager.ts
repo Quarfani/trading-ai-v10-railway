@@ -221,6 +221,61 @@ export class DatabaseManager {
     return this.db.prepare(`SELECT * FROM execution_ledger WHERE operationKey=?`).get(operationKey) ?? null;
   }
 
+  getLatestUnresolvedExecutionForTrade(
+    tradeId: number,
+    actions?: string[],
+  ): any | null {
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+      ORDER BY updatedAt DESC, createdAt DESC
+    `).all() as any[];
+
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      let request: any;
+      try {
+        request = JSON.parse(row.requestJson);
+      } catch {
+        continue;
+      }
+      if (Number(request?.tradeId) !== Number(tradeId)) continue;
+      if (actions?.length && !actions.includes(String(row.action))) continue;
+      return row;
+    }
+    return null;
+  }
+
+  resolveExecutionLedger(
+    executionId: string,
+    result?: unknown,
+    brokerOrderId?: string | number,
+  ): boolean {
+    const fields = [
+      'status=\'EXECUTED\'',
+      'updatedAt=?',
+    ];
+    const values: unknown[] = [Date.now()];
+    if (result !== undefined) {
+      fields.push('resultJson=?');
+      values.push(JSON.stringify(result));
+    }
+    if (brokerOrderId !== undefined) {
+      fields.push('brokerOrderId=?');
+      values.push(String(brokerOrderId));
+    }
+    fields.push('error=NULL');
+    values.push(executionId);
+
+    const changed = this.db.prepare(`
+      UPDATE execution_ledger
+      SET ${fields.join(', ')}
+      WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+    `).run(...values).changes;
+    return changed === 1;
+  }
+
   updateExecutionLedger(executionId: string, patch: {
     status?: string; brokerOrderId?: string | number; retryCount?: number;
     result?: unknown; error?: string | null;
