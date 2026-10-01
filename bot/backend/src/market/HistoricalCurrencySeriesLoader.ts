@@ -5,6 +5,7 @@
  * No broker or network dependency is embedded here, making it testable.
  */
 import { HistoricalRateSeries } from './HistoricalCurrencySeries';
+import { TIMEFRAME_MS } from './market.types';
 
 export interface CurrencyRateCandle {
   time: number;
@@ -58,7 +59,12 @@ export async function loadHistoricalCurrencySeries(
       const candles = await fetcher(pair, count);
       const points = (candles ?? [])
         .filter(candle => Number.isFinite(candle.time) && Number.isFinite(candle.close) && candle.close > 0)
-        .map(candle => ({ time: candle.time, rate: candle.close }))
+        .map(candle => ({
+          // Candle timestamps are bar-open times. The close becomes known only
+          // at the end of the D1 bar, so anchor the observation at its close.
+          time: candle.time + TIMEFRAME_MS.D1 - 1,
+          rate: candle.close,
+        }))
         .sort((a, b) => a.time - b.time);
       return points.length ? { [pair]: points } : {};
     } catch {
