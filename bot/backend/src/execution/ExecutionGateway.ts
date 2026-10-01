@@ -687,6 +687,7 @@ export class ExecutionGateway {
           makeBinanceClientOrderId(key),
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
+        this.binancePartialOrderIdForResult = result.orderId;
         remaining = result.remainingVolume;
         realizedProfit = await this.convertBrokerProfitToAccount(
           result.realizedProfit,
@@ -705,7 +706,7 @@ export class ExecutionGateway {
       }
 
       const brokerOrderId = this.config.mode === 'binance'
-        ? (await this.getBinancePartialOrderIdForOperation(key, t.symbol)).orderId
+        ? (this.binancePartialOrderIdForResult ?? undefined)
         : undefined;
       const returnedProfit = this.settleLivePartialClose(
         t,
