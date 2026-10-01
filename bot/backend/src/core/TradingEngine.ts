@@ -403,6 +403,7 @@ export class TradingEngine extends EventEmitter {
     if (this.isRunning) return;
 
     this.ready = false;
+    this.lastProcessedCandle = {};
 
     this.logger.info(
       'Starting TradingEngine v9.0...',
