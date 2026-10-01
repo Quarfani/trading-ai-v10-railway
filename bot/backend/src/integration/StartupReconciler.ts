@@ -258,6 +258,11 @@ export class StartupReconciler {
       if (!live) {
         const hist = await this.getMT5HistoryEntry(Number(t.ticket));
         if (!hist) throw new Error(`MT5 position missing and no authoritative close history for ticket=${t.ticket}`);
+        if (!this.isHistoryValidForUnresolvedClose(t.id!, hist.closeTimeMsc)) {
+          throw new Error(
+            `MT5 close history predates unresolved execution for ticket=${t.ticket}; reconciliation is required`,
+          );
+        }
         const changed = this.db.updateTradeClose(t.id!, hist.profit, Date.now(), hist.reason);
         if (!changed) throw new Error(`Could not close DB trade id=${t.id} during reconciliation`);
         continue;
