@@ -67,7 +67,7 @@ const expectedRemaining =
 assertClose(closed!.profit ?? 0, (partial!.profit ?? 0) + expectedRemaining, 1e-9, 'final-cumulative');
 
 assertClose(
-  (partial!.profit ?? 0) + (closed!.profit ?? 0),
+  closed!.profit ?? 0,
   (partialExit - entry) + (finalExit - entry)
     - estimateExitCosts({
         price: partialExit,
@@ -82,6 +82,8 @@ assertClose(
         quoteToAccount: 1,
       }, profile)
     - entryCost,
+  1e-9,
+  'total-cumulative',
 );
 
 const nonCrypto = new PaperTrader(10_000);
@@ -115,7 +117,6 @@ const fxExitCost = estimateExitCosts({
   quoteToAccount: 1,
 }, fxProfile);
 
-console.log('DEBUG fx before close', nonCrypto.getOpenTrades());
 const fxClosed = nonCrypto.closeTrade(2, 1.01, 'MANUAL', openedAt + 1);
 assert(Boolean(fxClosed), 'FX close should return a trade');
 assertClose(
