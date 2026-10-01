@@ -11,7 +11,7 @@
 import { DatabaseManager }        from '../database/DatabaseManager';
 import { SystemConfig, Trade }    from '../types/trading.types';
 import { TelegramBot }            from '../notifications/TelegramBot';
-import { getMarketDefinition }    from '../market/MarketCatalog';
+import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { resolveQuoteToAccount }  from '../market/CurrencyConverter';
 import { Logger }                 from '../utils/Logger';
 
@@ -80,10 +80,10 @@ export class DailyLossGuard {
         !(t.entry > 0)
       ) return null;
 
-      const market = getMarketDefinition(
-        t.symbol,
-        t.timeframe ?? 'H1',
-      );
+      const market =
+        this.config.mode === 'mt5'
+          ? getBrokerMarketDefinition(t.symbol, t.timeframe ?? 'H1')
+          : getMarketDefinition(t.symbol, t.timeframe ?? 'H1');
       if (!market) return null;
 
       const quoteToAccount = resolveQuoteToAccount(
