@@ -139,8 +139,21 @@ async function main() {
     { ...baseConfig("mt5"), symbols: ["EURUSD.a"] },
     closeDb,
   );
+  const closeTradeId = closeDb.insertTrade({
+    ticket: 88,
+    symbol: "EURUSD.a",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 0.01,
+    entry: 1.1,
+    sl: 1.09,
+    tp: 1.12,
+    status: "open",
+    openedAt: 1_800_000_000_004,
+    source: "CLOSE_LEDGER_TEST",
+  } as any);
   const closeTrade = {
-    id: 900,
+    id: closeTradeId,
     ticket: 88,
     symbol: "EURUSD.a",
     timeframe: "H1",
