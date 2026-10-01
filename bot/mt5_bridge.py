@@ -78,19 +78,71 @@ _lock  = threading.Lock()
 _IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
 _idempotency_cache: dict[str, tuple[float, str, dict]] = {}
 
+def _idempotency_load_disk():
+    try:
+        with open(_IDEMPOTENCY_STATE_PATH, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict):
+            return
+        now = time.time()
+        for key, value in raw.items():
+            if not isinstance(value, list) or len(value) != 3:
+                continue
+            ts, status, payload = value
+            if (
+                isinstance(ts, (int, float))
+                and now - ts <= _IDEMPOTENCY_TTL_SEC
+                and status in ("SUCCESS", "UNKNOWN")
+                and isinstance(payload, dict)
+            ):
+                _idempotency_cache[str(key)] = (float(ts), status, payload)
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return
+
+
+def _idempotency_persist():
+    directory = os.path.dirname(_IDEMPOTENCY_STATE_PATH)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp_path = f"{_IDEMPOTENCY_STATE_PATH}.{os.getpid()}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                key: [ts, status, payload]
+                for key, (ts, status, payload) in _idempotency_cache.items()
+            },
+            handle,
+            separators=(",", ":"),
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, _IDEMPOTENCY_STATE_PATH)
+
+
 def _idempotency_lookup(key: str):
     if not key:
         return None
     now = time.time()
-    stale = [k for k, (ts, _status, _payload) in _idempotency_cache.items() if now - ts > _IDEMPOTENCY_TTL_SEC]
+    stale = [
+        k for k, (ts, _status, _payload) in _idempotency_cache.items()
+        if now - ts > _IDEMPOTENCY_TTL_SEC
+    ]
     for k in stale:
         _idempotency_cache.pop(k, None)
     return _idempotency_cache.get(key)
+
 
 def _idempotency_record(key: str, status: str, payload: dict):
     if not key:
         return
     _idempotency_cache[key] = (time.time(), status, dict(payload))
+    try:
+        _idempotency_persist()
+    except OSError as exc:
+        log.error("Failed to persist idempotency state: %s", exc)
+
+
+_idempotency_load_disk()
 
 
 def auth_check() -> bool:
