@@ -424,6 +424,12 @@ export class ExecutionGateway {
         `Broker close succeeded but atomic trade/ledger settlement failed for id=${t.id}`,
       );
     }
+
+    t.status = 'closed';
+    t.profit = cumulativeProfit;
+    t.closedAt = Date.now();
+    t.exitReason = reason;
+    t.realizedProfit = cumulativeProfit;
     return cumulativeProfit;
   }
   async closeTrade(t: Trade) {
