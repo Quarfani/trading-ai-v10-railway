@@ -268,6 +268,14 @@ export class Backtester {
       entryQuoteToAccount: number; entryCostAccount: number;
     } | null = null;
 
+    let pendingSignal: {
+      side: Side;
+      sl: number;
+      tp: number;
+      source: string;
+      signalTime: number;
+    } | null = null;
+
     const recordEquity = (at: number, equity: number) => {
       if (!Number.isFinite(equity)) return;
       equityCurve.push({ t: at, equity });
@@ -341,6 +349,62 @@ export class Backtester {
       const slice = candles.slice(0, i + 1);
       const cur   = slice[slice.length - 1];
 
+      // ── Execute pending signal on the NEXT bar open ───────────────────
+      // The signal is formed from the completed previous bar. Filling at this
+      // bar's open prevents the signal bar's close from leaking into execution.
+      if (!openPos && pendingSignal) {
+        const entryQuoteToAccount = conversionAt(cur.time);
+        if (entryQuoteToAccount == null) {
+          valid = false;
+          blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+          break;
+        }
+
+        const simulatedEntry = cur.open;
+        const geometryValid =
+          pendingSignal.side === 'BUY'
+            ? pendingSignal.sl < simulatedEntry && pendingSignal.tp > simulatedEntry
+            : pendingSignal.sl > simulatedEntry && pendingSignal.tp < simulatedEntry;
+
+        if (geometryValid) {
+          const size = calculateBacktestPositionSize(
+            balance,
+            0.01,
+            simulatedEntry,
+            pendingSignal.sl,
+            economics!.contractSize,
+            economics!.minVolume,
+            economics!.maxVolume,
+            economics!.volumeStep,
+            entryQuoteToAccount,
+          );
+
+          if (size > 0) {
+            const entryCostAccount = estimateEntryCosts({
+              price: simulatedEntry,
+              volume: size,
+              contractSize: economics!.contractSize,
+              quoteToAccount: entryQuoteToAccount,
+            }, costProfile);
+
+            openPos = {
+              side: pendingSignal.side,
+              entry: simulatedEntry,
+              sl: pendingSignal.sl,
+              tp: pendingSignal.tp,
+              size,
+              openedAt: cur.time,
+              openBar: i,
+              source: pendingSignal.source,
+              entryQuoteToAccount,
+              entryCostAccount,
+            };
+          }
+        }
+
+        pendingSignal = null;
+      }
+
       // ── Manage open position ──────────────────────────────────────────
       if (openPos) {
         const hitSL   = openPos.side === 'BUY' ? cur.low  <= openPos.sl : cur.high >= openPos.sl;
@@ -395,46 +459,15 @@ export class Backtester {
           const atr = calculateATR(slice.slice(-50), 14);
           if (!atr) continue;
 
-          // Size against the same simulated executable entry used for PnL.
-          const simulatedEntry = cur.close;
-          const geometryValid =
-            sig.side === 'BUY'
-              ? sig.sl < simulatedEntry && sig.tp > simulatedEntry
-              : sig.sl > simulatedEntry && sig.tp < simulatedEntry;
-          if (!geometryValid) continue;
-
-          const size = calculateBacktestPositionSize(
-            balance,
-            0.01,
-            simulatedEntry,
-            sig.sl,
-            economics!.contractSize,
-            economics!.minVolume,
-            economics!.maxVolume,
-            economics!.volumeStep,
-            entryQuoteToAccount,
-          );
-          if (size > 0) {
-            const entryCostAccount = estimateEntryCosts({
-              price: simulatedEntry,
-              volume: size,
-              contractSize: economics!.contractSize,
-              quoteToAccount: entryQuoteToAccount,
-            }, costProfile);
-
-            openPos = {
-              side: sig.side,
-              entry: simulatedEntry,
-              sl: sig.sl,
-              tp: sig.tp,
-              size,
-              openedAt: cur.time,
-              openBar: i,
-              source: sig.source,
-              entryQuoteToAccount,
-              entryCostAccount,
-            };
-          }
+          // Queue the signal for the next completed bar's open. We deliberately
+          // do not use the current close as the fill price.
+          pendingSignal = {
+            side: sig.side,
+            sl: sig.sl,
+            tp: sig.tp,
+            source: sig.source,
+            signalTime: cur.time,
+          };
         } catch (e) {
           simulationErrors++;
           this.logger.error(`[Backtest] Signal generation failed at ${symbol}/${cur.time}: ${e instanceof Error ? e.message : String(e)}`);
