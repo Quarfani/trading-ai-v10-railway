@@ -57,15 +57,19 @@ export class SymbolValidator {
 
       const tradable = Number(response.data?.bid) > 0;
 
-      if (tradable) {
-        await this.enrichBrokerContract(symbol).catch((error: any) => {
-          this.logger.debug(
-            '[MT5] ' + symbol + ' contract metadata unavailable: ' + (error?.message ?? 'unknown'),
-          );
-        });
-      }
+      if (!tradable) return false;
 
-      return tradable;
+      try {
+        await this.enrichBrokerContract(symbol);
+        return true;
+      } catch (error: any) {
+        this.logger.warn(
+          '[MT5] ' + symbol + ' broker contract metadata unavailable: ' +
+          (error?.message ?? 'unknown') +
+          ' — symbol blocked',
+        );
+        return false;
+      }
     } catch (error: any) {
       this.logger.warn(
         '[MT5] ' + symbol + ' validation failed: ' + (error?.message ?? 'unknown error'),
@@ -74,11 +78,20 @@ export class SymbolValidator {
     }
   }
 
-  private inferMT5AssetClass(symbol: string, description: string): AssetClass | null {
+  private inferMT5AssetClass(
+    symbol: string,
+    description: string,
+    baseCurrency = '',
+    quoteCurrency = '',
+  ): AssetClass | null {
     const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const text = (description ?? '').toUpperCase();
+    const base = baseCurrency.toUpperCase().trim();
+    const quote = quoteCurrency.toUpperCase().trim();
 
-    if (normalized === 'XAUUSD' || normalized === 'XAGUSD') return 'METAL';
+    if (base === 'XAU' || base === 'XAG' || normalized.startsWith('XAU') || normalized.startsWith('XAG')) {
+      return 'METAL';
+    }
     if (
       normalized.includes('OIL') || normalized.includes('WTI') ||
       normalized.includes('BRENT') || normalized.includes('XTI') ||
@@ -91,7 +104,10 @@ export class SymbolValidator {
     }
 
     const codes = new Set(['USD','EUR','GBP','JPY','AUD','NZD','CAD','CHF']);
-    if (normalized.length === 6) {
+    if (codes.has(base) && codes.has(quote) && base !== quote) {
+      return 'FOREX';
+    }
+    if (normalized.length >= 6) {
       const base = normalized.slice(0, 3);
       const quote = normalized.slice(3, 6);
       if (codes.has(base) && codes.has(quote)) return 'FOREX';
@@ -110,16 +126,23 @@ export class SymbolValidator {
     );
 
     const data = response.data;
+    const brokerSymbol = String(data?.symbol ?? symbol);
+    const baseCurrency = String(data?.currency_base ?? '');
+    const quoteCurrency = String(data?.currency_profit ?? '');
     const assetClass = this.inferMT5AssetClass(
-      String(data?.symbol ?? symbol),
+      brokerSymbol,
       String(data?.description ?? ''),
+      baseCurrency,
+      quoteCurrency,
     );
-    if (!assetClass) return;
+    if (!assetClass) {
+      throw new Error('unsupported/unknown MT5 asset class');
+    }
 
     registerBrokerContract({
       symbol: String(data?.symbol ?? symbol),
-      baseAsset: String(data?.currency_base ?? ''),
-      quoteCurrency: String(data?.currency_profit ?? ''),
+      baseAsset: baseCurrency,
+      quoteCurrency: quoteCurrency,
       assetClass,
       contractType: 'CFD',
       venue: 'MT5',
