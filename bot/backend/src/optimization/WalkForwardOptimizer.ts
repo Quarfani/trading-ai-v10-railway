@@ -135,6 +135,8 @@ export class WalkForwardOptimizer {
         trainCandles,
         timeframe,
         historicalCurrencyRates,
+        marketOverride,
+        costProfileOverride,
       );
       const baseTestMetrics = await this.evaluateOnTest(
         symbol,
@@ -195,6 +197,8 @@ export class WalkForwardOptimizer {
     candles: Candle[],
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
+    marketOverride?: MarketDefinition,
+    costProfileOverride?: CostProfile,
   ): Promise<{
     bestParams: OptimParams;
     bestMetrics: any;
@@ -219,6 +223,9 @@ export class WalkForwardOptimizer {
             params,
             timeframe,
             historicalCurrencyRates,
+            undefined,
+            marketOverride,
+            costProfileOverride,
           );
 
           // Objective function: Sharpe × WinRate × (1 - MaxDD)
@@ -253,6 +260,8 @@ export class WalkForwardOptimizer {
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
     evaluationStartTime?: number,
+    marketOverride?: MarketDefinition,
+    costProfileOverride?: CostProfile,
   ): Promise<{
     winRate: number;
     sharpe: number;

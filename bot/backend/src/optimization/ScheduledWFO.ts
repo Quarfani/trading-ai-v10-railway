@@ -172,7 +172,7 @@ export class ScheduledWFO {
           } catch (error) {
             throw new Error(
               `Cost profile unavailable for ${symbol}/${timeframe}: ` +
-              `\${error instanceof Error ? error.message : String(error)}`,
+              `${error instanceof Error ? error.message : String(error)}`,
             );
           }
 
