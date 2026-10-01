@@ -213,14 +213,38 @@ export class Reconciler {
     profit?:    number,
   ): Promise<void> {
     let rawProfit = profit;
+    let persistedByExecutionGateway = false;
+
     if (rawProfit === undefined && this.config.mode === 'paper') {
-      const settled = this.exec.settlePaperTrade(t, exitPrice, exitReason as any);
-      if (settled.ok) rawProfit = settled.profit;
+      const settled = await this.exec.closeAtMarket(
+        t,
+        exitPrice,
+        exitReason as 'TP' | 'SL' | 'TIMEOUT' | 'MANUAL',
+      );
+      if (!settled.ok || !Number.isFinite(Number(settled.profit))) {
+        throw new Error(
+          'Paper settlement could not produce authoritative PnL for ticket=' +
+          t.ticket,
+        );
+      }
+      rawProfit = Number(settled.profit);
+      persistedByExecutionGateway = true;
     }
-    if (rawProfit === undefined) rawProfit = (exitPrice - t.entry) * (t.side === 'BUY' ? 1 : -1) * t.volume;
+
+    // Never synthesize broker/account PnL from price differences. MT5/Binance
+    // callers must provide authoritative realized PnL from broker history.
+    if (rawProfit === undefined || !Number.isFinite(Number(rawProfit))) {
+      throw new Error('Authoritative PnL unavailable for ticket=' + t.ticket);
+    }
+
     const finalProfit = +Number(rawProfit).toFixed(2);
 
-    this.db.updateTradeClose(t.id!, finalProfit, Date.now(), exitReason);
+    if (!persistedByExecutionGateway) {
+      const changed = this.db.updateTradeClose(t.id!, finalProfit, Date.now(), exitReason);
+      if (!changed) {
+        throw new Error('Could not persist closed trade id=' + t.id);
+      }
+    }
     this.tracker.recordClose(finalProfit);
 
     const emoji  = finalProfit > 0 ? '💰' : '❌';
