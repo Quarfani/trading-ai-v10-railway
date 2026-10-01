@@ -3,9 +3,10 @@
  */
 import { DrawdownScaler } from '../risk/DrawdownScaler';
 
+const state = new Map<string, string>();
 const mockDb = {
-  getSetting: () => null,
-  setSetting: () => {},
+  getSetting: (key: string) => state.get(key) ?? null,
+  setSetting: (key: string, value: string) => { state.set(key, value); },
 } as any;
 
 describe('DrawdownScaler', () => {
@@ -44,6 +45,18 @@ describe('DrawdownScaler', () => {
     const r = s.getStatus(10500); // 4.5% from new peak of 11000
     expect(r.peakEquity).toBe(11000);
     expect(r.drawdownPct).toBeCloseTo(0.045, 2);
+  });
+
+  test('persists the peak under an account-scoped key', () => {
+    state.clear();
+    const first = new DrawdownScaler(mockDb, 10000, false, 'acct-A');
+    first.getStatus(12000);
+
+    const sameAccount = new DrawdownScaler(mockDb, 10000, false, 'acct-A');
+    const otherAccount = new DrawdownScaler(mockDb, 10000, false, 'acct-B');
+
+    expect(sameAccount.getStatus(11000).peakEquity).toBe(12000);
+    expect(otherAccount.getStatus(11000).peakEquity).toBe(11000);
   });
 
   test('drawdownPct is 0 when at peak', () => {
