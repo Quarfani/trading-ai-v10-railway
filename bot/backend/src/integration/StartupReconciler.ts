@@ -126,6 +126,72 @@ export class StartupReconciler {
     }
   }
 
+  private async resolveAuthoritativeMT5PartialLedgers(positions: any[]): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, requestJson
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action='PARTIAL_CLOSE'
+      ORDER BY updatedAt ASC, createdAt ASC
+    `).all() as Array<{ executionId: string; requestJson?: string | null }>;
+
+    const byTicket = new Map<number, any>(
+      positions.map(position => [Number(position.ticket), position]),
+    );
+    const resolvedTrades = new Set<number>();
+
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+
+      let request: any;
+      try { request = JSON.parse(row.requestJson); } catch { continue; }
+
+      const tradeId = Number(request?.tradeId);
+      if (!Number.isInteger(tradeId) || tradeId <= 0 || resolvedTrades.has(tradeId)) continue;
+
+      const trade = this.db.raw().prepare(`SELECT * FROM trades WHERE id=? LIMIT 1`).get(tradeId) as any;
+      if (!trade?.ticket || String(trade.status) !== 'open') continue;
+
+      const live = byTicket.get(Number(trade.ticket));
+      if (!live) continue;
+
+      const brokerVolume = Number(live.volume);
+      if (!(brokerVolume > 0) || !Number.isFinite(brokerVolume) ||
+          brokerVolume >= Number(trade.volume) - Math.max(1e-8, Number(trade.volume) * 1e-8)) continue;
+
+      const history = await this.getMT5HistorySnapshot(Number(trade.ticket));
+      if (!history || history.closed || !(history.remainingVolume > 0) ||
+          history.remainingVolume >= Number(trade.volume)) continue;
+
+      const requestedVolume = Number(request?.volume);
+      if (!(requestedVolume > 0) || !Number.isFinite(requestedVolume)) continue;
+
+      const requestedRemaining = Number(trade.volume) - requestedVolume;
+      const tolerance = Math.max(1e-8, Number(trade.volume) * 0.02, Number(history.remainingVolume) * 0.02);
+      if (Math.abs(history.remainingVolume - requestedRemaining) > tolerance) {
+        this.logger.warn(`[MT5] Partial-close history mismatch for trade id=${tradeId}; leaving operation unresolved`);
+        continue;
+      }
+
+      this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=? WHERE id=? AND status='open'`)
+        .run(history.remainingVolume, history.netProfit, tradeId);
+
+      const resolved = this.db.resolveExecutionLedger(
+        String(row.executionId),
+        {
+          broker: 'mt5', ticket: Number(trade.ticket),
+          closedVolume: Number(trade.volume) - history.remainingVolume,
+          remainingVolume: history.remainingVolume,
+          cumulativeRealizedProfit: history.netProfit,
+          closeDealTicket: history.closeDealTicket,
+          startupReconciliation: true,
+        },
+        history.closeDealTicket ?? Number(trade.ticket),
+      );
+      if (resolved) resolvedTrades.add(tradeId);
+    }
+  }
+
   private async reconcileMT5(): Promise<unknown> {
     const r = await axios.get(`${this.config.mt5.bridgeUrl}/positions`, {
       timeout: 5_000, headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
@@ -168,27 +234,40 @@ export class StartupReconciler {
     }
 
     await this.resolveAuthoritativeMT5CloseLedgers();
+    await this.resolveAuthoritativeMT5PartialLedgers(positions);
     return positions;
   }
 
-  private async getMT5HistoryEntry(ticket: number): Promise<{ price: number; profit: number; reason: string } | null> {
+  private async getMT5HistorySnapshot(ticket: number): Promise<{
+    price: number; netProfit: number; remainingVolume: number; closed: boolean;
+    reason: string; closeDealTicket?: number;
+  } | null> {
     const r = await axios.get(`${this.config.mt5.bridgeUrl}/history`, {
-      params: { position: ticket },
-      timeout: 5_000,
+      params: { position: ticket }, timeout: 5_000,
       headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
     });
-    if (r.data?.ok === false || r.data?.closed !== true) return null;
+    if (r.data?.ok === false) return null;
 
     const price = Number(r.data?.close_price);
-    const profit = Number(r.data?.net_profit);
-    if (!Number.isFinite(price) || !Number.isFinite(profit)) return null;
+    const netProfit = Number(r.data?.net_profit);
+    const remainingVolume = Number(r.data?.remaining_volume ?? 0);
+    const closed = r.data?.closed === true;
+    if (!Number.isFinite(price) || !Number.isFinite(netProfit) ||
+        !Number.isFinite(remainingVolume) || remainingVolume < 0) return null;
 
     const reason = String(r.data?.close_reason ?? 'manual').toLowerCase();
+    const closeDealTicket = Number(r.data?.close_deal_ticket);
     return {
-      price,
-      profit,
+      price, netProfit, remainingVolume, closed,
       reason: reason.includes('sl') ? 'SL' : reason.includes('tp') ? 'TP' : 'offline_close',
+      ...(Number.isInteger(closeDealTicket) && closeDealTicket > 0 ? { closeDealTicket } : {}),
     };
+  }
+
+  private async getMT5HistoryEntry(ticket: number): Promise<{ price: number; profit: number; reason: string } | null> {
+    const history = await this.getMT5HistorySnapshot(ticket);
+    if (!history || !history.closed) return null;
+    return { price: history.price, profit: history.netProfit, reason: history.reason };
   }
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
