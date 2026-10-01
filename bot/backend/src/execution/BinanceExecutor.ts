@@ -32,6 +32,11 @@ interface OpenOrderIds {
   quantity?: number;
 }
 
+export function makeBinanceClientOrderId(operationKey: string): string {
+  const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
+  return `ta_${digest}`.slice(0, 32);
+}
+
 export class BinanceExecutor {
   private logger = new Logger('BinanceExecutor');
   private http:  AxiosInstance;
@@ -40,11 +45,6 @@ export class BinanceExecutor {
   private orderMap = new Map<number, OpenOrderIds>();
 
   constructor(private config: SystemConfig) {
-    export function makeBinanceClientOrderId(operationKey: string): string {
-  const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
-  return `ta_${digest}`.slice(0, 32);
-}
-
 const isTestnet=config.binance.env==='testnet';
     this.isFutures=config.binance.futures;
     const baseURL=this.isFutures?(isTestnet?'https://testnet.binancefuture.com':'https://fapi.binance.com'):(isTestnet?'https://testnet.binance.vision':'https://api.binance.com');
