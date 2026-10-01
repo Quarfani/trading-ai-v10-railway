@@ -39,7 +39,7 @@ process.env.SPEC_USOIL_SPREAD_MAX_PIPS = "3";
 try {
   const withPolicy = sf.check("USOIL", 80.00, 80.02, "H1");
   assert(withPolicy.ok, "explicit Oil spread policy should enable policy evaluation");
-  assert(withPolicy.spreadPips === 2, "Oil spread should use broker price increment");
+  assert(Math.abs(withPolicy.spreadPips - 2) < 1e-9, "Oil spread should use broker price increment");
 } finally {
   if (old == null) delete process.env.SPEC_USOIL_SPREAD_MAX_PIPS;
   else process.env.SPEC_USOIL_SPREAD_MAX_PIPS = old;
