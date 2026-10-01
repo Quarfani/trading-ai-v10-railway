@@ -244,6 +244,19 @@ export class ExecutionGateway {
   }
 
 
+  async reconcileBinanceCloseByOperation(
+    symbol: string,
+    operationKey: string,
+  ) {
+    if (this.config.mode !== 'binance') {
+      return { found: false as const };
+    }
+    return this.binance.reconcileFuturesCloseByClientOrderId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+    );
+  }
+
   getPaperStats() { return this.config.mode === 'paper' ? this.paper.getStats() : null; }
 
   async modifySLTP(t: Trade, newSl: number, newTp: number) {
