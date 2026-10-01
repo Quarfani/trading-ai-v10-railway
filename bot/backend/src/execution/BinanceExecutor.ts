@@ -140,9 +140,10 @@ export class BinanceExecutor {
     if (!this.isFutures) return null;
     try {
       const now = Date.now();
+      const historyFloor = Math.max(0, now - 7 * 24 * 60 * 60_000);
       let startTime = Number.isFinite(Number(createdAt)) && Number(createdAt) > 0
-        ? Math.max(0, Number(createdAt) - 5 * 60_000)
-        : Math.max(0, now - 24 * 60 * 60_000);
+        ? Math.max(historyFloor, Number(createdAt) - 5 * 60_000)
+        : Math.max(historyFloor, now - 24 * 60 * 60_000);
 
       for (let page = 0; page < 5; page += 1) {
         const result = await this.signedGet('/fapi/v1/allOrders', {
