@@ -143,6 +143,8 @@ export class WalkForwardOptimizer {
         bestParams,
         timeframe,
         historicalCurrencyRates,
+        marketOverride,
+        costProfileOverride,
       );
 
       const testMetrics = {

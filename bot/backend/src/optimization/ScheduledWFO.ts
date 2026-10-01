@@ -27,12 +27,13 @@ import { WalkForwardOptimizer } from '../optimization/WalkForwardOptimizer';
 import { Backtester }           from '../backtest/Backtester';
 import { TelegramBot }          from '../notifications/TelegramBot';
 import { MarketScanner }        from '../core/MarketScanner';
-import { getMarketDefinition }  from '../market/MarketCatalog';
+import { getBrokerMarketDefinition, getMarketDefinition }  from '../market/MarketCatalog';
 import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeriesLoader';
 import { Logger } from '../utils/Logger';
 import { EvidenceSnapshotStore } from '../analytics/EvidenceSnapshotStore';
 import { evaluateEvidenceForPromotion } from '../consensus/EvidencePromotionPolicy';
-import { COST_MODEL_VERSION } from '../market/CostModel';
+import { COST_MODEL_VERSION, CostProfile } from '../market/CostModel';
+import { getCostProfile } from '../market/CostProfiles';
 
 const WFO_HOUR_UTC   = 3;   // run at 03:00 UTC
 const WFO_DAY_OF_MONTH = 1; // run on the 1st of each month
@@ -85,12 +86,17 @@ export class ScheduledWFO {
   private async loadHistoricalRates(
     symbol: string,
     count: number,
+    market?: ReturnType<typeof getMarketDefinition>,
   ) {
-    const market = getMarketDefinition(symbol);
-    if (!market) return {};
+    const effectiveMarket = market ?? (
+      this.config.mode === 'mt5' || this.config.dataSource === 'mt5'
+        ? getBrokerMarketDefinition(symbol)
+        : getMarketDefinition(symbol)
+    );
+    if (!effectiveMarket) return {};
 
     return loadHistoricalCurrencySeries(
-      market.quoteCurrency,
+      effectiveMarket.quoteCurrency,
       (this.config.accountCurrency ?? 'USD').toUpperCase(),
       async (pair, requestedCount) => {
         return this.scanner.fetchCandles(pair, 'D1', requestedCount);
@@ -143,9 +149,37 @@ export class ScheduledWFO {
             continue;
           }
 
+          const brokerBacked =
+            this.config.mode === 'mt5' ||
+            this.config.dataSource === 'mt5';
+
+          const market = brokerBacked
+            ? getBrokerMarketDefinition(symbol, timeframe)
+            : getMarketDefinition(symbol, timeframe);
+
+          if (!market) {
+            throw new Error(
+              `No canonical market definition for ${symbol}/${timeframe}`,
+            );
+          }
+
+          let costProfile: CostProfile;
+          try {
+            costProfile = getCostProfile(symbol, {
+              priceIncrement: market.economics.priceIncrement,
+              requireExplicit: brokerBacked && Boolean(market.brokerSymbol),
+            });
+          } catch (error) {
+            throw new Error(
+              `Cost profile unavailable for ${symbol}/${timeframe}: ` +
+              `\${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+
           const historicalRates = await this.loadHistoricalRates(
             symbol,
             candles.length,
+            market,
           );
 
           const result = await this.wfo.run(
@@ -153,6 +187,8 @@ export class ScheduledWFO {
             candles,
             timeframe,
             historicalRates,
+            market,
+            costProfile,
           );
 
           const p = result.finalParams;

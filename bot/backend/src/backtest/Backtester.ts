@@ -16,10 +16,11 @@ import { marketRegimeDetector }         from '../core/MarketRegimeDetector';
 import { ConsensusOrchestrator }        from '../consensus/ConsensusOrchestrator';
 import { DatabaseManager }             from '../database/DatabaseManager';
 import { calculateATR }                from '../utils/ATR';
-import { COST_MODEL_VERSION, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
+import { COST_MODEL_VERSION, CostProfile, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
 import { getMarketDefinition }         from '../market/MarketCatalog';
+import { MarketDefinition }            from '../market/market.types';
 import { HistoricalRateSeries, resolveHistoricalQuoteToAccount, validateHistoricalRateSeries } from '../market/HistoricalCurrencySeries';
 import { evaluateMarketDataQuality } from '../market/DataQualityGate';
 import { Logger }                      from '../utils/Logger';
@@ -135,6 +136,8 @@ export class Backtester {
     timeframe: Timeframe = 'H1',
     historicalCurrencyRates: HistoricalRateSeries = {},
     evaluationStartTime?: number,
+    marketOverride?: MarketDefinition,
+    costProfileOverride?: CostProfile,
   ): Promise<BacktestResult> {
     const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}.db`);
     const db    = new DatabaseManager(tmpDb);
@@ -147,8 +150,8 @@ export class Backtester {
     });
 
     marketRegimeDetector.invalidate(symbol);
-    const market = getMarketDefinition(symbol, timeframe);
-    const costProfile = getCostProfile(symbol, {
+    const market = marketOverride ?? getMarketDefinition(symbol, timeframe);
+    const costProfile = costProfileOverride ?? getCostProfile(symbol, {
       priceIncrement: market?.economics.priceIncrement,
       requireExplicit: Boolean(market?.brokerSymbol),
     });
