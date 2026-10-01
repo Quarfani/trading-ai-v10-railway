@@ -83,6 +83,27 @@ const cryptoCosts = estimateCosts(
 approx(cryptoCosts.commission, 201);
 
 
+const mtmInput = {
+  entryPrice: 1,
+  exitPrice: 1.01,
+  volume: 1,
+  contractSize: 100_000,
+  quoteToAccount: 1.25,
+  entryQuoteToAccount: 1.10,
+  exitQuoteToAccount: 1.25,
+  holdingDays: 2,
+};
+const mtmEntry = estimateEntryCosts(
+  { price: mtmInput.entryPrice, volume: mtmInput.volume, contractSize: mtmInput.contractSize, quoteToAccount: mtmInput.entryQuoteToAccount },
+  fx,
+);
+const mtmExit = estimateExitCosts(
+  { price: mtmInput.exitPrice, volume: mtmInput.volume, contractSize: mtmInput.contractSize, quoteToAccount: mtmInput.exitQuoteToAccount },
+  fx,
+);
+const mtmFull = estimateCosts(mtmInput, fx);
+assert(mtmEntry > 0 && mtmExit > 0 && mtmFull.total > mtmEntry + mtmExit, 'full round-trip must exceed one-sided costs when holding/other costs apply');
+
 const varyingFx = estimateCosts(
   {
     entryPrice: 1,
@@ -168,4 +189,4 @@ try {
   }
 }
 
-console.log('Result: 19 passed, 0 failed');
+console.log('Result: 20 passed, 0 failed');
