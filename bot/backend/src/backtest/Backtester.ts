@@ -161,6 +161,10 @@ export class Backtester {
       0.02,
       Math.max(0.0001, Number(this.config.riskPerTrade ?? 0.01)),
     );
+    const minimumSignalConfidence = Math.min(
+      1,
+      Math.max(0, Number(this.config.minConfidence ?? 0)),
+    );
 
     marketRegimeDetector.invalidate(symbol);
     const market = marketOverride ?? getMarketDefinition(symbol, timeframe);
@@ -461,6 +465,13 @@ export class Backtester {
           if (result.outcome === 'NO_TRADE' || !result.signal) continue;
 
           const sig = result.signal;
+          if (
+            !Number.isFinite(Number(sig.confidence)) ||
+            Number(sig.confidence) < minimumSignalConfidence
+          ) {
+            continue;
+          }
+
           const atr = calculateATR(slice.slice(-50), 14);
           if (!atr) continue;
 
