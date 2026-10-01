@@ -1,3 +1,5 @@
+import { Timeframe } from '../market/market.types';
+
 /**
  * SYMBOL CONFIG — v7.1
  * [FIX] أضاف pipValue و lotSize المطلوبَين من PositionSizer للـ hard cap
