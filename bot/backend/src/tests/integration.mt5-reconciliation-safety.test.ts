@@ -265,7 +265,58 @@ async function main() {
       staleDb.raw().close();
     }
 
-    console.log("Result: 10 passed, 0 failed");
+    const unresolvedOpenDb = new DatabaseManager(":memory:");
+    await unresolvedOpenDb.initialize();
+    const unresolvedOpenTradeId = unresolvedOpenDb.insertTrade({
+      ticket: 772,
+      symbol: "EURUSD",
+      timeframe: "H1",
+      side: "BUY",
+      volume: 0.01,
+      entry: 1.1000,
+      sl: 1.0900,
+      tp: 1.1200,
+      status: "open",
+      openedAt: Date.now(),
+      source: "RUNTIME_UNRESOLVED_OPEN",
+    } as any);
+    unresolvedOpenDb.createExecutionLedger({
+      executionId: "runtime-unresolved-open",
+      operationKey: "runtime-unresolved-open-op",
+      action: "OPEN",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId: unresolvedOpenTradeId },
+    });
+    try {
+      const unresolvedOpenReconciler = new Reconciler(
+        config(), unresolvedOpenDb, {} as any,
+        { sendMessage: async () => {} } as any,
+        { recordClose: () => {} } as any,
+        {} as any,
+        { activate: async () => {} } as any,
+        () => {},
+      );
+      let blocked = false;
+      try {
+        await (unresolvedOpenReconciler as any).reconcileOne(
+          unresolvedOpenDb.getOpenTrades()[0],
+        );
+      } catch {
+        blocked = true;
+      }
+      assert(blocked, "runtime reconciliation must block trades with unresolved OPEN execution");
+      assert(
+        unresolvedOpenDb.getExecutionByOperationKey("runtime-unresolved-open-op").status === "UNKNOWN",
+        "unresolved OPEN ledger must remain UNKNOWN",
+      );
+    } finally {
+      unresolvedOpenDb.raw().close();
+    }
+
+    console.log("Result: 11 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
