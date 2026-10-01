@@ -10,11 +10,13 @@ import { DatabaseManager }  from '../database/DatabaseManager';
 import { TelegramBot }      from '../notifications/TelegramBot';
 import { EmergencyStop }    from './EmergencyStop';
 import { Logger }           from '../utils/Logger';
+import { getBrokerContractStatus } from '../market/MarketCatalog';
 
 export interface HealthStatus {
   ok:           boolean;
   mt5:          boolean;
   binance:      boolean;
+  contractsReady: boolean;
   db:           boolean;
   memoryMB:     number;
   memoryOk:     boolean;
@@ -33,7 +35,7 @@ export class HealthMonitor {
   private startedAt = Date.now();
 
   private status: HealthStatus = {
-    ok: true, mt5: true, binance: true, db: true, memoryMB: 0, memoryOk: true,
+    ok: true, mt5: true, binance: true, contractsReady: true, db: true, memoryMB: 0, memoryOk: true,
     uptime: 0, openTrades: 0, checkedAt: Date.now(), issues: [],
   };
 
@@ -68,6 +70,10 @@ export class HealthMonitor {
     const needed=this.resolveSources();
     const mt5Ok=needed.has('mt5')?await this.checkMT5():true;
     const binanceOk=needed.has('binance')?await this.checkBinance():true;
+    const contractStatus = this.config.mode === 'mt5'
+      ? getBrokerContractStatus(this.config.symbols)
+      : { ready: true };
+    const contractsReady = Boolean(contractStatus.ready);
     if (!mt5Ok) {
       issues.push('MT5 bridge unreachable');
       if (!this.alertedMT5) {
@@ -80,6 +86,9 @@ export class HealthMonitor {
     }
 
     if(!binanceOk) issues.push('Binance market-data endpoint unreachable');
+    if (this.config.mode === 'mt5' && !contractsReady) {
+      issues.push('MT5 broker contracts unavailable or expired');
+    }
 
     // ── Database ──────────────────────────────────────────────────────────
     const dbOk = this.checkDB();
@@ -107,7 +116,8 @@ export class HealthMonitor {
     }
 
     // ── Auto Emergency Stop on critical multi-failure ─────────────────────
-    const criticalFail=!dbOk || ((!mt5Ok || !binanceOk) && openCount>0);
+    const criticalFail=!dbOk || ((!mt5Ok || !binanceOk) && openCount>0) ||
+      (this.config.mode === 'mt5' && !contractsReady && openCount>0);
     if (criticalFail) {
       this.failStreak++;
       if (this.failStreak >= 3 && !this.emergency.isActive()) {
@@ -123,6 +133,7 @@ export class HealthMonitor {
       ok:         issues.length === 0,
       mt5:        mt5Ok,
       binance:    binanceOk,
+      contractsReady,
       db:         dbOk,
       memoryMB:   Math.round(memMB),
       memoryOk:   memOk,
