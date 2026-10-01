@@ -17,7 +17,7 @@
  *   - نظام السوق الحالي (Regime)
  * ══════════════════════════════════════════════════════════════════════════
  */
-import { SystemConfig, Side } from '../types/trading.types';
+import { SystemConfig, Side, Timeframe } from '../types/trading.types';
 import { getSymbolSpec }      from '../config/symbolConfig';
 import { Logger }             from '../utils/Logger';
 
@@ -49,8 +49,10 @@ export class KellyPositionSizer {
     symbolStats?: SymbolTradeStats,
     qualityScore = 50,
     currentEquity?: number,
+    quoteToAccount = 1,
+    timeframe: Timeframe = 'H1',
   ): { volume: number; stats: KellyStats } {
-    const spec = getSymbolSpec(symbol);
+    const spec = getSymbolSpec(symbol, timeframe);
     const base = currentEquity && config.compounding.enabled
       ? currentEquity
       : config.accountBalance;
@@ -70,11 +72,15 @@ export class KellyPositionSizer {
     // ── Final risk% ──────────────────────────────────────────────────────
     const effectiveRisk = stats.fraction * qualityMult;
     const riskUsd       = base * effectiveRisk;
-    let raw             = riskUsd / (slDist * spec.contractSize);
+    if (!(quoteToAccount > 0) || !Number.isFinite(quoteToAccount)) {
+      return { volume: 0, stats: { ...stats, source: 'fixed' } };
+    }
+
+    let raw             = riskUsd / (slDist * spec.contractSize * quoteToAccount);
 
     // ── Safety clamps ────────────────────────────────────────────────────
     // Never exceed 2× the configured max risk per trade
-    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * spec.contractSize);
+    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * spec.contractSize * quoteToAccount);
     raw = Math.min(raw, maxVolume, spec.maxVolume);
     raw = Math.max(raw, spec.minVolume);
 
