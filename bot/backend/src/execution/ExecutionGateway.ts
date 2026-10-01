@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as crypto from 'crypto';
 import { SystemConfig, Signal, Trade, Timeframe } from '../types/trading.types';
 import { DatabaseManager } from '../database/DatabaseManager';
-import { BinanceExecutor } from './BinanceExecutor';
+import { BinanceExecutor, makeBinanceClientOrderId } from './BinanceExecutor';
 import { PaperTrader } from '../integration/PaperTrader';
 import { Logger } from '../utils/Logger';
 import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
@@ -115,7 +115,7 @@ export class ExecutionGateway {
 
     const started = Date.now();
     const clientOrderId = this.config.mode === 'binance'
-      ? this.makeClientOrderId(operationKey)
+      ? makeBinanceClientOrderId(operationKey)
       : undefined;
 
     try {
@@ -188,11 +188,6 @@ export class ExecutionGateway {
     const t = await this.binance.placeMarketOrder(signal, volume, clientOrderId);
     if (!t) throw new Error('Binance order failed or protection did not reach a verified safe state');
     return t;
-  }
-
-  private makeClientOrderId(operationKey: string): string {
-    const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
-    return `ta_${digest}`.slice(0, 36);
   }
 
   async getMT5PositionMode(): Promise<'HEDGING' | 'NETTING_OR_EXCHANGE' | 'UNKNOWN' | null> {
@@ -638,6 +633,7 @@ export class ExecutionGateway {
           t.ticket,
           t.symbol,
           volume,
+          makeBinanceClientOrderId(key),
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
