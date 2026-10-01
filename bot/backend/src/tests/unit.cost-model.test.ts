@@ -4,6 +4,7 @@ import {
   estimateCosts,
   estimateEntryCosts,
   estimateExitCosts,
+  estimateHoldingCost,
 } from '../market/CostModel';
 import { getCostProfile } from '../market/CostProfiles';
 
@@ -101,8 +102,11 @@ const mtmExit = estimateExitCosts(
   { price: mtmInput.exitPrice, volume: mtmInput.volume, contractSize: mtmInput.contractSize, quoteToAccount: mtmInput.exitQuoteToAccount },
   fx,
 );
-const mtmFull = estimateCosts(mtmInput, fx);
-assert(mtmEntry > 0 && mtmExit > 0 && mtmFull.total > mtmEntry + mtmExit, 'full round-trip must exceed one-sided costs when holding/other costs apply');
+const holdingProfile = { ...fx, holdingRatePerDay: 0.001 };
+const mtmHolding = estimateHoldingCost(mtmInput, holdingProfile);
+const mtmFull = estimateCosts(mtmInput, holdingProfile);
+assert(mtmEntry > 0 && mtmExit > 0 && mtmHolding > 0, 'holding cost must be non-zero for the explicit holding profile');
+assert(mtmFull.total > mtmEntry + mtmExit, 'full round-trip must include holding cost in addition to one-sided costs');
 
 const varyingFx = estimateCosts(
   {
