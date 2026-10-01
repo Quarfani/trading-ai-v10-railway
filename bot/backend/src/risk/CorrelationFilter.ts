@@ -44,18 +44,30 @@ export class CorrelationFilter {
   ): { blocked: boolean; with?: string; correlation?: number } {
     for (const t of openTrades) {
       if (t.symbol === symbol) continue;
-      if (t.side !== side)     continue; // only block SAME direction
 
-      // Try live Pearson first
+      // Try live Pearson first. Correlation becomes portfolio-PnL
+      // correlation only after accounting for trade directions:
+      // +corr + same side, or -corr + opposite side, are overlapping risk.
       if (candleMap?.[symbol] && candleMap?.[t.symbol]) {
-        const corr = this.getPearson(symbol, t.symbol, candleMap[symbol], candleMap[t.symbol]);
-        if (Math.abs(corr) > this.MAX_CORR) {
+        const corr = this.getPearson(
+          symbol,
+          t.symbol,
+          candleMap[symbol],
+          candleMap[t.symbol],
+        );
+        const sideSign = side === 'BUY' ? 1 : -1;
+        const existingSideSign = t.side === 'BUY' ? 1 : -1;
+        const exposureCorrelation = corr * sideSign * existingSideSign;
+
+        if (exposureCorrelation > this.MAX_CORR) {
           return { blocked: true, with: t.symbol, correlation: corr };
         }
         continue; // Pearson computed — skip static check
       }
 
-      // Fall back to static pairs
+      // Static map only represents known positive correlations, so it is
+      // applicable when both trades point in the same direction.
+      if (t.side !== side) continue;
       const peers = STATIC_PAIRS[symbol] ?? [];
       if (peers.includes(t.symbol)) {
         return { blocked: true, with: t.symbol };
