@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { SystemConfig } from '../types/trading.types';
 import { DatabaseManager } from '../database/DatabaseManager';
-import { BinanceExecutor } from '../execution/BinanceExecutor';
+import { BinanceExecutor, makeBinanceClientOrderId } from '../execution/BinanceExecutor';
 import { TelegramBot } from '../notifications/TelegramBot';
 import { Logger } from '../utils/Logger';
 
@@ -353,6 +353,139 @@ export class StartupReconciler {
       closeTimeMsc: history.closeTimeMsc,
     };
   }
+  private normalizeBinanceRealizedPnl(
+    profit: number,
+    currency: string | null | undefined,
+  ): number | null {
+    if (!Number.isFinite(profit)) return null;
+    const pnlCurrency = String(currency ?? '').trim().toUpperCase();
+    const accountCurrency = String(this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+
+    if (pnlCurrency === accountCurrency) return profit;
+    const stable = new Set(['USD', 'USDT', 'USDC', 'BUSD']);
+    if (stable.has(pnlCurrency) && stable.has(accountCurrency)) return profit;
+    return null;
+  }
+
+  private async resolveAuthoritativeBinanceCloseLedgers(
+    exec: BinanceExecutor,
+  ): Promise<void> {
+    if (!this.config.binance.futures) return;
+
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, action, requestJson
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action IN ('CLOSE','CLOSE_AT_MARKET')
+      ORDER BY updatedAt ASC, createdAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      action: string;
+      requestJson?: string | null;
+    }>;
+
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+
+      let request: any;
+      try {
+        request = JSON.parse(row.requestJson);
+      } catch {
+        continue;
+      }
+
+      const tradeId = Number(request?.tradeId);
+      if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+
+      const trade = this.db.raw().prepare(
+        `SELECT * FROM trades WHERE id=? LIMIT 1`,
+      ).get(tradeId) as any;
+      if (!trade?.ticket || trade.status !== 'open') continue;
+
+      if (this.db.hasResolvedExecutionForTrade(
+        tradeId,
+        ['CLOSE', 'CLOSE_AT_MARKET'],
+      )) continue;
+
+      const clientOrderId = makeBinanceClientOrderId(String(row.executionId));
+      const order = await exec.reconcileFuturesCloseByClientOrderId(
+        String(trade.symbol),
+        clientOrderId,
+      );
+
+      if (!order.found) continue;
+
+      const status = String(order.status ?? '').toUpperCase();
+      if (['CANCELED', 'REJECTED', 'EXPIRED'].includes(status)) {
+        this.db.updateExecutionLedger(String(row.executionId), {
+          status: 'FAILED',
+          error: 'Binance close order ' + clientOrderId + ' was ' + status,
+        });
+        continue;
+      }
+
+      if (status !== 'FILLED') continue;
+
+      const expectedQty = Number(trade.volume);
+      const executedQty = Number(order.executedQty ?? 0);
+      if (
+        !(expectedQty > 0) ||
+        !(executedQty > 0) ||
+        !Number.isFinite(expectedQty) ||
+        !Number.isFinite(executedQty) ||
+        executedQty + Math.max(1e-12, expectedQty * 1e-8) < expectedQty
+      ) {
+        this.logger.warn(
+          'Filled close quantity incomplete for execution=' + String(row.executionId) + '; leaving UNKNOWN',
+        );
+        continue;
+      }
+
+      const position = await exec.getPosition(String(trade.symbol));
+      if (position && Math.abs(Number(position.positionAmt)) > Math.max(1e-12, expectedQty * 1e-8)) {
+        this.logger.warn(
+          'Filled close still has broker position for execution=' + String(row.executionId) + '; leaving UNKNOWN',
+        );
+        continue;
+      }
+
+      const profit = this.normalizeBinanceRealizedPnl(
+        Number(order.realizedProfit),
+        order.realizedProfitCurrency,
+      );
+      if (profit == null) {
+        this.logger.warn(
+          'Filled close PnL currency cannot be converted to account currency for execution=' + String(row.executionId) + '; leaving UNKNOWN',
+        );
+        continue;
+      }
+
+      const resolved = this.db.resolveReconciledFullClose(
+        tradeId,
+        String(row.executionId),
+        profit,
+        Date.now(),
+        String(request?.reason ?? 'MANUAL'),
+        {
+          broker: 'binance',
+          ticket: Number(trade.ticket),
+          clientOrderId,
+          orderId: order.orderId,
+          executedQty,
+          realizedProfit: profit,
+          realizedProfitCurrency: order.realizedProfitCurrency,
+          startupReconciliation: true,
+        },
+        order.orderId,
+      );
+
+      if (!resolved) {
+        this.logger.warn(
+          'Could not atomically resolve close execution=' + String(row.executionId),
+        );
+      }
+    }
+  }
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
@@ -395,6 +528,7 @@ export class StartupReconciler {
       return balances;
     }
 
+    await this.resolveAuthoritativeBinanceCloseLedgers(exec);
     const positions = await exec.getAllPositions();
     const openTrades = this.db.getOpenTrades();
     const bySymbol = new Map<string, any>(
