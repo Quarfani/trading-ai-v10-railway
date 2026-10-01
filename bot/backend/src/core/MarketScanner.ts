@@ -87,7 +87,7 @@ export class MarketScanner {
     const r = await axios.get(`${this.config.mt5.bridgeUrl}/candles`, {
       params: { symbol, timeframe: tf, count },
       timeout: 10_000,
-      headers: { 'X-Api-Key': process.env.MT5_BRIDGE_API_KEY ?? '' },
+      headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
     });
     return this.normalizeCandles(r.data?.candles ?? [], 'mt5');
   }
