@@ -208,6 +208,7 @@ export class ScheduledWFO {
             source: 'WFO',
             evidence: {
               ...result.evidence,
+              monteCarloStress: result.monteCarloStress,
               promotionPolicy: {
                 passed: promotionEvidence.passed,
                 reasons: promotionEvidence.reasons,
