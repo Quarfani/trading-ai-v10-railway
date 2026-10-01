@@ -329,7 +329,7 @@ export class RiskManager {
       `Spread ${sc.spreadPips.toFixed(2)} pips`,
     );
 
-    const maxSlip = this.config.maxSlippagePips ?? 3;
+    const maxSlipPips = this.config.maxSlippagePips ?? 3;
     const market = this.mode === 'mt5'
       ? getBrokerMarketDefinition(signal.symbol, signal.timeframe ?? 'H1')
       : getMarketDefinition(signal.symbol, signal.timeframe ?? 'H1');
@@ -346,19 +346,33 @@ export class RiskManager {
     }
     const execPrice =
       signal.side === 'BUY' ? ticker.ask : ticker.bid;
+    const slippageAbsPct =
+      price > 0 ? Math.abs(price - execPrice) / price : Number.POSITIVE_INFINITY;
+    const pipSize =
+      market.economics.pipSize ?? priceIncrement;
     const slippagePips =
-      Math.abs(price - execPrice) / priceIncrement;
+      market.assetClass === 'FOREX' && pipSize > 0
+        ? Math.abs(price - execPrice) / pipSize
+        : Number.NaN;
+    const maxSlippagePct =
+      this.config.maxSlippagePct ??
+      (market.assetClass === 'FOREX' && price > 0 && pipSize > 0
+        ? (maxSlipPips * pipSize) / price
+        : 0.005);
 
-    if (
-      !Number.isFinite(slippagePips) ||
-      slippagePips > maxSlip
-    ) {
+    if (!Number.isFinite(slippageAbsPct) || slippageAbsPct > maxSlippagePct) {
       return this.block('slippage', [
-        `Slippage ${Number.isFinite(slippagePips) ? slippagePips.toFixed(2) : 'NaN'} pips > max ${maxSlip}`,
+        market.assetClass === 'FOREX'
+          ? `Slippage ${Number.isFinite(slippagePips) ? slippagePips.toFixed(2) : 'NaN'} pips > max ${maxSlipPips}`
+          : `Slippage ${Number.isFinite(slippageAbsPct) ? (slippageAbsPct * 100).toFixed(3) : 'NaN'}% > max ${(maxSlippagePct * 100).toFixed(3)}%`,
       ]);
     }
 
-    reasons.push(`Slippage ${slippagePips.toFixed(2)} pips`);
+    reasons.push(
+      market.assetClass === 'FOREX'
+        ? `Slippage ${slippagePips.toFixed(2)} pips`
+        : `Slippage ${(slippageAbsPct * 100).toFixed(3)}%`,
+    );
 
     const newsEnabled = this.config.newsFilter?.enabled ?? true;
     const newsNow = Date.now();
