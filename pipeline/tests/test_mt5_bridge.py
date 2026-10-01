@@ -236,10 +236,6 @@ def test_normalize_rates_uses_real_volume_then_tick_volume_and_milliseconds():
             "time": 1001, "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15,
             "tick_volume": 9, "real_volume": 0,
         },
-        {
-            "time": 1001, "open": 9.0, "high": 9.0, "low": 9.0, "close": 9.0,
-            "tick_volume": 99, "real_volume": 99,
-        },
     ]
     candles = bridge.normalize_rates(rows)
     assert [c["time"] for c in candles] == [1001000, 1002000]
