@@ -180,6 +180,34 @@ async function main() {
     clearBrokerContracts();
   }
 
+  const modifyDb = new DatabaseManager(":memory:");
+  await modifyDb.initialize();
+  const modifyGateway = new ExecutionGateway(baseConfig("mt5"), modifyDb);
+  const originalModifyPost = (axios as any).post;
+  (axios as any).post = async () => ({ data: { ok: false, error: "broker rejected" } });
+  try {
+    const modified = await modifyGateway.modifySLTP(
+      {
+        id: 901, ticket: 91, symbol: "EURUSD.a", timeframe: "H1",
+        side: "BUY", volume: 0.01, entry: 1.1, sl: 1.09, tp: 1.12,
+        status: "open", openedAt: 1_800_000_000_005, source: "MODIFY_TEST",
+      } as any,
+      1.095,
+      1.115,
+    );
+    assert(modified === false, "HTTP 200 with MT5 modify ok=false must fail the operation");
+    const modifyLedger = modifyDb.raw()
+      .prepare("SELECT status FROM execution_ledger WHERE action='MOVE_SL_TP'")
+      .get() as any;
+    assert(
+      modifyLedger.status === "UNKNOWN",
+      "broker-rejected modify response must remain UNKNOWN for reconciliation",
+    );
+  } finally {
+    (axios as any).post = originalModifyPost;
+    modifyDb.raw().close();
+  }
+
   const resolveDb = new DatabaseManager(":memory:");
   await resolveDb.initialize();
   const created = resolveDb.createExecutionLedger({
@@ -291,7 +319,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 20 passed, 0 failed");
+  console.log("Result: 22 passed, 0 failed");
 }
 
 main().catch(error => {
