@@ -342,6 +342,26 @@ export function loadConfig(): SystemConfig {
       1,
       3650,
     ) * 24 * 3_600_000,
+    requireMonteCarlo:
+      env('EVIDENCE_REQUIRE_MONTE_CARLO', 'false').toLowerCase() === 'true',
+    maxMonteCarloDD95: validateRange(
+      'EVIDENCE_MAX_MC_DD95',
+      num('EVIDENCE_MAX_MC_DD95', 0.30),
+      0,
+      1,
+    ),
+    maxMonteCarloRuinProbability: validateRange(
+      'EVIDENCE_MAX_MC_RUIN',
+      num('EVIDENCE_MAX_MC_RUIN', 0.05),
+      0,
+      1,
+    ),
+    maxMonteCarloUnrecoveredRate: validateRange(
+      'EVIDENCE_MAX_MC_UNRECOVERED',
+      num('EVIDENCE_MAX_MC_UNRECOVERED', 0.25),
+      0,
+      1,
+    ),
   };
 
   const mt5Server = env(
