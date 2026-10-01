@@ -652,6 +652,7 @@ export class BinanceExecutor {
     status?: string;
     orderId?: number;
     executedQty?: number;
+    updatedAt?: number;
     realizedProfit?: number | null;
     realizedProfitCurrency?: string | null;
   }> {
@@ -663,12 +664,14 @@ export class BinanceExecutor {
     const status = String(order.status ?? '').toUpperCase();
     const orderId = Number(order.orderId);
     const executedQty = Number(order.executedQty ?? 0);
+    const updatedAt = Number(order.updateTime ?? order.time ?? 0);
 
     if (!(orderId > 0) || !Number.isFinite(orderId)) {
       return {
         found: true,
         status,
         executedQty: Number.isFinite(executedQty) ? executedQty : 0,
+        updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : undefined,
       };
     }
 
@@ -681,6 +684,7 @@ export class BinanceExecutor {
       status,
       orderId,
       executedQty: Number.isFinite(executedQty) ? executedQty : 0,
+      updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : undefined,
       realizedProfit: realized?.profit ?? null,
       realizedProfitCurrency: realized?.currency ?? null,
     };
