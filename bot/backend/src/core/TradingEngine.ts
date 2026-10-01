@@ -96,6 +96,7 @@ import { getSymbolSpec } from '../config/symbolConfig';
 import { detectFalseSignal } from '../filters/FalseSignalEngine';
 import { getBrokerContractStatus, getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
+import { SlippageGuard } from '../execution/SlippageGuard';
 
 type Broadcaster = (event: string, data: unknown) => void;
 
@@ -133,6 +134,8 @@ export class TradingEngine extends EventEmitter {
 
   private readonly spreadAdj = new SpreadAdjustment();
   private readonly gapProtect = new GapProtection();
+  private readonly slippageGuard = new SlippageGuard();
+  private slippageBlockCount = 0;
 
   private nvidiaAI: NvidiaAI;
 
@@ -1399,6 +1402,39 @@ export class TradingEngine extends EventEmitter {
       return;
     }
 
+    // ── Execution slippage guard ─────────────────────────────────────────
+    const maxSlippagePips = this.config.maxSlippagePips ?? 3;
+    const priceIncrement = marketDefinition.economics.priceIncrement;
+    const maxSlippagePct =
+      adjustedSignal.price > 0 && priceIncrement > 0
+        ? (maxSlippagePips * priceIncrement) / adjustedSignal.price
+        : Number.POSITIVE_INFINITY;
+    const slippage = this.slippageGuard.check(
+      adjustedSignal,
+      result.trade,
+      maxSlippagePct,
+    );
+
+    if (!slippage.ok) {
+      this.slippageBlockCount++;
+      this.logger.error(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=SLIPPAGE ` +
+          `slippagePct=${(slippage.slippagePct * 100).toFixed(4)}% ` +
+          `limitPct=${(maxSlippagePct * 100).toFixed(4)}% ` +
+          `fill=${result.trade.entry} signal=${adjustedSignal.price}`,
+      );
+
+      const unwind = await this.exec
+        .closeAtMarket(result.trade, executableEntryPrice, 'MANUAL')
+        .catch(() => ({ ok: false }));
+      if (!unwind.ok && this.config.mode !== 'paper') {
+        await this.emergency.activate(
+          `Excessive entry slippage on ${symbol}: ${(slippage.slippagePct * 100).toFixed(4)}%`,
+        );
+      }
+      return;
+    }
+
     // ── Execution successful ───────────────────────────────────────────
     this.logger.info(
       `[PIPELINE_SUCCESS] ${symbol}/${tf} ` +
@@ -1714,6 +1750,8 @@ export class TradingEngine extends EventEmitter {
 
       lastCycleDurationMs:
         this.lastCycleDurationMs,
+
+      slippageBlockCount: this.slippageBlockCount,
 
       openPositions: (() => {
         try {
