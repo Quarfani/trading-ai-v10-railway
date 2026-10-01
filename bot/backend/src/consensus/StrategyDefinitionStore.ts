@@ -11,6 +11,7 @@ import {
 } from './strategyDefinition';
 import { promoteStrategy } from './StrategyLifecycle';
 import { EvidencePromotionPolicy, DEFAULT_EVIDENCE_PROMOTION_POLICY } from './EvidencePromotionPolicy';
+import { EvidenceSnapshotStore } from '../analytics/EvidenceSnapshotStore';
 
 type DefinitionRow = {
   strategyId: string;
@@ -38,6 +39,7 @@ export class StrategyDefinitionStore {
   constructor(
     private readonly db: DatabaseManager,
     private readonly evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
+  private readonly evidenceSnapshots = new EvidenceSnapshotStore(db),
   ) {}
 
   save(definition: StrategyDefinition): void {
@@ -114,6 +116,13 @@ export class StrategyDefinitionStore {
       );
     }
 
+    if (
+      to === 'SMALL_CAPITAL' ||
+      to === 'PRODUCTION'
+    ) {
+      this.assertExactEvidenceSnapshots(current);
+    }
+
     const result = promoteStrategy(
       current,
       to,
@@ -138,6 +147,64 @@ export class StrategyDefinitionStore {
     })();
 
     return result.definition;
+  }
+
+  private assertExactEvidenceSnapshots(
+    definition: StrategyDefinition,
+  ): void {
+    const symbols = [...definition.scope.symbols];
+    const timeframes = [...definition.scope.timeframes];
+
+    if (!symbols.length || !timeframes.length) {
+      throw new Error(
+        '[StrategyDefinitionStore] exact strategy evidence scope requires at least one symbol and timeframe',
+      );
+    }
+
+    for (const symbol of symbols) {
+      for (const timeframe of timeframes) {
+        const snapshot = this.evidenceSnapshots.latestForStrategy(
+          definition.strategyId,
+          symbol,
+          timeframe,
+        );
+
+        if (!snapshot) {
+          throw new Error(
+            '[StrategyDefinitionStore] missing evidence snapshot for ' +
+            definition.strategyId + '/' + symbol + '/' + timeframe,
+          );
+        }
+
+        if (!snapshot.promoted) {
+          throw new Error(
+            '[StrategyDefinitionStore] evidence snapshot is not promoted for ' +
+            definition.strategyId + '/' + symbol + '/' + timeframe,
+          );
+        }
+
+        if (
+          snapshot.strategyVersion &&
+          snapshot.strategyVersion !== definition.version
+        ) {
+          throw new Error(
+            '[StrategyDefinitionStore] evidence snapshot version mismatch for ' +
+            definition.strategyId + '/' + symbol + '/' + timeframe,
+          );
+        }
+
+        const createdAt = snapshot.createdAt ?? 0;
+        if (
+          !Number.isFinite(createdAt) ||
+          Date.now() - createdAt > this.evidencePolicy.maxAgeMs
+        ) {
+          throw new Error(
+            '[StrategyDefinitionStore] evidence snapshot is stale for ' +
+            definition.strategyId + '/' + symbol + '/' + timeframe,
+          );
+        }
+      }
+    }
   }
 
   getTransitions(strategyId: string): Array<{
