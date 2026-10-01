@@ -44,44 +44,44 @@ export async function loadHistoricalCurrencySeries(
   const quote = normalizeCurrency(quoteCurrency);
   const account = normalizeCurrency(accountCurrency);
 
-  if (
-    !quote ||
-    !account ||
-    isIdentityOrUsdEquivalent(quote, account)
-  ) {
+  if (!quote || !account || isIdentityOrUsdEquivalent(quote, account)) {
     return {};
   }
 
-  const candidates = [
+  const directCandidates = [
     normalizePair(quote + account),
     normalizePair(account + quote),
   ];
 
-  for (const pair of [...new Set(candidates)]) {
+  const loadPair = async (pair: string): Promise<HistoricalRateSeries> => {
     try {
       const candles = await fetcher(pair, count);
       const points = (candles ?? [])
-        .filter(
-          candle =>
-            Number.isFinite(candle.time) &&
-            Number.isFinite(candle.close) &&
-            candle.close > 0,
-        )
-        .map(candle => ({
-          time: candle.time,
-          rate: candle.close,
-        }))
+        .filter(candle => Number.isFinite(candle.time) && Number.isFinite(candle.close) && candle.close > 0)
+        .map(candle => ({ time: candle.time, rate: candle.close }))
         .sort((a, b) => a.time - b.time);
-
-      if (points.length > 0) {
-        return {
-          [pair]: points,
-        };
-      }
+      return points.length ? { [pair]: points } : {};
     } catch {
-      // Try the inverse candidate before failing closed.
+      return {};
     }
+  };
+
+  for (const pair of [...new Set(directCandidates)]) {
+    const loaded = await loadPair(pair);
+    if (Object.keys(loaded).length) return loaded;
   }
 
-  return {};
+  // USD bridge: load both quote/USD and account/USD legs.
+  const legs = [
+    normalizePair(quote + 'USD'),
+    normalizePair('USD' + quote),
+    normalizePair(account + 'USD'),
+    normalizePair('USD' + account),
+  ];
+  const result: HistoricalRateSeries = {};
+  for (const pair of [...new Set(legs)]) {
+    Object.assign(result, await loadPair(pair));
+  }
+
+  return Object.keys(result).length >= 2 ? result : {};
 }
