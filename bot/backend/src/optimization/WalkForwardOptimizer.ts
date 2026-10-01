@@ -31,6 +31,7 @@ import { HistoricalRateSeries } from '../market/HistoricalCurrencySeries';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { buildPurgedWalkForwardFolds } from '../research/PurgedWalkForward';
 import { summarizeWfoEvidence, BacktestWfoMetrics } from '../research/WfoEvidenceAdapter';
+import { MarketRegimeDetector } from '../core/MarketRegimeDetector';
 
 export interface OptimParams {
   atrMult:       number;
@@ -45,8 +46,8 @@ export interface WalkForwardWindow {
   testStart:   number;
   testEnd:     number;
   bestParams:  OptimParams;
-  trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; valid: boolean };
-  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; valid: boolean };
+  trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; dataQualityScore: number; parameterSensitivity: number; valid: boolean };
+  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; dataQualityScore: number; regimeCoverage: number; valid: boolean };
   oos_valid:   boolean; // out-of-sample passed minimum threshold
   leakagePassed: boolean;
   purgedCount: number;
@@ -127,13 +128,13 @@ export class WalkForwardOptimizer {
         `  Window ${windows.length + 1}: train=${trainCandles.length} test=${testCandles.length} purge=${fold.purgedCount} embargoMs=${fold.embargoMs}`,
       );
 
-      const { bestParams, bestMetrics } = await this.optimizeOnTrain(
+      const { bestParams, bestMetrics, parameterSensitivity } = await this.optimizeOnTrain(
         symbol,
         trainCandles,
         timeframe,
         historicalCurrencyRates,
       );
-      const testMetrics = await this.evaluateOnTest(
+      const baseTestMetrics = await this.evaluateOnTest(
         symbol,
         trainCandles.slice(-250),
         testCandles,
@@ -141,6 +142,15 @@ export class WalkForwardOptimizer {
         timeframe,
         historicalCurrencyRates,
       );
+
+      const testMetrics = {
+        ...baseTestMetrics,
+        regimeCoverage: this.calculateRegimeCoverage(
+          symbol,
+          timeframe,
+          testCandles,
+        ),
+      };
 
       const leakagePassed = !fold.train.some(
         observation => observation.endTime >= fold.validationStart,
@@ -158,7 +168,10 @@ export class WalkForwardOptimizer {
         testStart: fold.validationStart,
         testEnd: fold.validationEnd,
         bestParams,
-        trainMetrics: bestMetrics,
+        trainMetrics: {
+          ...bestMetrics,
+          parameterSensitivity,
+        },
         testMetrics,
         oos_valid,
         leakagePassed,
@@ -177,8 +190,13 @@ export class WalkForwardOptimizer {
     candles: Candle[],
     timeframe: Timeframe,
     historicalCurrencyRates: HistoricalRateSeries,
-  ): Promise<{ bestParams: OptimParams; bestMetrics: any }> {
+  ): Promise<{
+    bestParams: OptimParams;
+    bestMetrics: any;
+    parameterSensitivity: number;
+  }> {
     let bestScore  = -Infinity;
+    const validScores: number[] = [];
     let bestParams: OptimParams = { atrMult: 1.5, tpRatio: 2.0, minConfidence: 0.60, rollingWindow: 30 };
     let bestMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; valid: boolean } = {
       winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false,
@@ -203,6 +221,9 @@ export class WalkForwardOptimizer {
 
           if (!metrics.valid) continue;
 
+          if (!metrics.valid) continue;
+
+          validScores.push(score);
           if (score > bestScore) {
             bestScore   = score;
             bestParams  = params;
@@ -212,7 +233,12 @@ export class WalkForwardOptimizer {
       }
     }
 
-    return { bestParams, bestMetrics };
+    const parameterSensitivity =
+      bestScore > 0 && validScores.length > 0
+        ? validScores.filter(score => score >= bestScore * 0.8).length / validScores.length
+        : 0;
+
+    return { bestParams, bestMetrics, parameterSensitivity };
   }
 
   // ─── Quick backtest for a single param set ───────────────────────────────
@@ -232,6 +258,7 @@ export class WalkForwardOptimizer {
     maxDD: number;
     totalTrades: number;
     totalCost: number;
+    dataQualityScore: number;
     valid: boolean;
   }> {
     const envAtrKey = `SPEC_${symbol}_${timeframe}_ATR_MULT`;
@@ -270,6 +297,7 @@ export class WalkForwardOptimizer {
           maxDD: 1,
           totalTrades: 0,
           totalCost: 0,
+          dataQualityScore: 0,
           valid: false,
         };
       }
@@ -282,6 +310,7 @@ export class WalkForwardOptimizer {
         maxDD: res.maxDrawdownPct / 100,
         totalTrades: res.totalTrades,
         totalCost: res.totalCost,
+        dataQualityScore: res.dataQualityScore,
         valid: true,
       };
     } catch {
@@ -293,6 +322,7 @@ export class WalkForwardOptimizer {
         maxDD: 1,
         totalTrades: 0,
         totalCost: 0,
+        dataQualityScore: 0,
         valid: false,
       };
     } finally {
@@ -308,6 +338,33 @@ export class WalkForwardOptimizer {
         delete process.env[envTpKey];
       }
     }
+  }
+
+  private calculateRegimeCoverage(
+    symbol: string,
+    timeframe: Timeframe,
+    candles: Candle[],
+  ): number {
+    if (candles.length < 50) return 0;
+
+    const regimes = new Set<string>();
+    const samples = Math.min(8, Math.max(3, Math.floor(candles.length / 20)));
+    const maxStart = candles.length - 50;
+
+    for (let i = 0; i < samples; i++) {
+      const offset =
+        samples === 1
+          ? maxStart
+          : Math.floor((maxStart * i) / (samples - 1));
+
+      const detector = new MarketRegimeDetector();
+      const window = candles.slice(0, offset + 50);
+      const result = detector.detect(symbol, timeframe, window);
+
+      if (result.regime !== 'UNKNOWN') regimes.add(result.regime);
+    }
+
+    return Number((regimes.size / 3).toFixed(6));
   }
 
   private async evaluateOnTest(
