@@ -169,20 +169,36 @@ export class ExecutionGateway {
   async getCurrentEquity(): Promise<number | null> {
     try {
       if (this.config.mode === 'paper') return this.paper.getBalance();
+
       if (this.config.mode === 'mt5') {
         const r = await axios.get(`${this.config.mt5.bridgeUrl}/account`, {
-          timeout: 4_000, headers: this.mt5Headers(),
+          timeout: 4_000,
+          headers: this.mt5Headers(),
         });
         const equity = Number(r.data?.equity);
         return Number.isFinite(equity) && equity > 0 ? equity : null;
       }
-      const equity = await this.binance.accountEquity();
+
+      // Binance USD-M Futures and Spot equity is reported in the Binance
+      // wallet unit (USDT in this executor). Convert it explicitly into the
+      // configured account currency before risk decisions.
+      const rawEquity = await this.binance.accountEquity();
+      const accountCurrency = (this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+      if (accountCurrency === 'USD' || accountCurrency === 'USDT') return rawEquity;
+
+      const conversion = await this.currencyRates?.getRate('USDT');
+      if (!(conversion != null && conversion > 0 && Number.isFinite(conversion))) {
+        this.logger.error(`Binance equity conversion unavailable: USDT->${accountCurrency}`);
+        return null;
+      }
+      const equity = rawEquity * conversion;
       return Number.isFinite(equity) && equity > 0 ? equity : null;
     } catch (e: any) {
       this.logger.error(`getCurrentEquity failed: ${e?.message ?? e}`);
       return null;
     }
   }
+
 
   getPaperStats() { return this.config.mode === 'paper' ? this.paper.getStats() : null; }
 
