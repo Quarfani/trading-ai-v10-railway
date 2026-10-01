@@ -7,7 +7,10 @@
 import { SystemConfig }        from '../types/trading.types';
 import { DatabaseManager }     from '../database/DatabaseManager';
 import { ExecutionGateway }    from './ExecutionGateway';
-import { getSymbolSpec }       from '../config/symbolConfig';
+import { getMarketDefinition } from '../market/MarketCatalog';
+import { resolveQuoteToAccount } from '../market/CurrencyConverter';
+import { PositionSizer } from '../risk/PositionSizer';
+import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 import { Logger }              from '../utils/Logger';
 import { MarketScanner }       from '../core/MarketScanner';
 import { Signal }               from '../types/trading.types';
@@ -26,7 +29,10 @@ export class ScaleInManager {
     private db:     DatabaseManager,
     private exec:   ExecutionGateway,
     private scanner: MarketScanner,
-  ) {}
+    private currencyRates: CurrencyConversionProvider,
+  ) {
+    this.sizer = new PositionSizer(config, db);
+  }
 
   start() {
     // FIX: load previously-scaled IDs from DB on startup
@@ -92,10 +98,48 @@ export class ScaleInManager {
   }
 
   private async doScaleIn(t:any,currentPrice:number){
-    const spec=getSymbolSpec(t.symbol);
-    const addVolume=Math.floor((t.volume*0.5)/spec.volumeStep)*spec.volumeStep;
-    if(addVolume<spec.minVolume)throw new Error(`Scale-in volume below minimum for ${t.symbol}`);
-    const signal:Signal={symbol:t.symbol,side:t.side,price:currentPrice,confidence:1,sl:t.sl,tp:t.tp,source:`SCALE_IN:${t.source}`,reason:`Scale-in at 1.5R from trade ${t.id}`,timestamp:Date.now(),timeframe:t.timeframe};
+    const market = getMarketDefinition(t.symbol);
+    if (!market) throw new Error(`No broker-confirmed market definition for ${t.symbol}`);
+
+    const rates = await this.currencyRates.getRates(market.quoteCurrency);
+    if (market.quoteCurrency.toUpperCase() !== (this.config.accountCurrency ?? 'USD').toUpperCase() && !rates) {
+      throw new Error(`FX conversion unavailable for ${market.quoteCurrency}->${this.config.accountCurrency ?? 'USD'}`);
+    }
+    const livePrices = rates ?? {};
+    const quoteToAccount = resolveQuoteToAccount(
+      market.quoteCurrency,
+      this.config.accountCurrency ?? 'USD',
+      livePrices,
+    );
+    if (quoteToAccount == null) throw new Error('Scale-in FX conversion failed');
+
+    const equity = await this.exec.getCurrentEquity();
+    if (!(equity && equity > 0 && Number.isFinite(equity))) {
+      throw new Error('Scale-in equity unavailable');
+    }
+
+    const economics = market.economics;
+    const existingRisk = Math.abs(t.entry - t.sl) * economics.contractSize * quoteToAccount * t.volume;
+    const addRiskPerVolume = Math.abs(currentPrice - t.sl) * economics.contractSize * quoteToAccount;
+    const riskBudget = equity * 0.02 - existingRisk;
+    if (!(riskBudget > 0) || !(addRiskPerVolume > 0)) {
+      throw new Error('Scale-in would exceed aggregate 2% stop-risk budget');
+    }
+
+    const requested = t.volume * 0.5;
+    const maxAdditional = riskBudget / addRiskPerVolume;
+    let addVolume = Math.min(requested, maxAdditional, economics.maxVolume);
+    addVolume = Math.floor(addVolume / economics.volumeStep + 1e-12) * economics.volumeStep;
+    addVolume = +addVolume.toFixed(8);
+    if (!(addVolume >= economics.minVolume) || !Number.isFinite(addVolume)) {
+      throw new Error(`Scale-in volume below broker minimum for ${t.symbol}`);
+    }
+
+    const signal: Signal = {
+      symbol:t.symbol, side:t.side, price:currentPrice, confidence:1, sl:t.sl, tp:t.tp,
+      source:`SCALE_IN:${t.source}`, reason:`Scale-in at 1.5R from trade ${t.id}`,
+      timestamp:Date.now(), timeframe:t.timeframe,
+    };
     const result=await this.exec.execute(signal,addVolume,t.timeframe??'H1');
     if(!result.success)throw new Error(result.error??'scale-in failed');
   }

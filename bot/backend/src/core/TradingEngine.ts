@@ -348,6 +348,7 @@ export class TradingEngine extends EventEmitter {
       db,
       this.exec,
       this.scanner,
+      this.currencyRates,
     );
 
     this.timeExit = new TimeBasedExit(

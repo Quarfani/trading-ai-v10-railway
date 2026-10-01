@@ -11,6 +11,7 @@ import { DatabaseManager }    from '../database/DatabaseManager';
 import { MarketScanner }      from '../core/MarketScanner';
 import { ExecutionGateway }   from './ExecutionGateway';
 import { Logger }             from '../utils/Logger';
+import { getMarketDefinition } from '../market/MarketCatalog';
 
 const BE_DB_KEY = 'breakeven_moved';
 
@@ -82,10 +83,19 @@ export class BreakevenManager {
       // Move SL to breakeven+1pip when trade is at 1R profit
       if (moved < r) continue;
 
-      const spec    = { pip: 0.0001 }; // fallback; ideally: getSymbolSpec(t.symbol)
+      const market = getMarketDefinition(t.symbol);
+      if (!market) {
+        this.logger.warn(`Breakeven blocked ${t.symbol}: broker market definition unavailable`);
+        continue;
+      }
+
+      // Use the broker's minimum executable price increment instead of a
+      // universal 0.0001 pip. This remains valid for JPY FX, Gold, Oil and
+      // suffixed MT5 symbols with broker-specific point sizes.
+      const priceBuffer = market.economics.priceIncrement;
       const newSL   = t.side === 'BUY'
-        ? t.entry + spec.pip    // 1 pip above entry (small buffer)
-        : t.entry - spec.pip;
+        ? t.entry + priceBuffer
+        : t.entry - priceBuffer;
 
       // Don't move if already at or better than breakeven
       if (t.side === 'BUY'  && t.sl >= newSL) { this.movedBE.add(t.id); this.saveMovedBE(); continue; }

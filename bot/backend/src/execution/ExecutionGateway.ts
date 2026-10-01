@@ -244,17 +244,40 @@ export class ExecutionGateway {
         this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result });
         return result;
       }
+      let remaining = +(t.volume - volume).toFixed(8);
+      let realizedProfit = 0;
+
       if (this.config.mode === 'mt5') {
         if (!t.ticket) throw new Error('Trade has no broker ticket');
         const fraction = volume / t.volume;
-        await axios.post(`${this.config.mt5.bridgeUrl}/close_partial`, { ticket: t.ticket, fraction, idempotency_key: key }, { timeout: 8_000, headers: this.mt5Headers() });
-      } else {
+        const r = await axios.post(
+          `${this.config.mt5.bridgeUrl}/close_partial`,
+          { ticket: t.ticket, fraction, idempotency_key: key },
+          { timeout: 8_000, headers: this.mt5Headers() },
+        );
+        const brokerRemaining = Number(r.data?.remaining_volume);
+        const brokerProfit = Number(r.data?.profit ?? 0);
+        if (!Number.isFinite(brokerRemaining) || brokerRemaining < 0 || brokerRemaining > t.volume) {
+          throw new Error('MT5 partial close returned invalid remaining_volume');
+        }
+        if (!Number.isFinite(brokerProfit)) {
+          throw new Error('MT5 partial close returned invalid profit');
+        }
+        remaining = +brokerRemaining.toFixed(8);
+        realizedProfit = +brokerProfit.toFixed(8);
+      } else if (this.config.mode === 'binance') {
         if (!t.ticket || !(await this.binance.closePartialPosition(t.ticket, t.symbol, volume))) throw new Error('Binance partial close rejected');
+      } else {
+        if (!t.ticket) throw new Error('Paper trade has no ticket');
+        const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason);
+        if (!result.ok) throw new Error('Paper partial close rejected');
+        remaining = result.remainingVolume;
+        realizedProfit = result.profit;
       }
-      const remaining = +(t.volume - volume).toFixed(8);
-      if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(remaining, `\npartial_volume=${volume}`, t.id);
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED' });
-      return { ok: true, profit: 0, remainingVolume: remaining };
+
+      if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=COALESCE(realizedProfit,0)+?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(remaining, realizedProfit, `\npartial_volume=${volume}\npartial_pnl=${realizedProfit.toFixed(8)}`, t.id);
+      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result: { remainingVolume: remaining, profit: realizedProfit } });
+      return { ok: true, profit: realizedProfit, remainingVolume: remaining };
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
       this.logger.error(`closePartial: ${e?.message ?? e}`);

@@ -569,10 +569,32 @@ def close():
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Close failed: {result.retcode if result else mt5.last_error()}")
 
-        profit = pos.profit
-        log.info(f"[LIVE] Closed {ticket} {pos.symbol} profit={profit:.2f}")
-        return jsonify({"ok": True, "ticket": ticket, "profit": profit,
-                        "close_price": close_price})
+        summary = summarize_position_deals(
+            mt5.history_deals_get(position=ticket) or []
+        )
+        if not summary:
+            # The broker accepted the close, but realized deal history is not
+            # yet observable. Return UNKNOWN to the caller so reconciliation
+            # can resolve the final PnL instead of recording pre-close PnL.
+            return err(
+                f"Position {ticket} closed but realized deal history is unavailable",
+                503,
+            )
+
+        profit = summary["net_profit"]
+        close_price_realized = summary["close_price"]
+        log.info(
+            f"[LIVE] Closed {ticket} {pos.symbol} realized_net={profit:.2f} "
+            f"close_price={close_price_realized}"
+        )
+        return jsonify({
+            "ok": True,
+            "ticket": ticket,
+            "profit": profit,
+            "close_price": close_price_realized,
+            "close_reason": summary["close_reason"],
+            "close_deal_ticket": summary["close_deal_ticket"],
+        })
 
 
 @app.route("/close_partial", methods=["POST"])
@@ -608,6 +630,11 @@ def close_partial():
             return err(f"Invalid broker volume step for {pos.symbol}", 422)
         close_vol = max(vol_step, round(pos.volume * fraction / vol_step) * vol_step)
         close_vol = min(close_vol, pos.volume)
+        if close_vol >= float(pos.volume) - max(1e-12, vol_step * 1e-9):
+            return err(
+                "Requested partial close rounds to full position; refusing implicit full close",
+                422,
+            )
         volume_ok, volume_reason = validate_trade_volume(close_vol, sym_info)
         if not volume_ok:
             return err(volume_reason, 422)
@@ -644,10 +671,49 @@ def close_partial():
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Partial close failed: {result.retcode if result else mt5.last_error()}")
 
-        log.info(f"[LIVE] Partial close {ticket}: {close_vol}/{pos.volume} lots @ {close_price}")
-        return jsonify({"ok": True, "ticket": ticket, "closed_volume": close_vol,
-                        "remaining_volume": round(pos.volume - close_vol, 4),
-                        "close_price": close_price})
+        deal_ticket = int(getattr(result, "deal", 0) or 0)
+        deals = mt5.history_deals_get(ticket=deal_ticket) if deal_ticket else []
+        if not deals:
+            return err(
+                f"Partial close {ticket} executed but realized deal history is unavailable",
+                503,
+            )
+
+        close_deal = deals[-1]
+        realized_profit = round(
+            float(getattr(close_deal, "profit", 0) or 0) +
+            float(getattr(close_deal, "commission", 0) or 0) +
+            float(getattr(close_deal, "swap", 0) or 0) +
+            float(getattr(close_deal, "fee", 0) or 0),
+            8,
+        )
+
+        remaining_positions = mt5.positions_get(ticket=ticket) or []
+        if not remaining_positions:
+            return err(
+                f"Partial close {ticket} executed but remaining position could not be verified",
+                503,
+            )
+        remaining_volume = float(remaining_positions[0].volume)
+        if not (0 < remaining_volume < float(pos.volume)):
+            return err(
+                f"Partial close {ticket} returned invalid remaining volume {remaining_volume}",
+                503,
+            )
+
+        log.info(
+            f"[LIVE] Partial close {ticket}: {close_vol}/{pos.volume} lots "
+            f"remaining={remaining_volume} realized={realized_profit:.8f}"
+        )
+        return jsonify({
+            "ok": True,
+            "ticket": ticket,
+            "deal_ticket": deal_ticket,
+            "closed_volume": close_vol,
+            "remaining_volume": round(remaining_volume, 8),
+            "close_price": float(getattr(close_deal, "price", close_price) or close_price),
+            "profit": realized_profit,
+        })
 
 
 @app.route("/positions", methods=["GET"])
