@@ -198,8 +198,8 @@ export class WalkForwardOptimizer {
     let bestScore  = -Infinity;
     const validScores: number[] = [];
     let bestParams: OptimParams = { atrMult: 1.5, tpRatio: 2.0, minConfidence: 0.60, rollingWindow: 30 };
-    let bestMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; valid: boolean } = {
-      winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false,
+    let bestMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; dataQualityScore: number; valid: boolean } = {
+      winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, totalTrades: 0, totalCost: 0, dataQualityScore: 0, valid: false,
     };
 
     // Grid search over parameter combinations
@@ -218,8 +218,6 @@ export class WalkForwardOptimizer {
 
           // Objective function: Sharpe × WinRate × (1 - MaxDD)
           const score = metrics.sharpe * metrics.winRate * (1 - Math.min(0.5, metrics.maxDD));
-
-          if (!metrics.valid) continue;
 
           if (!metrics.valid) continue;
 
