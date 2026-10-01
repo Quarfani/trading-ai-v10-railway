@@ -65,7 +65,9 @@ async function main() {
   const recovered = new BinanceExecutor(config());
   (recovered as any).signedGet = async (path: string, params: Record<string, unknown>) => {
     if (path === "/fapi/v1/allOrders") {
-      assert(params.origClientOrderId === clientId, "historical order lookup must use the operation client id");
+      assert(Number.isFinite(Number(params.startTime)), "historical lookup must use a bounded time window");
+      assert(Number.isFinite(Number(params.endTime)), "historical lookup must include an end time");
+      assert(params.limit === 1000, "historical lookup must request the full bounded order page");
       return [{
         symbol: "BTCUSDT",
         orderId: 70001,
@@ -88,6 +90,7 @@ async function main() {
   const recoveredResult = await recovered.reconcilePartialCloseByClientOrderId(
     "BTCUSDT",
     clientId,
+    Date.now() - 30_000,
   );
   assert(recoveredResult.ok === true, "historical partial-close recovery must succeed");
   assert(recoveredResult.orderId === 70001, "historical recovery must preserve broker order id");
@@ -98,6 +101,7 @@ async function main() {
   const noOrder = await recovered.reconcilePartialCloseByClientOrderId(
     "BTCUSDT",
     makeBinanceClientOrderId("missing"),
+    Date.now() - 30_000,
   );
   assert(noOrder.ok === false, "missing historical client order must fail closed");
 
@@ -224,6 +228,7 @@ async function main() {
   const fullRecoveredResult = await fullRecovered.reconcileFullCloseByClientOrderId(
     "BTCUSDT",
     makeBinanceClientOrderId("full-close-operation-key"),
+    Date.now() - 30_000,
   );
   assert(fullRecoveredResult.ok === true, "historical full-close recovery must succeed");
   assert(fullRecoveredResult.executedQty === 1, "historical full-close recovery must preserve executed quantity");
