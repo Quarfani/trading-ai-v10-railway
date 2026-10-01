@@ -213,6 +213,7 @@ export function metricsFromPurgedWfoFold<T>(
     regimeCoverage?: number;
     datasetQuality?: number;
     sampleSize?: number;
+    tradePnls?: number[];
   },
 ): BacktestWfoMetrics {
   return {
@@ -223,8 +224,12 @@ export function metricsFromPurgedWfoFold<T>(
     trades: metrics.trades,
     pnl: metrics.pnl,
     profitFactor: metrics.profitFactor,
-    positivePnl: metrics.pnl > 0 ? metrics.pnl : 0,
-    negativePnl: metrics.pnl < 0 ? Math.abs(metrics.pnl) : 0,
+    positivePnl: metrics.tradePnls
+      ? metrics.tradePnls.reduce((sum, pnl) => sum + Math.max(0, pnl), 0)
+      : Math.max(0, metrics.pnl),
+    negativePnl: metrics.tradePnls
+      ? metrics.tradePnls.reduce((sum, pnl) => sum + Math.max(0, -pnl), 0)
+      : Math.max(0, -metrics.pnl),
     totalCost: metrics.totalCost,
     parameterSensitivity: metrics.parameterSensitivity ?? 0,
     regimeCoverage: metrics.regimeCoverage ?? 0,
