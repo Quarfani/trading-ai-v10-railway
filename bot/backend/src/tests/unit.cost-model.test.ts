@@ -105,8 +105,14 @@ const flatFx = estimateCosts(
   },
   fx,
 );
-assert(varyingFx.entryCommission !== flatFx.entryCommission, 'entry conversion must affect entry cost');
-assert(varyingFx.exitCommission !== flatFx.exitCommission, 'exit conversion must affect exit cost');
 assert(varyingFx.spread !== flatFx.spread, 'distinct conversion rates must affect spread');
+assert(varyingFx.total !== flatFx.total, 'distinct conversion rates must affect total cost');
+
+const cryptoVarying = estimateCosts(
+  { entryPrice: 100_000, exitPrice: 101_000, volume: 1, contractSize: 1, quoteToAccount: 1, entryQuoteToAccount: 1.1, exitQuoteToAccount: 1.2 },
+  crypto,
+);
+assert(cryptoVarying.entryCommission !== cryptoCosts.entryCommission, 'notional-rate commission must use entry conversion');
+assert(cryptoVarying.exitCommission !== cryptoCosts.exitCommission, 'notional-rate commission must use exit conversion');
 
 console.log('Result: 13 passed, 0 failed');
