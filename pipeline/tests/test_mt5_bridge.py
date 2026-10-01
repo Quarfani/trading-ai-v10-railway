@@ -508,6 +508,7 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
     monkeypatch.setattr(bridge, "ensure_connected", lambda: True)
 
     sym_info = types.SimpleNamespace(
+        visible=True,
         point=0.00001,
         trade_stops_level=0,
         volume_min=0.01,
@@ -520,9 +521,31 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
     )
     tick = types.SimpleNamespace(bid=1.0999, ask=1.1001)
 
+    fake_mt5 = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        SYMBOL_TRADE_EXECUTION_MARKET=2,
+        SYMBOL_FILLING_IOC=2,
+        SYMBOL_FILLING_FOK=1,
+        ORDER_FILLING_RETURN=2,
+        ORDER_FILLING_IOC=1,
+        ORDER_FILLING_FOK=0,
+        ORDER_TYPE_BUY=0,
+        ORDER_TYPE_SELL=1,
+        TRADE_ACTION_DEAL=1,
+        ORDER_TIME_GTC=0,
+        TRADE_RETCODE_DONE=10009,
+        TRADE_RETCODE_DONE_PARTIAL=10010,
+    )
+    monkeypatch.setattr(bridge, "mt5", fake_mt5, raising=False)
+    monkeypatch.setattr(bridge, "MT5_AVAILABLE", True)
     monkeypatch.setattr(bridge.mt5, "symbol_info", lambda symbol: sym_info)
     monkeypatch.setattr(bridge.mt5, "symbol_info_tick", lambda symbol: tick)
     monkeypatch.setattr(bridge.mt5, "positions_get", lambda **kwargs: [])
+    monkeypatch.setattr(
+        bridge.mt5,
+        "account_info",
+        lambda: types.SimpleNamespace(margin_free=1000.0),
+    )
     monkeypatch.setattr(
         bridge.mt5,
         "order_check",
