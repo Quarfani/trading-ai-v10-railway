@@ -7,7 +7,9 @@ import { MarketScanner } from '../core/MarketScanner';
 import { DatabaseManager }      from '../database/DatabaseManager';
 import { WalkForwardOptimizer } from './WalkForwardOptimizer';
 import { MonteCarloSimulator }  from './MonteCarloSimulator';
-import { Logger }               from '../utils/Logger';
+import { Logger } from '../utils/Logger';
+import { getMarketDefinition } from '../market/MarketCatalog';
+import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeriesLoader';
 
 const log = new Logger('RunWFO');
 
@@ -31,9 +33,22 @@ async function main() {
   const candles = await scanner.fetchCandles(symbol, timeframe as any, count);
   log.info(`Fetched ${candles.length} candles`);
 
+  // Load timestamp-aware historical FX when the instrument quote is non-USD.
+  const market = getMarketDefinition(symbol);
+  const accountCurrency = String(process.env.ACCOUNT_CURRENCY ?? 'USD').toUpperCase();
+  const historicalRates = market
+    ? await loadHistoricalCurrencySeries(
+        market.quoteCurrency,
+        accountCurrency,
+        async (pair, requestedCount) =>
+          scanner.fetchCandles(pair, 'D1', requestedCount),
+        candles.length,
+      )
+    : {};
+
   // Run Walk-Forward
-  const wfo    = new WalkForwardOptimizer(db.path);
-  const result = await wfo.run(symbol, candles, timeframe as any);
+  const wfo = new WalkForwardOptimizer(db.path);
+  const result = await wfo.run(symbol, candles, timeframe as any, historicalRates);
 
   console.log('\n══════════════════════════════════════════════');
   console.log(`WALK-FORWARD RESULTS: ${symbol} ${timeframe}`);
