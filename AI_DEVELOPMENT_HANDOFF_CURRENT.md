@@ -4,7 +4,7 @@
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
 Current head: verify refs/heads/main before resuming
-Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410
+Current validated checkpoint: CI #549 passed for commit be2f56f3faef626ee007c4638628d8e10108c237
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -59,3 +59,6 @@ B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E
 2. Check the latest CI run for the current head.
 3. Never overwrite unresolved execution-ledger entries automatically.
 4. Keep one concrete NEXT TASK only.
+
+## VALIDATION NOTE
+CI #551 was attempted twice and both attempts terminated in seconds before any workflow step/log executed; exact runner cause is unverified. Do not treat #551 as evidence of a code failure.
