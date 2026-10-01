@@ -437,10 +437,18 @@ export class ExecutionGateway {
       { exitPrice, reason },
     );
     if (op.existing) {
-      return {
-        ok: op.existing.status === 'EXECUTED',
-        profit: undefined,
-      };
+      if (op.existing.status !== 'EXECUTED') return { ok: false };
+      try {
+        const persisted = op.existing.resultJson
+          ? JSON.parse(op.existing.resultJson)
+          : null;
+        return {
+          ok: true,
+          profit: persisted?.realizedProfit ?? persisted?.profit ?? undefined,
+        };
+      } catch {
+        return { ok: false };
+      }
     }
 
     try {
@@ -536,7 +544,24 @@ export class ExecutionGateway {
     }
     const key = this.stableKey('PARTIAL_CLOSE', { id: t.id, ticket: t.ticket, symbol: t.symbol, volume, exitPrice, reason });
     const op = this.beginDestructive(key, 'PARTIAL_CLOSE', t, { volume, exitPrice, reason });
-    if (op.existing) return { ok: op.existing.status === 'EXECUTED', profit: 0, remainingVolume: t.volume };
+    if (op.existing) {
+      if (op.existing.status !== 'EXECUTED') {
+        return { ok: false, profit: 0, remainingVolume: t.volume };
+      }
+      try {
+        const persisted = op.existing.resultJson
+          ? JSON.parse(op.existing.resultJson)
+          : null;
+        const profit = Number(persisted?.profit);
+        const remainingVolume = Number(persisted?.remainingVolume);
+        if (!Number.isFinite(profit) || !Number.isFinite(remainingVolume)) {
+          return { ok: false, profit: 0, remainingVolume: t.volume };
+        }
+        return { ok: true, profit, remainingVolume };
+      } catch {
+        return { ok: false, profit: 0, remainingVolume: t.volume };
+      }
+    }
 
     try {
       if (this.config.mode === 'paper') {
