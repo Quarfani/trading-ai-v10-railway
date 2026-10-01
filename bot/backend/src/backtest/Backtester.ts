@@ -152,11 +152,22 @@ export class Backtester {
     const db    = new DatabaseManager(tmpDb);
     await db.initialize();
 
-    const orchestrator = new ConsensusOrchestrator(db, {
-      minimum_total_weight: 0.20,
-      dominance_ratio:      0.55,
-      gate: { min_win_rate: 0, min_sharpe_ratio: -Infinity, min_rolling_expectancy: -Infinity, max_drawdown: Infinity, min_trades_for_gate: Infinity },
-    });
+    const orchestrator = new ConsensusOrchestrator(
+      db,
+      {
+        minimum_total_weight: 0.20,
+        dominance_ratio: 0.55,
+        gate: {
+          min_win_rate: 0,
+          min_sharpe_ratio: -Infinity,
+          min_rolling_expectancy: -Infinity,
+          max_drawdown: Infinity,
+          min_trades_for_gate: Infinity,
+        },
+      },
+      undefined,
+      startBalance,
+    );
 
     const riskFraction = Math.min(
       0.02,
