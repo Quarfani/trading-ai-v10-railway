@@ -47,7 +47,7 @@ export interface WalkForwardWindow {
   testEnd:     number;
   bestParams:  OptimParams;
   trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; dataQualityScore: number; parameterSensitivity: number; valid: boolean };
-  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; dataQualityScore: number; regimeCoverage: number; valid: boolean };
+  testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number; maxDD: number; totalTrades: number; totalCost: number; dataQualityScore: number; regimeCoverage: number; sampleSize: number; valid: boolean };
   oos_valid:   boolean; // out-of-sample passed minimum threshold
   leakagePassed: boolean;
   purgedCount: number;
@@ -145,6 +145,7 @@ export class WalkForwardOptimizer {
 
       const testMetrics = {
         ...baseTestMetrics,
+        sampleSize: testCandles.length,
         regimeCoverage: this.calculateRegimeCoverage(
           symbol,
           timeframe,
@@ -416,7 +417,7 @@ export class WalkForwardOptimizer {
       parameterSensitivity: w.trainMetrics.parameterSensitivity,
       regimeCoverage: w.testMetrics.regimeCoverage,
       datasetQuality: w.testMetrics.dataQualityScore,
-      sampleSize: w.testMetrics.totalTrades > 0 ? w.testMetrics.totalTrades : 0,
+      sampleSize: w.testMetrics.sampleSize,
       leakagePassed: w.leakagePassed,
     }));
     const evidence = summarizeWfoEvidence(evidenceMetrics);
