@@ -76,8 +76,20 @@ const anchorGuard = new DailyLossGuard(anchorConfig, noTradesDb, telegram);
 assert(await anchorGuard.canTrade({}, 20_000), "first live equity observation should establish the daily anchor");
 assert(await anchorGuard.canTrade({}, 18_100), "daily loss should be measured from persisted start-of-day equity anchor");
 
+const blockedDb = {
+  getOpenTrades: () => [],
+  getTodayStats: () => ({ pnl: 0 }),
+  getSetting: (key: string) => settings.get(key) ?? null,
+  setSetting: (key: string, value: string) => settings.set(key, value),
+} as any;
+const blockedGuard = new DailyLossGuard(anchorConfig, blockedDb, telegram);
+assert(await blockedGuard.canTrade({}, 20_000), "threshold fixture should establish its own daily anchor");
+blockedDb.getTodayStats = () => ({ pnl: -2100 });
+assert(!(await blockedGuard.canTrade({}, 20_000)), "daily loss should block once realized loss breaches the 10% anchor");
+
+
 clearBrokerContracts();
-console.log("Result: 5 passed, 0 failed");
+console.log("Result: 7 passed, 0 failed");
 }
 
 main().catch(error => {
