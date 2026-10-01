@@ -65,6 +65,13 @@ export function promotionPolicyForTarget(
     };
   }
 
+  if (to === 'MONTE_CARLO') {
+    return {
+      ...base,
+      requireMonteCarlo: true,
+    };
+  }
+
   if (to === 'PRODUCTION') {
     return {
       ...base,
@@ -99,7 +106,7 @@ export function promoteStrategy(
   const targetPolicy = promotionPolicyForTarget(to, policy);
 
   if (
-    ['PAPER', 'TESTNET', 'SHADOW', 'SMALL_CAPITAL', 'PRODUCTION'].includes(to) &&
+    ['MONTE_CARLO', 'PAPER', 'TESTNET', 'SHADOW', 'SMALL_CAPITAL', 'PRODUCTION'].includes(to) &&
     !hasPromotionEvidence(current, targetPolicy)
   ) {
     throw new Error(
