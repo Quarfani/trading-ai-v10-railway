@@ -545,16 +545,19 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
         bridge.mt5,
         "account_info",
         lambda: types.SimpleNamespace(margin_free=1000.0),
+        raising=False,
     )
     monkeypatch.setattr(
         bridge.mt5,
         "order_check",
         lambda request: types.SimpleNamespace(retcode=0, comment="ok"),
+        raising=False,
     )
     monkeypatch.setattr(
         bridge.mt5,
         "order_send",
         lambda request: (_ for _ in ()).throw(RuntimeError("transport reset")),
+        raising=False,
     )
     monkeypatch.setattr(bridge.mt5, "last_error", lambda: (1, "transport reset"), raising=False)
     monkeypatch.setattr(
