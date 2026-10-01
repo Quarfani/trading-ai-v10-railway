@@ -61,7 +61,60 @@ async function main() {
     assert(resolved?.profit === 25, "closed MT5 history must expose authoritative PnL");
     assert(resolved?.reason === "SL", "closed MT5 history must preserve close reason");
 
-    console.log("Result: 3 passed, 0 failed");
+    const db = new DatabaseManager(":memory:");
+    await db.initialize();
+    const tradeId = db.insertTrade({
+      ticket: 77, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 0.01,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: "open", openedAt: Date.now(),
+      source: "RECON_LEDGER_TEST",
+    } as any);
+    db.createExecutionLedger({
+      executionId: "recon-close-1",
+      operationKey: "recon-close-op",
+      action: "CLOSE_AT_MARKET",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId, exitPrice: 1.11, reason: "MANUAL" },
+    });
+
+    const axiosGet2 = (axios as any).get;
+    (axios as any).get = async (url: string) => {
+      if (url.endsWith("/positions")) {
+        return { data: { ok: true, positions: [] } };
+      }
+      return {
+        data: {
+          closed: true,
+          remaining_volume: 0,
+          close_price: 1.11,
+          net_profit: 12.5,
+          close_reason: "manual",
+        },
+      };
+    };
+    try {
+      const reconcilerWithLedger = new Reconciler(
+        config(), db, {} as any,
+        { sendMessage: async () => {} } as any,
+        { recordClose: () => {} } as any,
+        {} as any,
+        { activate: async () => {} } as any,
+        () => {},
+      );
+      const openTrade = db.getOpenTrades()[0];
+      await (reconcilerWithLedger as any).reconcileOne(openTrade);
+      const ledger = db.getExecutionByOperationKey("recon-close-op");
+      assert(ledger.status === "EXECUTED", "authoritatively reconciled MT5 close must resolve its UNKNOWN ledger");
+      assert(JSON.parse(ledger.resultJson).profit === 12.5, "reconciled ledger must store authoritative broker PnL");
+      assert(db.getOpenTrades().length === 0, "reconciliation must close the internal trade");
+    } finally {
+      (axios as any).get = axiosGet2;
+      db.raw().close();
+    }
+
+    console.log("Result: 5 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
