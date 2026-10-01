@@ -33,7 +33,7 @@ async function main() {
 
   // Run Walk-Forward
   const wfo    = new WalkForwardOptimizer(db.path);
-  const result = await wfo.run(symbol, candles);
+  const result = await wfo.run(symbol, candles, timeframe as any);
 
   console.log('\n══════════════════════════════════════════════');
   console.log(`WALK-FORWARD RESULTS: ${symbol} ${timeframe}`);
@@ -52,7 +52,7 @@ async function main() {
 
   // Save params if recommended
   if (result.recommendation === 'TRADE') {
-    wfo.saveParams(db, symbol, result.finalParams);
+    wfo.saveParams(db, symbol, result.finalParams, timeframe as any);
     console.log('✅ Params saved to DB — will be used on next bot startup');
   }
 
