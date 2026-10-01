@@ -47,6 +47,40 @@ async function main() {
   const promoted = store.promote(base.strategyId,"PRODUCTION","matching evidence");
   assert(promoted.lifecycle === "PRODUCTION","matching fresh snapshot should allow production promotion");
 
+  const weakSnapshotDef: StrategyDefinition = {
+    ...base,
+    strategyId:"weak.snapshot",
+    name:"Weak Snapshot",
+    lifecycle:"SMALL_CAPITAL",
+  };
+  store.save(weakSnapshotDef);
+  snapshots.save({
+    scopeKey:"weak.snapshot:EURUSD:H1",
+    strategyId:"weak.snapshot",
+    strategyVersion:"1.0.0",
+    symbol:"EURUSD",
+    timeframe:"H1",
+    source:"strategy-evidence",
+    evidence:{
+      ...weakSnapshotDef.evidence!,
+      outOfSampleTrades:50,
+      outOfSampleProfitFactor:1.1,
+    },
+    promoted:true,
+    promotionReason:"intentionally weak snapshot",
+    createdAt:Date.now(),
+  });
+  let weakSnapshotBlocked = false;
+  try {
+    store.promote("weak.snapshot","PRODUCTION","weak snapshot");
+  } catch {
+    weakSnapshotBlocked = true;
+  }
+  assert(
+    weakSnapshotBlocked,
+    "production must validate the exact snapshot evidence, not only the strategy definition evidence",
+  );
+
   const staleDef: StrategyDefinition = {...base, strategyId:"stale.test", name:"Stale Test", version:"1.0.0", lifecycle:"SMALL_CAPITAL", updatedAt:Date.now()};
   store.save(staleDef);
   snapshots.save({
@@ -152,7 +186,7 @@ async function main() {
   try { mcStore.promote("mc.bad","PRODUCTION","bad mc"); } catch { mcBadBlocked = true; }
   assert(mcBadBlocked,"Monte Carlo policy must block excessive P95 drawdown");
 
-  console.log("Result: 11 passed, 0 failed");
+  console.log("Result: 12 passed, 0 failed");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });
