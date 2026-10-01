@@ -48,7 +48,7 @@ export function hasPromotionEvidence(
   return evaluateEvidenceForPromotion(definition.evidence, policy).passed;
 }
 
-function promotionPolicyForTarget(
+export function promotionPolicyForTarget(
   to: StrategyLifecycleState,
   base: EvidencePromotionPolicy,
 ): EvidencePromotionPolicy {
