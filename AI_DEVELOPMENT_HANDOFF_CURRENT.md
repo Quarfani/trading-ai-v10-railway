@@ -4,7 +4,7 @@
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
 Current head: verify refs/heads/main before resuming
-Current validated checkpoint: CI #545 passed for commit 5ceb42bd773292de9acba9dbefe014dbbb3534e8
+Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -50,7 +50,7 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, corrupt persisted execution results, and conflicting partial position/history state.
 
 ## NEXT TASK
-After the current main validation run is green:
+After the current main validation runner is available again:
 A. Validate the atomic execution-ledger claim/reconciliation hardening through CI.
 B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E evidence, without automatically resolving UNKNOWN states.
 
