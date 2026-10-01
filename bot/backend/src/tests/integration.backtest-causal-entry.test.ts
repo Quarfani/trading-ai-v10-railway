@@ -66,8 +66,10 @@ async function main() {
     assert(result.trades.length > 0, "causal fixture must execute at least one trade");
 
     const first = result.trades[0];
-    const signalBar = 250;
-    const executionBar = signalBar + 1;
+    const executionBar = candles.findIndex(c => c.time === first.openedAt);
+    assert(executionBar > 0, "executed trade must map to a historical candle after the first candle");
+    const signalBar = executionBar - 1;
+
     assert(
       Math.abs(first.entry - candles[executionBar].open) < 1e-12,
       "first trade must fill at the next bar open",
