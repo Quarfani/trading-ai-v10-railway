@@ -273,6 +273,12 @@ export function loadConfig(): SystemConfig {
     0,
     1000,
   );
+  const maxSlippagePct = validateRange(
+    'MAX_SLIPPAGE_PCT',
+    num('MAX_SLIPPAGE_PCT', 0.005),
+    0,
+    0.05,
+  );
   const minRR = validateRange(
     'MIN_RR',
     num('MIN_RR', 1.5),
@@ -626,6 +632,7 @@ export function loadConfig(): SystemConfig {
     mlRequired,
     minRR,
     maxSlippagePips,
+    maxSlippagePct,
     accountName: env(
       'ACCOUNT_NAME',
       'default',
