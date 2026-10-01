@@ -911,9 +911,23 @@ def trade():
                 422,
             )
 
-        result = mt5.order_send(request_data)
+        try:
+            result = mt5.order_send(request_data)
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "error": f"order_send exception: {exc}",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
         if result is None:
-            return err(f"order_send returned None: {mt5.last_error()}", 503)
+            payload = {
+                "ok": False,
+                "error": f"order_send returned None: {mt5.last_error()}",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
 
         if not is_successful_trade_retcode(result.retcode, mt5):
             return err(f"Trade failed: retcode={result.retcode} comment={result.comment}")
