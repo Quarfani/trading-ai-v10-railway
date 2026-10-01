@@ -349,7 +349,38 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_strategy_definitions_lifecycle
         ON strategy_definitions(lifecycle, enabled);
     `
+  },  {
+    version: 12, name: 'failure_memory',
+    up: `
+      CREATE TABLE IF NOT EXISTS failure_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tradeId INTEGER,
+        symbol TEXT NOT NULL,
+        timeframe TEXT,
+        strategy TEXT,
+        regime TEXT,
+        side TEXT,
+        entryPrice REAL,
+        exitPrice REAL,
+        spread REAL,
+        slippage REAL,
+        volatility REAL,
+        newsContext TEXT,
+        correlationContext TEXT,
+        size REAL,
+        profit REAL NOT NULL,
+        rootCause TEXT NOT NULL,
+        counterfactualJson TEXT,
+        createdAt INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_failure_memory_symbol_created
+        ON failure_memory(symbol, createdAt);
+      CREATE INDEX IF NOT EXISTS idx_failure_memory_strategy_created
+        ON failure_memory(strategy, createdAt);
+    `
   },
+
 ];
 
 export function runMigrations(db: Database.Database): void {
