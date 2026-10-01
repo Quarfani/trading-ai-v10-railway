@@ -237,7 +237,7 @@ export class Reconciler {
       throw new Error('Authoritative PnL unavailable for ticket=' + t.ticket);
     }
 
-    const finalProfit = +Number(rawProfit).toFixed(2);
+    const finalProfit = Number(rawProfit);
 
     if (!persistedByExecutionGateway) {
       const changed = this.db.updateTradeClose(t.id!, finalProfit, Date.now(), exitReason);

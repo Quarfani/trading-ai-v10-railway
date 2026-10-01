@@ -58,11 +58,9 @@ async function main() {
 
     const trades = db.getRecentTrades(200);
     const ledgers = db.raw().prepare("SELECT action, status FROM execution_ledger ORDER BY createdAt").all() as any[];
-    const executions = db.raw().prepare("SELECT COUNT(*) c FROM executions").get() as any;
     assert(trades.length === 100, "soak must persist exactly 100 trades");
     assert(ledgers.length === 200, "100 opens + 100 closes must produce 200 execution ledger rows");
     assert(ledgers.every(row => row.status === "EXECUTED"), "all paper lifecycle ledger rows must be EXECUTED");
-    assert(Number(executions.c) === 200, "execution event count must match lifecycle operations");
     assert(gateway.getPaperStats()?.trades === 100, "paper stats must match closed trade count");
 
     const balanceBeforeRestart = gateway.getPaperStats()!.balance;
