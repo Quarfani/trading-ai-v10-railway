@@ -179,6 +179,33 @@ async function main() {
     clearBrokerContracts();
   }
 
+  const resolveDb = new DatabaseManager(":memory:");
+  await resolveDb.initialize();
+  const created = resolveDb.createExecutionLedger({
+    executionId: "resolve-1",
+    operationKey: "resolve-operation",
+    action: "CLOSE_AT_MARKET",
+    status: "UNKNOWN",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId: 42, exitPrice: 1.11, reason: "MANUAL" },
+  });
+  assert(created === true, "unresolved ledger fixture must be created");
+  const unresolved = resolveDb.getLatestUnresolvedExecutionForTrade(42, ["CLOSE_AT_MARKET"]);
+  assert(unresolved?.executionId === "resolve-1", "trade-linked unresolved ledger must be discoverable");
+  const resolved = resolveDb.resolveExecutionLedger(
+    "resolve-1",
+    { broker: "mt5", ticket: 77, profit: 12.5 },
+    77,
+  );
+  assert(resolved === true, "unresolved ledger must be resolvable");
+  const resolvedRow = resolveDb.getExecutionByOperationKey("resolve-operation");
+  assert(resolvedRow.status === "EXECUTED", "resolved ledger status must become EXECUTED");
+  assert(resolvedRow.brokerOrderId === "77", "resolved ledger must preserve broker identity");
+  assert(JSON.parse(resolvedRow.resultJson).profit === 12.5, "resolved ledger must preserve authoritative result");
+  resolveDb.raw().close();
+
   const claimDb = new DatabaseManager(":memory:");
   await claimDb.initialize();
   const firstClaim = claimDb.createExecutionLedger({
@@ -207,7 +234,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 17 passed, 0 failed");
+  console.log("Result: 20 passed, 0 failed");
 }
 
 main().catch(error => {
