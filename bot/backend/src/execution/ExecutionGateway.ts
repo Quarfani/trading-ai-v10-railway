@@ -221,7 +221,19 @@ export class ExecutionGateway {
     try {
       if (this.config.mode === 'mt5') {
         if (!t.ticket) throw new Error('Trade has no broker ticket');
-        await axios.post(`${this.config.mt5.bridgeUrl}/modify`, { ticket: t.ticket, sl: newSl, tp: newTp }, { timeout: 5_000, headers: this.mt5Headers() });
+        await axios.post(
+          `${this.config.mt5.bridgeUrl}/modify`,
+          {
+            ticket: t.ticket,
+            sl: newSl,
+            tp: newTp,
+            idempotency_key: key,
+          },
+          {
+            timeout: 5_000,
+            headers: this.mt5Headers(),
+          },
+        );
       } else if (this.config.mode === 'binance') {
         if (!t.ticket || !(await this.binance.modifyPosition(t.ticket, t.symbol, t.side, newSl, newTp))) throw new Error('Binance modify rejected');
       } else {
