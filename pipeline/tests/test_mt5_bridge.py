@@ -544,7 +544,7 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
     monkeypatch.setattr(
         bridge.mt5,
         "account_info",
-        lambda: types.SimpleNamespace(margin_free=1000.0),
+        lambda: types.SimpleNamespace(equity=1000.0, margin_free=1000.0),
         raising=False,
     )
     monkeypatch.setattr(
