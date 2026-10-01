@@ -12,6 +12,6 @@ const h1 = selectConfirmationTimeframes('H1');
 assert(h1[0] === 'H4' && h1[1] === 'D1', 'H1 should use H4/D1');
 
 const d1 = selectConfirmationTimeframes('D1');
-assert(d1[0] === 'H4' && d1[1] === 'M30', 'D1 should fall back to nearest lower frames');
+assert(d1[0] === 'H4' && d1[1] === 'H1', 'D1 should fall back to nearest lower frames');
 
 console.log('Result: 6 passed, 0 failed');

@@ -11,13 +11,14 @@
  *
  * Also carries forward FIX v7.2 (per-symbol commission/spread).
  */
-import { Candle, Side, SystemConfig }  from '../types/trading.types';
+import { Candle, Side, SystemConfig, Timeframe }  from '../types/trading.types';
 import { marketRegimeDetector }         from '../core/MarketRegimeDetector';
 import { ConsensusOrchestrator }        from '../consensus/ConsensusOrchestrator';
 import { DatabaseManager }             from '../database/DatabaseManager';
 import { calculateATR }                from '../utils/ATR';
 import { getSymbolSpec }               from '../config/symbolConfig';
 import { COST_MODEL_VERSION, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
+import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
 import { Logger }                      from '../utils/Logger';
 import * as path                       from 'path';
@@ -37,7 +38,7 @@ export interface MonthlyBreakdown {
 }
 
 export interface BacktestResult {
-  symbol: string; startBalance: number; endBalance: number;
+  symbol: string; timeframe: Timeframe; startBalance: number; endBalance: number;
   totalReturn: number; totalTrades: number; wins: number; losses: number; winRate: number;
   profitFactor: number; expectancy: number; avgWin: number; avgLoss: number; riskReward: number;
   maxDrawdownPct: number; maxDrawdownUsd: number;
@@ -83,7 +84,7 @@ export class Backtester {
 
   constructor(private config: SystemConfig) {}
 
-  async run(symbol: string, candles: Candle[], startBalance = 10_000): Promise<BacktestResult> {
+  async run(symbol: string, candles: Candle[], startBalance = 10_000, timeframe: Timeframe = 'H1'): Promise<BacktestResult> {
     const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}.db`);
     const db    = new DatabaseManager(tmpDb);
     await db.initialize();
@@ -183,14 +184,14 @@ export class Backtester {
       // ── Signal generation ─────────────────────────────────────────────
       if (!openPos && i % 4 === 0) {
         try {
-          const regime = marketRegimeDetector.detect(symbol, 'H1', slice.slice(-100));
+          const regime = marketRegimeDetector.detect(symbol, timeframe, slice.slice(-100));
           if (regime.regime === 'VOLATILE') continue;
 
           // FIX BUG-C3: resample current slice to H4 and pass to orchestrator
           // instead of the empty [] that caused H4 confirmation to be skipped.
           const h4Candles = resampleToH4(slice).slice(0, -1).slice(-50);
 
-          const result = orchestrator.process(symbol, slice, h4Candles, regime.regime);
+          const result = orchestrator.process(symbol, slice, h4Candles, regime.regime, timeframe);
           if (result.outcome === 'NO_TRADE' || !result.signal) continue;
 
           const sig = result.signal;
@@ -216,13 +217,13 @@ export class Backtester {
     try { fs.unlinkSync(tmpDb); } catch { /* pass */ }
 
     return this.buildResult(
-      symbol, startBalance, balance, trades, equityCurve,
+      symbol, timeframe, startBalance, balance, trades, equityCurve,
       Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost,
     );
   }
 
   private buildResult(
-    symbol: string, startBalance: number, balance: number,
+    symbol: string, timeframe: Timeframe, startBalance: number, balance: number,
     trades: BacktestTrade[], equityCurve: Array<{ t: number; equity: number }>,
     monthlyBreakdown: MonthlyBreakdown[],
     maxDDPct: number, maxDDUsd: number,
@@ -260,6 +261,7 @@ export class Backtester {
 
     return {
       symbol,
+      timeframe,
       startBalance,
       endBalance:      +balance.toFixed(2),
       totalReturn:     +((balance - startBalance) / startBalance * 100).toFixed(2),

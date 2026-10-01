@@ -1,4 +1,4 @@
-import { Signal, Trade, Candle } from '../types/trading.types';
+import { Signal, Trade, Candle, Timeframe } from '../types/trading.types';
 import { getSymbolSpec } from '../config/symbolConfig';
 import { Logger } from '../utils/Logger';
 import { calculateGrossPnlAccount, estimateEntryCosts, estimateExitCosts } from '../market/CostModel';
@@ -21,7 +21,7 @@ export class PaperTrader {
     this.equityCurve=[{time:Date.now(),equity:initialBalance}];
   }
 
-  placeOrder(signal: Signal, volume: number, timeframe='H1'): Trade {
+  placeOrder(signal: Signal, volume: number, timeframe: Timeframe='H1'): Trade {
     const spec=getSymbolSpec(signal.symbol);
     if (!(volume>0) || ![signal.price,signal.sl,signal.tp].every(Number.isFinite)) throw new Error(`Invalid paper order ${signal.symbol}`);
     const profile=getCostProfile(signal.symbol);
@@ -135,4 +135,4 @@ export class PaperTrader {
   }
   reset(newBalance=10_000){this.balance=newBalance;this.initialBal=newBalance;this.openTrades.clear();this.closedTrades=[];this.trades=[];this.nextTicket=1;this.equityCurve=[{time:Date.now(),equity:newBalance}];}
 }
-interface PaperTrade{ticket:number;symbol:string;side:'BUY'|'SELL';volume:number;entry:number;sl:number;tp:number;openedAt:number;closedAt?:number;status:'open'|'closed';profit?:number;realizedProfit?:number;exitReason?:string;source?:string;timeframe?:string}
+interface PaperTrade{ticket:number;symbol:string;side:'BUY'|'SELL';volume:number;entry:number;sl:number;tp:number;openedAt:number;closedAt?:number;status:'open'|'closed';profit?:number;realizedProfit?:number;exitReason?:string;source?:string;timeframe?:Timeframe}
