@@ -31,7 +31,30 @@ async function main() {
   assert(requested[0] === 'EURUSD.A' || requested[0] === 'EURUSD.a', 'provider must try the broker-registered symbol before canonical fallback');
 
   clearBrokerContracts();
-  console.log('Result: 2 passed, 0 failed');
+
+  const bridgeRequested: string[] = [];
+  const bridgeScanner = {
+    fetchCandles: async (symbol: string) => {
+      bridgeRequested.push(symbol);
+      if (symbol === 'GBPUSD') return [{ close: 1.25 }];
+      if (symbol === 'USDJPY') return [{ close: 150 }];
+      return [];
+    },
+  };
+
+  const bridgeProvider = new CurrencyConversionProvider(bridgeScanner as any, 'JPY');
+  const bridgeRate = await bridgeProvider.getRate('GBP');
+  assert(
+    Math.abs((bridgeRate ?? 0) - (1.25 * 150)) < 1e-9,
+    'provider must resolve GBP->JPY through GBPUSD × USDJPY when direct GBPJPY is unavailable',
+  );
+  assert(
+    bridgeRequested.includes('GBPUSD') && bridgeRequested.includes('USDJPY'),
+    'provider must collect both USD bridge legs before resolving a cross-currency conversion',
+  );
+
+  clearBrokerContracts();
+  console.log('Result: 4 passed, 0 failed');
 }
 
 main().catch(error => {
