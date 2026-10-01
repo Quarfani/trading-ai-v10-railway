@@ -107,6 +107,7 @@ export class PaperTrader {
     const profile=getCostProfile(t.symbol);
     const exitCosts=estimateExitCosts({price:fill,volume:t.volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
     const finalProfit=raw-exitCosts-(t.remainingEntryCost??0);
+    this.balance += raw-exitCosts;
     const profit=(t.realizedProfit??0)+finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
     this.openTrades.delete(ticket);this.closedTrades.push(t);
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');

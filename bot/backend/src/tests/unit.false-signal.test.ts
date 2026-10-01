@@ -8,7 +8,7 @@ function candle(open:number, close:number, high:number, low:number): Candle {
   return { time: Date.now(), open, close, high, low, volume: 100 };
 }
 
-const candles = Array.from({ length: 30 }, () => candle(100, 100.01, 100.02, 99.99));
+const candles = Array.from({ length: 30 }, () => candle(100, 100.001, 100.02, 99.98));
 const result = detectFalseSignal({
   candles,
   side: 'BUY',
