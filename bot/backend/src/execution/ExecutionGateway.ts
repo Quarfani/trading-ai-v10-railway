@@ -618,7 +618,10 @@ export class ExecutionGateway {
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
-        realizedProfit = result.realizedProfit;
+        realizedProfit = await this.convertBrokerProfitToAccount(
+          result.realizedProfit,
+          result.realizedProfitCurrency,
+        );
       } else {
         if (!t.ticket) throw new Error('Paper trade has no ticket');
         const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason);
