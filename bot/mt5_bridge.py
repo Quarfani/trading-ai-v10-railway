@@ -999,16 +999,48 @@ def close():
     if not auth_check():
         return err("Unauthorized", 401)
 
-    data   = request.get_json(force=True)
-    ticket = int(data.get("ticket", 0))
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return err("JSON object required", 422)
+
+    idempotency_key = str(data.get("idempotency_key", "")).strip()
+    try:
+        ticket = int(data.get("ticket", 0))
+    except (TypeError, ValueError):
+        return err("ticket must be an integer", 422)
+
     if not ticket:
         return err("ticket required")
+    if BRIDGE_MODE == 'live' and not idempotency_key:
+        return err("idempotency_key is required in live mode", 422)
+
+    cached = _idempotency_lookup(idempotency_key)
+    if cached:
+        _, cached_status, cached_payload = cached
+        if cached_status == "SUCCESS":
+            return jsonify(cached_payload)
+        if cached_status == "UNKNOWN":
+            return err(
+                "Previous close with this idempotency_key is unresolved; reconciliation is required",
+                503,
+            )
 
     if BRIDGE_MODE == 'simulation':
         result = sim_close(ticket, 1.0)
         return jsonify(result)
 
     with _lock:
+        cached = _idempotency_lookup(idempotency_key)
+        if cached:
+            _, cached_status, cached_payload = cached
+            if cached_status == "SUCCESS":
+                return jsonify(cached_payload)
+            if cached_status == "UNKNOWN":
+                return err(
+                    "Previous close with this idempotency_key is unresolved; reconciliation is required",
+                    503,
+                )
+
         if not ensure_connected():
             return err("MT5 not connected", 503)
 
@@ -1049,9 +1081,20 @@ def close():
             return err(f"Close order_check returned None: {mt5.last_error()}", 503)
         if int(getattr(check, "retcode", -1)) != 0:
             return err(f"Close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
-        result = mt5.order_send(request_data)
-        if not result or not is_successful_trade_retcode(result.retcode, mt5):
-            return err(f"Close failed: {result.retcode if result else mt5.last_error()}")
+        try:
+            result = mt5.order_send(request_data)
+        except Exception as exc:
+            payload = {"ok": False, "error": f"Close order_send exception: {exc}"}
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        if result is None:
+            payload = {"ok": False, "error": f"Close result unavailable: {mt5.last_error()}"}
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        if not is_successful_trade_retcode(result.retcode, mt5):
+            return err(f"Close failed: {result.retcode}")
 
         remaining_after_close = mt5.positions_get(ticket=ticket) or []
         if int(result.retcode) == int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", -2)) and remaining_after_close:
@@ -1072,10 +1115,12 @@ def close():
             # The broker accepted the close, but realized deal history is not
             # yet observable. Return UNKNOWN to the caller so reconciliation
             # can resolve the final PnL instead of recording pre-close PnL.
-            return err(
-                f"Position {ticket} closed but realized deal history is unavailable",
-                503,
-            )
+            payload = {
+                "ok": False,
+                "error": f"Position {ticket} closed but realized deal history is unavailable",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
 
         profit = summary["net_profit"]
         close_price_realized = summary["close_price"]
@@ -1083,14 +1128,16 @@ def close():
             f"[LIVE] Closed {ticket} {pos.symbol} realized_net={profit:.2f} "
             f"close_price={close_price_realized}"
         )
-        return jsonify({
+        response_payload = {
             "ok": True,
             "ticket": ticket,
             "profit": profit,
             "close_price": close_price_realized,
             "close_reason": summary["close_reason"],
             "close_deal_ticket": summary["close_deal_ticket"],
-        })
+        }
+        _idempotency_record(idempotency_key, "SUCCESS", response_payload)
+        return jsonify(response_payload)
 
 
 @app.route("/close_partial", methods=["POST"])
@@ -1098,18 +1145,49 @@ def close_partial():
     if not auth_check():
         return err("Unauthorized", 401)
 
-    data     = request.get_json(force=True)
-    ticket   = int(data.get("ticket", 0))
-    fraction = float(data.get("fraction", 0.5))
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return err("JSON object required", 422)
 
-    if not ticket or not (0 < fraction <= 1.0):
-        return err("ticket and fraction (0..1] required")
+    idempotency_key = str(data.get("idempotency_key", "")).strip()
+    try:
+        ticket = int(data.get("ticket", 0))
+        fraction = float(data.get("fraction", 0.5))
+    except (TypeError, ValueError):
+        return err("ticket and fraction must be numeric", 422)
+
+    if not ticket or not (0 < fraction <= 1.0) or not math.isfinite(fraction):
+        return err("ticket and finite fraction (0..1] required", 422)
+    if BRIDGE_MODE == 'live' and not idempotency_key:
+        return err("idempotency_key is required in live mode", 422)
+
+    cached = _idempotency_lookup(idempotency_key)
+    if cached:
+        _, cached_status, cached_payload = cached
+        if cached_status == "SUCCESS":
+            return jsonify(cached_payload)
+        if cached_status == "UNKNOWN":
+            return err(
+                "Previous partial close with this idempotency_key is unresolved; reconciliation is required",
+                503,
+            )
 
     if BRIDGE_MODE == 'simulation':
         result = sim_close(ticket, fraction)
         return jsonify(result)
 
     with _lock:
+        cached = _idempotency_lookup(idempotency_key)
+        if cached:
+            _, cached_status, cached_payload = cached
+            if cached_status == "SUCCESS":
+                return jsonify(cached_payload)
+            if cached_status == "UNKNOWN":
+                return err(
+                    "Previous partial close with this idempotency_key is unresolved; reconciliation is required",
+                    503,
+                )
+
         if not ensure_connected():
             return err("MT5 not connected", 503)
 
@@ -1163,17 +1241,30 @@ def close_partial():
             return err(f"Partial close order_check returned None: {mt5.last_error()}", 503)
         if int(getattr(check, "retcode", -1)) != 0:
             return err(f"Partial close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
-        result = mt5.order_send(request_data)
-        if not result or not is_successful_trade_retcode(result.retcode, mt5):
-            return err(f"Partial close failed: {result.retcode if result else mt5.last_error()}")
+        try:
+            result = mt5.order_send(request_data)
+        except Exception as exc:
+            payload = {"ok": False, "error": f"Partial close order_send exception: {exc}"}
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        if result is None:
+            payload = {"ok": False, "error": f"Partial close result unavailable: {mt5.last_error()}"}
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        if not is_successful_trade_retcode(result.retcode, mt5):
+            return err(f"Partial close failed: {result.retcode}")
 
         deal_ticket = int(getattr(result, "deal", 0) or 0)
         deals = mt5.history_deals_get(ticket=deal_ticket) if deal_ticket else []
         if not deals:
-            return err(
-                f"Partial close {ticket} executed but realized deal history is unavailable",
-                503,
-            )
+            payload = {
+                "ok": False,
+                "error": f"Partial close {ticket} executed but realized deal history is unavailable",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
 
         close_deal = deals[-1]
         realized_profit = round(
@@ -1186,22 +1277,26 @@ def close_partial():
 
         remaining_positions = mt5.positions_get(ticket=ticket) or []
         if not remaining_positions:
-            return err(
-                f"Partial close {ticket} executed but remaining position could not be verified",
-                503,
-            )
+            payload = {
+                "ok": False,
+                "error": f"Partial close {ticket} executed but remaining position could not be verified",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
         remaining_volume = float(remaining_positions[0].volume)
         if not (0 < remaining_volume < float(pos.volume)):
-            return err(
-                f"Partial close {ticket} returned invalid remaining volume {remaining_volume}",
-                503,
-            )
+            payload = {
+                "ok": False,
+                "error": f"Partial close {ticket} returned invalid remaining volume {remaining_volume}",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
 
         log.info(
             f"[LIVE] Partial close {ticket}: {close_vol}/{pos.volume} lots "
             f"remaining={remaining_volume} realized={realized_profit:.8f}"
         )
-        return jsonify({
+        response_payload = {
             "ok": True,
             "ticket": ticket,
             "deal_ticket": deal_ticket,
@@ -1209,7 +1304,9 @@ def close_partial():
             "remaining_volume": round(remaining_volume, 8),
             "close_price": float(getattr(close_deal, "price", close_price) or close_price),
             "profit": realized_profit,
-        })
+        }
+        _idempotency_record(idempotency_key, "SUCCESS", response_payload)
+        return jsonify(response_payload)
 
 
 @app.route("/positions", methods=["GET"])
