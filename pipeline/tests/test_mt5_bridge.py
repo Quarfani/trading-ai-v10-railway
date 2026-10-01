@@ -125,6 +125,46 @@ def test_position_ticket_resolution_fails_closed_without_identity():
     assert deal == 456
 
 
+def test_position_history_summary_distinguishes_partial_close():
+    Deal = types.SimpleNamespace
+    deals = [
+        Deal(
+            time_msc=1_000,
+            ticket=1,
+            entry=0,
+            volume=1.0,
+            profit=0.0,
+            commission=-1.0,
+            swap=0.0,
+            fee=0.0,
+            position_id=77,
+            price=100.0,
+            comment="bot-open",
+        ),
+        Deal(
+            time_msc=2_000,
+            ticket=2,
+            entry=1,
+            volume=0.4,
+            profit=40.0,
+            commission=-0.4,
+            swap=0.0,
+            fee=0.0,
+            position_id=77,
+            price=110.0,
+            comment="bot-partial-40pct",
+        ),
+    ]
+
+    summary = bridge.summarize_position_deals(deals)
+    assert summary is not None
+    assert summary["closed"] is False
+    assert summary["opened_volume"] == 1.0
+    assert summary["closed_volume"] == 0.4
+    assert summary["remaining_volume"] == 0.6
+    assert summary["net_profit"] == 38.6
+
+
 def test_partial_execution_retcode_is_accepted():
     mt5 = types.SimpleNamespace(
         TRADE_RETCODE_DONE=10009,
