@@ -38,7 +38,8 @@ async function main() {
   // Simulate a process restart: the in-memory orderMap is empty, but the
   // persisted trade side/volume are still available to the Gateway.
   const closed = await executor.closePosition(123, "BTCUSDT", 0.5, "BUY");
-  assert(closed, "Spot position must remain closable after restart");
+  assert(closed.ok, "Spot position must remain closable after restart");
+  assert(closed.realizedProfit === null, "Spot close does not expose a futures-style realized PnL");
   assert(closeRequest?.path === "/api/v3/order", "Spot close must use the Spot order endpoint");
   assert(closeRequest?.params?.side === "SELL", "BUY trade must close with SELL");
   assert(Number(closeRequest?.params?.quantity) === 0.5, "Spot restart close must use persisted trade volume");
