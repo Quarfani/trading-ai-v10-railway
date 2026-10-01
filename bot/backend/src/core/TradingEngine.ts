@@ -225,6 +225,7 @@ export class TradingEngine extends EventEmitter {
       db,
       this.telegram,
       config.accountBalance,
+      config.accountName ?? 'default',
     );
 
     const evidencePolicy = this.config.evidencePromotion ?? DEFAULT_EVIDENCE_PROMOTION_POLICY;
