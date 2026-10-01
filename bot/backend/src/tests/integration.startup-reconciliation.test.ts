@@ -122,6 +122,49 @@ async function main() {
     assert(mt5CloseDb.getOpenTrades().length === 0, 'authoritative MT5 close must close the internal trade before startup completes');
     mt5CloseDb.raw().close();
 
+    const mt5CloseDuplicateRestartDb = await newDb();
+    const duplicateCloseRestartTradeId = mt5CloseDuplicateRestartDb.insertTrade({
+      ticket: 82, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5CloseDuplicateRestartDb.createExecutionLedger({
+      executionId: 'mt5-close-restart-a', operationKey: 'mt5-close-restart-a-op',
+      action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+      request: { tradeId: duplicateCloseRestartTradeId },
+    });
+    mt5CloseDuplicateRestartDb.createExecutionLedger({
+      executionId: 'mt5-close-restart-b', operationKey: 'mt5-close-restart-b-op',
+      action: 'CLOSE', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+      request: { tradeId: duplicateCloseRestartTradeId },
+    });
+
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) return { data: { ok: true, positions: [] } };
+      if (url.endsWith('/history')) return {
+        data: { closed: true, remaining_volume: 0, close_price: 1.105, net_profit: 12.5, close_reason: 'manual' },
+      };
+      throw new Error('unexpected URL');
+    };
+
+    let firstCloseDuplicateBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5CloseDuplicateRestartDb, new TelegramBot(mt5Cfg)).run();
+    } catch { firstCloseDuplicateBlocked = true; }
+    assert(firstCloseDuplicateBlocked, 'duplicate MT5 full-close operations must block after resolving one operation');
+    assert(mt5CloseDuplicateRestartDb.getExecutionByOperationKey('mt5-close-restart-a-op').status === 'EXECUTED', 'first close must resolve');
+    assert(mt5CloseDuplicateRestartDb.getExecutionByOperationKey('mt5-close-restart-b-op').status === 'UNKNOWN', 'second close must remain UNKNOWN');
+
+    let secondCloseDuplicateBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5CloseDuplicateRestartDb, new TelegramBot(mt5Cfg)).run();
+    } catch { secondCloseDuplicateBlocked = true; }
+    assert(secondCloseDuplicateBlocked, 'duplicate MT5 full-close must remain blocked across restart');
+    assert(
+      mt5CloseDuplicateRestartDb.getExecutionByOperationKey('mt5-close-restart-b-op').status === 'UNKNOWN',
+      'second close must not auto-resolve on later restart',
+    );
+    mt5CloseDuplicateRestartDb.raw().close();
+
     const mt5PartialDb = await newDb();
     const partialTradeId = mt5PartialDb.insertTrade({
       ticket: 79, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 1.0,
