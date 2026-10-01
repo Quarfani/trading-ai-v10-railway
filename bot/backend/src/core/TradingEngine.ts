@@ -109,6 +109,7 @@ export class TradingEngine extends EventEmitter {
   private isRunning = false;
   private ready = false;
 
+  private cycleInFlight = false;
   private timer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private brokerContractRefreshTimer: NodeJS.Timeout | null = null;
@@ -588,6 +589,11 @@ export class TradingEngine extends EventEmitter {
   // ─── Main cycle ───────────────────────────────────────────────────────────
 
   private async cycle() {
+    if (this.cycleInFlight) {
+      this.logger.warn('[CYCLE_SKIP] previous cycle still in flight');
+      return;
+    }
+    this.cycleInFlight = true;
     const cycleStartedAt = Date.now();
 
     this.cycleCount += 1;
@@ -635,6 +641,7 @@ export class TradingEngine extends EventEmitter {
         );
       }
     } finally {
+      this.cycleInFlight = false;
       this.lastCycleAt = Date.now();
       this.lastCycleDurationMs =
         Date.now() - cycleStartedAt;
