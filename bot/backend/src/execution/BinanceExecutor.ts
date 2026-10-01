@@ -440,10 +440,62 @@ export class BinanceExecutor {
     }
 
     const r = await this.signedGet('/api/v3/account', {});
-    const usdt = (r.balances as any[]).find((b: any) => b.asset === 'USDT');
-    const equity = usdt ? Number(usdt.free) + Number(usdt.locked) : NaN;
+    if (!Array.isArray(r?.balances)) {
+      throw new Error('Binance spot account balances unavailable or invalid');
+    }
+
+    const stable = new Set(['USDT', 'USDC', 'BUSD']);
+    const balances = r.balances
+      .map((b: any) => ({
+        asset: String(b.asset ?? '').toUpperCase(),
+        quantity: Number(b.free ?? 0) + Number(b.locked ?? 0),
+      }))
+      .filter((b: any) =>
+        b.asset &&
+        Number.isFinite(b.quantity) &&
+        b.quantity > 0,
+      );
+
+    let equity = 0;
+    const nonStable = balances.filter((b: any) => !stable.has(b.asset));
+
+    for (const balance of balances) {
+      if (stable.has(balance.asset)) {
+        // USDT/USDC/BUSD are treated as USD-equivalent settlement assets in
+        // this executor, consistent with the rest of the spot risk model.
+        equity += balance.quantity;
+      }
+    }
+
+    if (nonStable.length) {
+      const priced = await Promise.all(
+        nonStable.map(async (balance: any) => {
+          const symbol = `${balance.asset}USDT`;
+          try {
+            const quote = await this.http.get('/api/v3/ticker/price', {
+              params: { symbol },
+              timeout: 5_000,
+            });
+            const price = Number(quote.data?.price);
+            if (!(price > 0) || !Number.isFinite(price)) {
+              throw new Error('invalid ticker price');
+            }
+            return balance.quantity * price;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      if (priced.some(value => value == null)) {
+        throw new Error('Binance spot equity incomplete: at least one non-stable asset cannot be marked to USDT');
+      }
+
+      equity += priced.reduce((sum, value) => sum + Number(value), 0);
+    }
+
     if (!(equity > 0) || !Number.isFinite(equity)) {
-      throw new Error('Binance spot USDT equity unavailable or invalid');
+      throw new Error('Binance spot account equity unavailable or invalid');
     }
     return equity;
   }
