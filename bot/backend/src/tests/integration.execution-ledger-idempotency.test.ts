@@ -270,6 +270,36 @@ async function main() {
     clearBrokerContracts();
   }
 
+  const directBinanceExecutor = new BinanceExecutor({
+    ...baseConfig('paper'),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...baseConfig('paper').binance, futures: true, secret: 'test-secret' },
+  } as SystemConfig);
+  const directCloseUrls: string[] = [];
+  (directBinanceExecutor as any).getPosition = async () => ({
+    positionAmt: 0.01, entryPrice: 50000, unrealizedProfit: 0,
+  });
+  (directBinanceExecutor as any).http = {
+    post: async (url: string) => {
+      directCloseUrls.push(url);
+      return { data: { status: 'FILLED', orderId: 4321, executedQty: '0.01' } };
+    },
+    get: async (_url: string) => ({
+      data: [{ realizedPnl: '10', commission: '0.01', commissionAsset: 'USDT' }],
+    }),
+    delete: async () => ({ data: { ok: true } }),
+  };
+  const directClose = await directBinanceExecutor.closePosition(
+    4321, 'BTCUSDT', 0.01, 'BUY', 'ta_direct_close_test',
+  );
+  assert(directClose.ok === true, 'direct Binance executor close must succeed');
+  assert(
+    directCloseUrls.some(url => url.includes('newClientOrderId=ta_direct_close_test')),
+    'Binance close HTTP request must contain the deterministic client order id',
+  );
+  assert(directClose.realizedProfit === 9.99, 'Binance close must report fill PnL net of commission');
   const binanceCloseDb = new DatabaseManager(":memory:");
   await binanceCloseDb.initialize();
   const binanceCloseCfg = {
