@@ -198,6 +198,13 @@ def account_position_mode(info, mt5_module):
         return "NETTING_OR_EXCHANGE"
     return "UNKNOWN"
 
+def is_successful_trade_retcode(retcode, mt5_module) -> bool:
+    """Accept both full and broker-reported partial market executions."""
+    return int(retcode) in {
+        int(getattr(mt5_module, "TRADE_RETCODE_DONE", -1)),
+        int(getattr(mt5_module, "TRADE_RETCODE_DONE_PARTIAL", -2)),
+    }
+
 
 MT5_TIMEFRAMES = {
     "M1": "TIMEFRAME_M1",
@@ -818,7 +825,7 @@ def trade():
         if result is None:
             return err(f"order_send returned None: {mt5.last_error()}", 503)
 
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        if not is_successful_trade_retcode(result.retcode, mt5):
             return err(f"Trade failed: retcode={result.retcode} comment={result.comment}")
 
         # Resolve the actual position ticket from the executed deal. MT5
@@ -826,7 +833,12 @@ def trade():
         # close/modify operations require the position ticket.
         position_ticket, deal_ticket = resolve_position_ticket(result, mt5)
 
-        if not position_ticket:
+        positions_after = mt5.positions_get(ticket=position_ticket) or []
+        actual_volume = sum(
+            float(getattr(position, "volume", 0.0) or 0.0)
+            for position in positions_after
+        )
+        if not positions_after or not math.isfinite(actual_volume) or actual_volume <= 0:
             payload = {
                 "ok": False,
                 "error": (
@@ -847,7 +859,7 @@ def trade():
             "order_ticket": int(result.order),
             "deal_ticket": deal_ticket,
             "price": result.price,
-            "volume": volume,
+            "volume": actual_volume,
             "symbol": symbol,
             "retcode": result.retcode,
             "estimated_loss": estimated_loss,
@@ -1003,8 +1015,20 @@ def close():
         if int(getattr(check, "retcode", -1)) != 0:
             return err(f"Close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
         result = mt5.order_send(request_data)
-        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
+        if not result or not is_successful_trade_retcode(result.retcode, mt5):
             return err(f"Close failed: {result.retcode if result else mt5.last_error()}")
+
+        remaining_after_close = mt5.positions_get(ticket=ticket) or []
+        if int(result.retcode) == int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", -2)) and remaining_after_close:
+            remaining_volume = sum(
+                float(getattr(position, "volume", 0.0) or 0.0)
+                for position in remaining_after_close
+            )
+            return err(
+                f"Position {ticket} was partially closed; authoritative reconciliation required "
+                f"(remaining_volume={remaining_volume})",
+                503,
+            )
 
         summary = summarize_position_deals(
             mt5.history_deals_get(position=ticket) or []
@@ -1105,7 +1129,7 @@ def close_partial():
         if int(getattr(check, "retcode", -1)) != 0:
             return err(f"Partial close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
         result = mt5.order_send(request_data)
-        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
+        if not result or not is_successful_trade_retcode(result.retcode, mt5):
             return err(f"Partial close failed: {result.retcode if result else mt5.last_error()}")
 
         deal_ticket = int(getattr(result, "deal", 0) or 0)
