@@ -31,9 +31,13 @@ export class DailyLossGuard {
    *
    * @param currentPrices live mid-prices keyed by symbol (for floating P&L)
    */
-  async canTrade(currentPrices?: Record<string, number>): Promise<boolean> {
+  async canTrade(
+    currentPrices?: Record<string, number>,
+    currentEquity?: number,
+  ): Promise<boolean> {
     const stats       = this.db.getTodayStats();
-    const realizedPnl = stats?.pnl ?? 0;
+    const realizedPnl = Number(stats?.pnl ?? 0);
+    const denominator = this.resolveDailyStartEquity(currentEquity);
 
     const floatingPnl = this.calcFloating(currentPrices);
     if (floatingPnl == null) {
@@ -41,7 +45,12 @@ export class DailyLossGuard {
       return false;
     }
     const totalLoss   = realizedPnl + floatingPnl;
-    const lossPct     = -totalLoss / this.config.accountBalance;
+    if (!(denominator > 0) || !Number.isFinite(denominator)) {
+      this.logger.warn('Daily loss guard: daily start equity unavailable — trading blocked');
+      return false;
+    }
+
+    const lossPct     = -totalLoss / denominator;
 
     if (lossPct >= this.config.maxDailyLoss) {
       const today = new Date().toISOString().slice(0, 10);
@@ -60,6 +69,26 @@ export class DailyLossGuard {
       return false;
     }
     return true;
+  }
+
+  private resolveDailyStartEquity(currentEquity?: number): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const account = String(this.config.accountName ?? 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const key = `daily_start_equity:${account}:${today}`;
+
+    const existing = Number(this.db.getSetting(key));
+    if (Number.isFinite(existing) && existing > 0) return existing;
+
+    const equity = Number(currentEquity);
+    if (!(equity > 0) || !Number.isFinite(equity)) {
+      // Paper-mode compatibility: use configured starting equity only until
+      // the first live equity observation is available.
+      if (this.config.mode === 'paper') return this.config.accountBalance;
+      return NaN;
+    }
+
+    this.db.setSetting(key, equity.toFixed(8));
+    return equity;
   }
 
   /** Calculate floating P&L in account currency using canonical market economics. */
