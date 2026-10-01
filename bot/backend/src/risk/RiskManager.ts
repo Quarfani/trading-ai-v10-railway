@@ -215,7 +215,7 @@ export class RiskManager {
       ]);
     }
 
-    if (!(await this.lossGuard.canTrade(livePrices))) {
+    if (!(await this.lossGuard.canTrade(livePrices, equity))) {
       return this.block('daily_loss_limit', [
         'Daily loss limit reached',
       ]);
