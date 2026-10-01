@@ -332,6 +332,17 @@ export class DatabaseManager {
       ).get(executionId) as { status: string } | undefined;
       if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
 
+      const competing = this.getUnresolvedExecutionsForTrade(
+        tradeId,
+        ['OPEN', 'CLOSE', 'CLOSE_AT_MARKET', 'PARTIAL_CLOSE'],
+      );
+      if (
+        competing.length !== 1 ||
+        String(competing[0]?.executionId) !== String(executionId)
+      ) {
+        return false;
+      }
+
       if (trade.status === 'open') {
         const changed = this.db.prepare(
           `UPDATE trades
@@ -392,6 +403,17 @@ export class DatabaseManager {
         `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
       ).get(executionId) as { status: string } | undefined;
       if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+
+      const competing = this.getUnresolvedExecutionsForTrade(
+        tradeId,
+        ['OPEN', 'CLOSE', 'CLOSE_AT_MARKET', 'PARTIAL_CLOSE'],
+      );
+      if (
+        competing.length !== 1 ||
+        String(competing[0]?.executionId) !== String(executionId)
+      ) {
+        return false;
+      }
 
       const tradeChanged = this.db.prepare(
         `UPDATE trades
