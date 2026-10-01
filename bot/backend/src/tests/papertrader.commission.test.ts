@@ -51,7 +51,7 @@ const expectedPartial =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-assertClose(partial!.profit ?? 0, expectedPartial);
+console.log('DEBUG partial', partial!.profit, expectedPartial);\nassertClose(partial!.profit ?? 0, expectedPartial);
 
 const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1);
 assert(Boolean(closed), 'final close should return a trade');
@@ -64,7 +64,7 @@ const expectedRemaining =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-assertClose(closed!.profit ?? 0, expectedRemaining);
+console.log('DEBUG final', closed!.profit, expectedRemaining);\nassertClose(closed!.profit ?? 0, expectedRemaining);
 
 assertClose(
   (partial!.profit ?? 0) + (closed!.profit ?? 0),
