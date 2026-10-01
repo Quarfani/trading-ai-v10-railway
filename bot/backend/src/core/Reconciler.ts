@@ -221,18 +221,18 @@ export class Reconciler {
             const resolved = this.db.resolveReconciledPartialClose(
               t.id!,
               String(unresolvedPartial.executionId),
-              history.remainingVolume,
+              cumulative.remainingVolume,
               cumulativeRealized,
               {
                 broker: 'mt5',
                 ticket: t.ticket,
-                closedVolume: Number(t.volume) - history.remainingVolume,
-                remainingVolume: history.remainingVolume,
+                closedVolume: Number(t.volume) - cumulative.remainingVolume,
+                remainingVolume: cumulative.remainingVolume,
                 cumulativeRealizedProfit: cumulativeRealized,
-                closeDealTicket: history.closeDealTicket,
+                closeDealTicket: cumulative.closeDealTicket,
                 runtimeReconciliation: true,
               },
-              history.closeDealTicket ?? t.ticket,
+              cumulative.closeDealTicket ?? t.ticket,
             );
             if (!resolved) throw new Error('Could not atomically reconcile MT5 partial operation=' + String(unresolvedPartial.executionId));
           } else if (Number.isFinite(cumulativeRealized)) {
