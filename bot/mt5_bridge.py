@@ -849,15 +849,22 @@ def modify():
     if not auth_check():
         return err("Unauthorized", 401)
 
-    data   = request.get_json(force=True)
-    ticket = int(data.get("ticket", 0))
-    sl     = float(data.get("sl", 0))
-    tp     = float(data.get("tp", 0))
+    data = request.get_json(force=True)
+    try:
+        ticket = int(data.get("ticket", 0))
+        sl = float(data.get("sl", 0))
+        tp = float(data.get("tp", 0))
+    except (TypeError, ValueError):
+        return err("ticket, sl and tp must be numeric", 422)
 
-    if not ticket:
-        return err("ticket required")
+    if ticket <= 0:
+        return err("ticket must be positive", 422)
+    if not all(map(lambda value: value == value and abs(value) != float("inf"), (sl, tp))):
+        return err("sl and tp must be finite", 422)
 
     if BRIDGE_MODE == 'simulation':
+        if sl <= 0 or tp <= 0:
+            return err("simulation SL/TP must be positive", 422)
         if ticket in _sim_positions:
             _sim_positions[ticket]["sl"] = sl
             _sim_positions[ticket]["tp"] = tp
@@ -867,23 +874,61 @@ def modify():
         if not ensure_connected():
             return err("MT5 not connected", 503)
 
-        # Find position
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             return err(f"Position {ticket} not found: {mt5.last_error()}")
 
         pos = positions[0]
+        sym_info = mt5.symbol_info(pos.symbol)
+        if not sym_info:
+            return err(f"Symbol {pos.symbol} metadata unavailable", 503)
+
+        tick_data = mt5.symbol_info_tick(pos.symbol)
+        if not tick_data:
+            return err(f"No tick for modify {pos.symbol}: {mt5.last_error()}", 503)
+
+        current_price = tick_data.bid if pos.type == 0 else tick_data.ask
+        side = "BUY" if pos.type == 0 else "SELL"
+
+        if sl <= 0 or tp <= 0:
+            return err("Live MT5 protective SL/TP must be positive", 422)
+
+        if (side == "BUY" and (sl >= current_price or tp <= current_price)) or (
+            side == "SELL" and (sl <= current_price or tp >= current_price)
+        ):
+            return err("Modified SL/TP direction is invalid for the current market price", 422)
+
+        stops_ok, stops_reason = validate_stop_distance(
+            side, current_price, sl, tp, sym_info
+        )
+        if not stops_ok:
+            return err(stops_reason, 422)
+
         request_data = {
-            "action":   mt5.TRADE_ACTION_SLTP,
-            "symbol":   pos.symbol,
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": pos.symbol,
             "position": ticket,
-            "sl":       sl,
-            "tp":       tp,
+            "sl": sl,
+            "tp": tp,
         }
+
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"Modify order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(
+                f"Modify check failed: retcode={check.retcode} "
+                f"comment={getattr(check, 'comment', '')}",
+                422,
+            )
+
         result = mt5.order_send(request_data)
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Modify failed: {result.retcode if result else mt5.last_error()}")
 
+        log.info(
+            f"[LIVE] Modified {ticket} {pos.symbol} side={side} SL={sl} TP={tp}"
+        )
         return jsonify({"ok": True, "ticket": ticket, "sl": sl, "tp": tp})
 
 
