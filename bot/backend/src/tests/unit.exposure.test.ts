@@ -44,7 +44,7 @@ const result = checkExposureAndLeverage(
   'USD',
   2,
   3,
-  {},
+  { EURUSD: 1 },
 );
 
 assert(result.allowed, '1.5x gross exposure should be allowed under 2x/3x caps');
@@ -57,9 +57,33 @@ const blocked = checkExposureAndLeverage(
   'USD',
   2,
   3,
-  {},
+  { EURUSD: 1 },
 );
 assert(!blocked.allowed, '3x gross exposure must fail a 2x exposure cap');
+
+const marked = checkExposureAndLeverage(
+  openTrades,
+  { symbol: 'EURUSD', volume: 0.5, entry: 1 },
+  100_000,
+  'USD',
+  2,
+  3,
+  { EURUSD: 1.1 },
+);
+assert(marked.allowed, 'marked exposure should remain allowed under 2x/3x caps');
+approx(marked.snapshot?.currentExposure ?? 0, 110_000);
+approx(marked.snapshot?.totalExposure ?? 0, 160_000);
+
+const missingMark = checkExposureAndLeverage(
+  openTrades,
+  { symbol: 'EURUSD', volume: 0.5, entry: 1 },
+  100_000,
+  'USD',
+  2,
+  3,
+  {},
+);
+assert(!missingMark.allowed, 'live exposure must fail closed when an open position has no current mark price');
 
 const cross = checkExposureAndLeverage(
   [],
@@ -72,4 +96,4 @@ const cross = checkExposureAndLeverage(
 );
 assert(!cross.allowed, 'EURGBP must fail closed without GBP->USD conversion');
 
-console.log('Result: 10 passed, 0 failed');
+console.log('Result: 13 passed, 0 failed');
