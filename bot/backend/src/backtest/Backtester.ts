@@ -362,10 +362,18 @@ export class Backtester {
           const atr = calculateATR(slice.slice(-50), 14);
           if (!atr) continue;
 
+          // Size against the same simulated executable entry used for PnL.
+          const simulatedEntry = cur.close;
+          const geometryValid =
+            sig.side === 'BUY'
+              ? sig.sl < simulatedEntry && sig.tp > simulatedEntry
+              : sig.sl > simulatedEntry && sig.tp < simulatedEntry;
+          if (!geometryValid) continue;
+
           const size = calculateBacktestPositionSize(
             balance,
             0.01,
-            sig.price,
+            simulatedEntry,
             sig.sl,
             economics!.contractSize,
             economics!.minVolume,
@@ -375,7 +383,7 @@ export class Backtester {
           );
           if (size > 0) {
             openPos = {
-              side: sig.side, entry: cur.close, sl: sig.sl, tp: sig.tp,
+              side: sig.side, entry: simulatedEntry, sl: sig.sl, tp: sig.tp,
               size, openedAt: cur.time, openBar: i, source: sig.source, entryQuoteToAccount,
             };
           }
