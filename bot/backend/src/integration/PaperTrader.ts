@@ -1,5 +1,5 @@
 import { Signal, Trade, Candle, Timeframe } from '../types/trading.types';
-import { getSymbolSpec } from '../config/symbolConfig';
+import { getMarketDefinition } from '../market/MarketCatalog';
 import { Logger } from '../utils/Logger';
 import { calculateGrossPnlAccount, estimateEntryCosts, estimateExitCosts } from '../market/CostModel';
 import { getCostProfile } from '../market/CostProfiles';
@@ -22,12 +22,12 @@ export class PaperTrader {
   }
 
   placeOrder(signal: Signal, volume: number, timeframe: Timeframe='H1'): Trade {
-    const spec=getSymbolSpec(signal.symbol, timeframe);
+    const economics=this.resolveEconomics(signal.symbol, timeframe);
     if (!(volume>0) || ![signal.price,signal.sl,signal.tp].every(Number.isFinite)) throw new Error(`Invalid paper order ${signal.symbol}`);
     const profile=getCostProfile(signal.symbol);
-    const slippage=Math.random()*spec.pip*0.3*(signal.side==='BUY'?1:-1);
+    const slippage=Math.random()*economics.priceIncrement*0.3*(signal.side==='BUY'?1:-1);
     const fillPrice=signal.price+slippage;
-    const entryCosts=estimateEntryCosts({price:fillPrice,volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
+    const entryCosts=estimateEntryCosts({price:fillPrice,volume,contractSize:economics.contractSize,quoteToAccount:1},profile);
     this.balance-=entryCosts;
     const ticket=this.nextTicket++, openedAt=Date.now();
     const pt: PaperTrade={ticket,symbol:signal.symbol,side:signal.side,volume,entry:fillPrice,sl:signal.sl,tp:signal.tp,openedAt,status:'open',source:signal.source,timeframe,realizedProfit:0,remainingEntryCost:entryCosts};
@@ -44,7 +44,7 @@ export class PaperTrader {
     const openPartialRealized=openRows.reduce((s,t)=>s+Number(t.realizedProfit??0),0);
     this.balance=this.initialBal+realized+openPartialRealized;
     for(const row of openRows){
-      const spec=getSymbolSpec(row.symbol, row.timeframe ?? 'H1');
+      const economics=this.resolveEconomics(row.symbol, row.timeframe ?? 'H1');
       const profile=getCostProfile(row.symbol);
       const entryCosts=estimateEntryCosts({price:row.entry,volume:row.volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
       this.balance-=entryCosts;
@@ -79,7 +79,7 @@ export class PaperTrader {
 
   partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL'): {ok:boolean;profit:number;remainingVolume:number}{
     const t=this.openTrades.get(ticket); if(!t || !(volume>0) || volume>=t.volume) return {ok:false,profit:0,remainingVolume:t?.volume??0};
-    const spec=getSymbolSpec(t.symbol, t.timeframe ?? 'H1');
+    const economics=this.resolveEconomics(t.symbol, t.timeframe ?? 'H1');
     const closedVolume=Math.min(volume,t.volume);
     const profile=getCostProfile(t.symbol);
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:spec.contractSize,quoteToAccount:1,side:t.side});
@@ -100,8 +100,8 @@ export class PaperTrader {
 
   closeTrade(ticket:number,exitPrice:number,reason:'TP'|'SL'|'TIMEOUT'|'MANUAL'='MANUAL',at=Date.now()):{ok:boolean;profit:number}{
     const t=this.openTrades.get(ticket); if(!t) return {ok:false,profit:0};
-    const spec=getSymbolSpec(t.symbol); let fill=exitPrice;
-    if(reason==='SL'){const slip=Math.random()*0.5;fill+=t.side==='BUY'?-slip*spec.pip:slip*spec.pip;}
+    const economics=this.resolveEconomics(t.symbol, t.timeframe ?? 'H1'); let fill=exitPrice;
+    if(reason==='SL'){const slip=Math.random()*0.5;fill+=t.side==='BUY'?-slip*economics.priceIncrement:slip*spec.pip;}
     const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice:fill,volume:t.volume,contractSize:spec.contractSize,quoteToAccount:1,side:t.side});
     const profile=getCostProfile(t.symbol);
@@ -140,5 +140,13 @@ export class PaperTrader {
     return {trades:c.length,wins:w.length,losses:l.length,winRate:c.length?w.length/c.length:0,profitFactor:gl?gw/gl:(gw?Infinity:0),avgWin:aw,avgLoss:al,riskReward:al?aw/al:0,totalPnl:pnl,roi:this.initialBal?pnl/this.initialBal*100:0,maxDrawdownPct:maxDD,balance:this.balance,equityCurve:this.getEquityCurve()};
   }
   reset(newBalance=10_000){this.balance=newBalance;this.initialBal=newBalance;this.openTrades.clear();this.closedTrades=[];this.trades=[];this.nextTicket=1;this.equityCurve=[{time:Date.now(),equity:newBalance}];}
+
+  private resolveEconomics(symbol: string, timeframe: Timeframe) {
+    const market = getMarketDefinition(symbol, timeframe);
+    if (!market) {
+      throw new Error(`Paper market definition missing for ${symbol}/${timeframe}`);
+    }
+    return market.economics;
+  }
 }
 interface PaperTrade{ticket:number;symbol:string;side:'BUY'|'SELL';volume:number;entry:number;sl:number;tp:number;openedAt:number;closedAt?:number;status:'open'|'closed';profit?:number;realizedProfit?:number;remainingEntryCost?:number;exitReason?:string;source?:string;timeframe?:Timeframe}
