@@ -4,7 +4,7 @@
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
 Current head: verify refs/heads/main before resuming
-Current validated checkpoint: CI #523 passed for commit 1879743a73ea051e8608096f58d298d5fda9f4fb
+Current validated checkpoint: CI #529 passed for commit b8d6ce5cee96fccbce2078afd704d65159880a6f
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -47,7 +47,7 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 5. Strategy lifecycle evidence, WFO calibration evidence, and Monte Carlo evidence remain separate domains.
 6. Deployment docs/reference profiles need another consistency pass after broker-contract hardening.
 7. Real-runtime broker-contract refresh/expiry behavior still needs soak evidence.
-8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure and duplicate operation claims.
+8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, and corrupt persisted execution results.
 
 ## NEXT TASK
 After the current main validation run is green:
