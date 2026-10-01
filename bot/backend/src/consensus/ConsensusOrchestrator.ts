@@ -103,6 +103,61 @@ export class ConsensusOrchestrator {
     });
   }
 
+  isExecutionLifecycleEligible(source: string, mode: Mode): { allowed: boolean; reason: string } {
+    const names = source.split('+').map(s => s.trim()).filter(Boolean);
+    if (!names.length) return { allowed: false, reason: 'empty strategy source' };
+
+    const required =
+      mode === 'paper' ? 'PAPER' :
+      'PRODUCTION';
+
+    const rank: Record<string, number> = {
+      RESEARCH: 0,
+      BACKTEST: 1,
+      VALIDATION: 2,
+      WALK_FORWARD: 3,
+      MONTE_CARLO: 4,
+      PAPER: 5,
+      TESTNET: 6,
+      SHADOW: 7,
+      SMALL_CAPITAL: 8,
+      PRODUCTION: 9,
+      PAUSED: -1,
+      REJECTED: -1,
+    };
+
+    for (const name of names) {
+      const definition = this.registry.getDefinition(name);
+
+      // Existing strategies without metadata remain compatible in paper mode.
+      if (!definition) {
+        if (mode !== 'paper') {
+          return {
+            allowed: false,
+            reason: `strategy ${name} has no lifecycle definition for non-paper execution`,
+          };
+        }
+        continue;
+      }
+
+      if (definition.lifecycle === 'PAUSED' || definition.lifecycle === 'REJECTED') {
+        return {
+          allowed: false,
+          reason: `strategy ${name} lifecycle=${definition.lifecycle}`,
+        };
+      }
+
+      if (rank[definition.lifecycle] < rank[required]) {
+        return {
+          allowed: false,
+          reason: `strategy ${name} lifecycle=${definition.lifecycle} requires >= ${required}`,
+        };
+      }
+    }
+
+    return { allowed: true, reason: 'strategy lifecycle eligible' };
+  }
+
   getStatus() {
     const snap   = this.registry.getSnapshot();
     const active = this.registry.getActive();

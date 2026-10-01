@@ -1068,6 +1068,21 @@ export class TradingEngine extends EventEmitter {
         );
     }
 
+    // ── Strategy lifecycle gate ─────────────────────────────────────────
+    const lifecycleCheck =
+      this.consensus.isExecutionLifecycleEligible(
+        adjustedSignal.source,
+        this.config.mode,
+      );
+
+    if (!lifecycleCheck.allowed) {
+      this.logger.info(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=STRATEGY_LIFECYCLE ` +
+          `reason=${lifecycleCheck.reason}`,
+      );
+      return;
+    }
+
     // ── False-signal filter ────────────────────────────────────────────
     const signalSpreadPips = ticker
       ? (ticker.ask - ticker.bid) /
