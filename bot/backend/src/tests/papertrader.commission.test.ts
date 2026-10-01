@@ -41,7 +41,7 @@ trader.restoreState([{
 }], []);
 
 const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL');
-console.log('DEBUG partial object', partial);\nassert(Boolean(partial), 'partial close should return a trade');
+assert(Boolean(partial), 'partial close should return a trade');
 const expectedPartial =
   (partialExit - entry) * 1
   - estimateExitCosts({
@@ -51,10 +51,10 @@ const expectedPartial =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-console.log('DEBUG partial', partial!.profit, expectedPartial);\nassertClose(partial!.profit ?? 0, expectedPartial);
+assertClose(partial!.profit ?? 0, expectedPartial);
 
 const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1);
-console.log('DEBUG final object', closed);\nassert(Boolean(closed), 'final close should return a trade');
+assert(Boolean(closed), 'final close should return a trade');
 const expectedRemaining =
   (finalExit - entry) * 1
   - estimateExitCosts({
@@ -64,7 +64,7 @@ const expectedRemaining =
       quoteToAccount: 1,
     }, profile)
   - entryCost / 2;
-console.log('DEBUG final', closed!.profit, expectedRemaining);\nassertClose(closed!.profit ?? 0, expectedRemaining);
+assertClose(closed!.profit ?? 0, expectedRemaining);
 
 assertClose(
   (partial!.profit ?? 0) + (closed!.profit ?? 0),
