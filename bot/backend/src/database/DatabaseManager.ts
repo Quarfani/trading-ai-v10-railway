@@ -316,13 +316,13 @@ export class DatabaseManager {
         const win = profit > 0 ? 1 : 0;
         this.db.prepare(`
           INSERT INTO daily_stats(day, trades, wins, losses, pnl)
-          VALUES (?,1,?,?,?)
+          VALUES (?,?,?,?,?)
           ON CONFLICT(day) DO UPDATE SET
-            trades=trades+1,
-            wins=wins+?,
-            losses=losses+?,
-            pnl=pnl+?
-        `).run(day, win, 1-win, profit, win, 1-win, profit);
+            trades=daily_stats.trades + excluded.trades,
+            wins=daily_stats.wins + excluded.wins,
+            losses=daily_stats.losses + excluded.losses,
+            pnl=daily_stats.pnl + excluded.pnl
+        `).run(day, 1, win, 1 - win, profit);
       }
 
       const ledgerChanged = this.db.prepare(`
