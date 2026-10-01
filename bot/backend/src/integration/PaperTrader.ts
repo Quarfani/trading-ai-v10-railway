@@ -1,7 +1,7 @@
 import { Signal, Trade, Candle, Timeframe } from '../types/trading.types';
 import { getMarketDefinition } from '../market/MarketCatalog';
 import { Logger } from '../utils/Logger';
-import { calculateGrossPnlAccount, estimateEntryCosts, estimateExitCosts } from '../market/CostModel';
+import { calculateGrossPnlAccount, estimateEntryCosts, estimateExitCosts, estimateHoldingCost } from '../market/CostModel';
 import { getCostProfile } from '../market/CostProfiles';
 
 const MAX_TRADE_AGE_MS = 48 * 3_600_000;
@@ -95,7 +95,7 @@ export class PaperTrader {
     return true;
   }
 
-  partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL',quoteToAccount=1): {ok:boolean;profit:number;remainingVolume:number}{
+  partialClose(ticket:number,volume:number,exitPrice:number,reason='PARTIAL',quoteToAccount=1,at=Date.now()): {ok:boolean;profit:number;remainingVolume:number}{
     const t=this.openTrades.get(ticket); if(!t || !(volume>0) || volume>=t.volume) return {ok:false,profit:0,remainingVolume:t?.volume??0};
     const economics=this.resolveEconomics(t.symbol, t.timeframe ?? 'H1');
     if (!(quoteToAccount>0) || !Number.isFinite(quoteToAccount)) return {ok:false,profit:0,remainingVolume:t.volume};
@@ -103,11 +103,14 @@ export class PaperTrader {
     const profile=getCostProfile(t.symbol);
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount,side:t.side});
     const exitCosts=estimateExitCosts({price:exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount},profile);
+    const entryRate=t.entryQuoteToAccount ?? 1;
+    const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
+    const holdingCost=estimateHoldingCost({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount:quoteToAccount,entryQuoteToAccount:entryRate,exitQuoteToAccount:quoteToAccount,holdingDays},profile);
     const entryCostShare=t.volume>0 ? (t.remainingEntryCost??0)*(closedVolume/t.volume) : 0;
-    const profit=raw-exitCosts-entryCostShare;
+    const profit=raw-exitCosts-holdingCost-entryCostShare;
     t.remainingEntryCost=Math.max(0,(t.remainingEntryCost??0)-entryCostShare);
     t.volume=+(t.volume-closedVolume).toFixed(8);
-    this.balance += raw-exitCosts;
+    this.balance += raw-exitCosts-holdingCost;
     t.realizedProfit=(t.realizedProfit??0)+profit;
     
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');
@@ -126,9 +129,19 @@ export class PaperTrader {
     const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount,side:t.side});
     const profile=getCostProfile(t.symbol);
-    const exitCosts=estimateExitCosts({price:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount},profile);
-    const finalProfit=raw-exitCosts-(t.remainingEntryCost??0);
-    this.balance += raw-exitCosts;
+    const entryRate=t.entryQuoteToAccount ?? 1;
+    const holdingCost=estimateHoldingCost({
+      entryPrice:t.entry,
+      exitPrice:fill,
+      volume:t.volume,
+      contractSize:economics.contractSize,
+      quoteToAccount:quoteToAccount,
+      entryQuoteToAccount:entryRate,
+      exitQuoteToAccount:quoteToAccount,
+      holdingDays,
+    },profile);
+    const finalProfit=raw-exitCosts-holdingCost-(t.remainingEntryCost??0);
+    this.balance += raw-exitCosts-holdingCost;
     const profit=(t.realizedProfit??0)+finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
     t.exitQuoteToAccount=quoteToAccount;
     this.openTrades.delete(ticket);this.closedTrades.push(t);

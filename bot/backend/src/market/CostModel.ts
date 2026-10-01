@@ -104,6 +104,38 @@ export function estimateExitCosts(
   return estimateEntryCosts(input, profile);
 }
 
+export function estimateHoldingCost(
+  input: CostInput,
+  profile: CostProfile,
+): number {
+  const holdingDays = nonNegative(
+    'holdingDays',
+    input.holdingDays ?? 0,
+  );
+  if (holdingDays === 0) return 0;
+
+  const entryRate = input.entryQuoteToAccount ?? input.quoteToAccount;
+  const exitRate = input.exitQuoteToAccount ?? input.quoteToAccount;
+  const entryNotional = notionalAccount({
+    price: input.entryPrice,
+    volume: input.volume,
+    contractSize: input.contractSize,
+    quoteToAccount: entryRate,
+  });
+  const exitNotional = notionalAccount({
+    price: input.exitPrice,
+    volume: input.volume,
+    contractSize: input.contractSize,
+    quoteToAccount: exitRate,
+  });
+
+  return (
+    ((entryNotional + exitNotional) / 2) *
+    nonNegative('holdingRatePerDay', profile.holdingRatePerDay) *
+    holdingDays
+  );
+}
+
 export function estimateCosts(
   input: CostInput,
   profile: CostProfile,
@@ -150,14 +182,7 @@ export function estimateCosts(
     (entryNotional + exitNotional) *
     (nonNegative('marketImpactBpsPerSide', profile.marketImpactBpsPerSide) / 10_000);
 
-  const holdingDays = nonNegative(
-    'holdingDays',
-    input.holdingDays ?? 0,
-  );
-  const holding =
-    ((entryNotional + exitNotional) / 2) *
-    nonNegative('holdingRatePerDay', profile.holdingRatePerDay) *
-    holdingDays;
+  const holding = estimateHoldingCost(input, profile);
 
   return {
     entryCommission,
