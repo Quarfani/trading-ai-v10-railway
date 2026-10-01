@@ -9,7 +9,13 @@ import {
   StrategyDefinition,
   StrategyLifecycleState,
 } from './strategyDefinition';
-import { promoteStrategy } from './StrategyLifecycle';
+import {
+  promoteStrategy,
+  promotionPolicyForTarget,
+} from './StrategyLifecycle';
+import {
+  evaluateEvidenceForPromotion,
+} from './EvidencePromotionPolicy';
 import { EvidencePromotionPolicy, DEFAULT_EVIDENCE_PROMOTION_POLICY } from './EvidencePromotionPolicy';
 import { EvidenceSnapshotStore } from '../analytics/EvidenceSnapshotStore';
 
@@ -120,7 +126,7 @@ export class StrategyDefinitionStore {
       to === 'SMALL_CAPITAL' ||
       to === 'PRODUCTION'
     ) {
-      this.assertExactEvidenceSnapshots(current);
+      this.assertExactEvidenceSnapshots(current, to);
     }
 
     const result = promoteStrategy(
@@ -151,9 +157,11 @@ export class StrategyDefinitionStore {
 
   private assertExactEvidenceSnapshots(
     definition: StrategyDefinition,
+    target: StrategyLifecycleState,
   ): void {
     const symbols = [...definition.scope.symbols];
     const timeframes = [...definition.scope.timeframes];
+    const targetPolicy = promotionPolicyForTarget(target, this.evidencePolicy);
 
     if (!symbols.length || !timeframes.length) {
       throw new Error(
@@ -183,55 +191,26 @@ export class StrategyDefinitionStore {
           );
         }
 
-        // Capital promotion must honor the same Monte Carlo policy used by
-        // lifecycle evidence evaluation. This remains opt-in so legacy
-        // strategies can migrate their snapshots before the gate is enabled.
-        if (this.evidencePolicy.requireMonteCarlo) {
-          const evidence = snapshot.evidence as {
-            monteCarloStress?: {
-              maxDDP95: number;
-              probabilityRuin: number;
-              unrecoveredRate: number;
-            };
-          } | undefined;
-          const mc = evidence?.monteCarloStress;
-
-          if (!mc) {
-            throw new Error(
-              '[StrategyDefinitionStore] missing Monte Carlo stress evidence for ' +
-              definition.strategyId + '/' + symbol + '/' + timeframe,
-            );
-          }
-
-          const maxDD95 = this.evidencePolicy.maxMonteCarloDD95 ?? 0.30;
-          const maxRuin = this.evidencePolicy.maxMonteCarloRuinProbability ?? 0.05;
-          const maxUnrecovered =
-            this.evidencePolicy.maxMonteCarloUnrecoveredRate ?? 0.25;
-
-          if (!(mc.maxDDP95 <= maxDD95)) {
-            throw new Error(
-              '[StrategyDefinitionStore] Monte Carlo P95 drawdown above policy for ' +
-              definition.strategyId + '/' + symbol + '/' + timeframe,
-            );
-          }
-          if (!(mc.probabilityRuin <= maxRuin)) {
-            throw new Error(
-              '[StrategyDefinitionStore] Monte Carlo ruin probability above policy for ' +
-              definition.strategyId + '/' + symbol + '/' + timeframe,
-            );
-          }
-          if (!(mc.unrecoveredRate <= maxUnrecovered)) {
-            throw new Error(
-              '[StrategyDefinitionStore] Monte Carlo unrecovered rate above policy for ' +
-              definition.strategyId + '/' + symbol + '/' + timeframe,
-            );
-          }
+        if (snapshot.strategyVersion !== definition.version) {
+          throw new Error(
+            '[StrategyDefinitionStore] evidence snapshot version is required and must match ' +
+            definition.strategyId + '/' + symbol + '/' + timeframe,
+          );
         }
 
-        if (
-          snapshot.strategyVersion &&
-          snapshot.strategyVersion !== definition.version
-        ) {
+        const snapshotEvidence = snapshot.evidence as any;
+        const snapshotPromotion = evaluateEvidenceForPromotion(
+          snapshotEvidence,
+          targetPolicy,
+        );
+        if (!snapshotPromotion.passed) {
+          throw new Error(
+            '[StrategyDefinitionStore] evidence snapshot does not satisfy the ' +
+            target + ' promotion policy for ' +
+            definition.strategyId + '/' + symbol + '/' + timeframe +
+            ': ' + snapshotPromotion.reasons.join('; '),
+          );
+        }
           throw new Error(
             '[StrategyDefinitionStore] evidence snapshot version mismatch for ' +
             definition.strategyId + '/' + symbol + '/' + timeframe,
