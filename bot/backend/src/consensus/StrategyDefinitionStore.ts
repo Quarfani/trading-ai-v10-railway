@@ -209,6 +209,7 @@ export class StrategyDefinitionStore {
             target + ' promotion policy for ' +
             definition.strategyId + '/' + symbol + '/' + timeframe +
             ': ' + snapshotPromotion.reasons.join('; '),
+           );
          }
           );
         const snapshotMc = (snapshotEvidence as any)?.monteCarloStress;
