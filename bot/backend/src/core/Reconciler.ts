@@ -168,16 +168,49 @@ export class Reconciler {
           this.logger.info(
             `[${t.symbol}] Partial close detected: ${volumeDelta.toFixed(8)} lots closed`,
           );
-          this.db.raw()
-            .prepare('UPDATE trades SET volume=? WHERE id=?')
-            .run(brokerVolume, t.id!);
+
+          const cumulative = await this.getMT5History(t.ticket);
+          const currentRealized = Number(t.realizedProfit ?? 0);
+          const cumulativeRealized = cumulative
+            ? Number(cumulative.profit)
+            : Number.NaN;
+
+          if (Number.isFinite(cumulativeRealized)) {
+            this.db.raw()
+              .prepare(
+                'UPDATE trades SET volume=?, realizedProfit=? WHERE id=? AND status=\'open\'',
+              )
+              .run(
+                brokerVolume,
+                cumulativeRealized,
+                t.id!,
+              );
+          } else {
+            this.db.raw()
+              .prepare('UPDATE trades SET volume=? WHERE id=? AND status=\'open\'')
+              .run(brokerVolume, t.id!);
+          }
+
+          if (
+            Number.isFinite(cumulativeRealized) &&
+            Math.abs(cumulativeRealized - currentRealized) > 1e-8
+          ) {
+            this.logger.info(
+              `[${t.symbol}] Reconciled cumulative realized PnL=${cumulativeRealized.toFixed(8)}`,
+            );
+          }
         }
       }
   }
 
   private async getMT5History(
     ticket: number,
-  ): Promise<{ price: number; profit: number; reason: string } | null> {
+  ): Promise<{
+    price: number;
+    profit: number;
+    reason: string;
+    closed?: boolean;
+  } | null> {
     try {
       const r = await axios.get(
         `${this.config.mt5.bridgeUrl}/history`,
@@ -200,6 +233,9 @@ export class Reconciler {
         reason: reason.includes('sl') ? 'SL'
               : reason.includes('tp') ? 'TP'
               : 'manual',
+        closed:
+          r.data?.closed === true ||
+          Number(r.data?.remaining_volume ?? 0) <= 1e-10,
       };
     } catch (e) {
       throw new Error(`MT5 history lookup failed: ${e instanceof Error ? e.message : String(e)}`);
