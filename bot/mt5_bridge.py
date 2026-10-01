@@ -1,299 +1,1192 @@
-import types
-import pytest
+#!/usr/bin/env python3
+"""
+MT5 PYTHON BRIDGE — v9.0
+=========================
+Flask HTTP server that receives trade commands from the Node.js bot
+and executes them via MetaTrader 5 Python API.
 
-from importlib.util import module_from_spec, spec_from_file_location
+Run this script BEFORE starting the trading bot:
+  python mt5_bridge.py
 
-spec = spec_from_file_location("mt5_bridge", "bot/mt5_bridge.py")
-bridge = module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(bridge)
+The bot connects at: MT5_BRIDGE_URL=http://127.0.0.1:5000
+
+Endpoints:
+  GET  /ping            — liveness check
+  GET  /account         — equity, balance, margin
+  GET  /tick?symbol=X   — current bid/ask
+  GET  /candles?symbol=X&timeframe=H1&count=250 — recent closed candles
+  POST /trade           — open market order with SL/TP
+  POST /modify          — modify SL/TP of open position
+  POST /close           — close position by ticket
+  POST /close_partial   — close N% of position
+  GET  /positions       — all open positions
+  GET  /history         — last 50 closed trades
+
+Install:
+  pip install flask MetaTrader5
+  Only runs on Windows with MT5 terminal installed.
+"""
+import json
+import threading
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+logging.basicConfig(
+    level   = logging.INFO,
+    format  = "%(asctime)s | %(levelname)s | %(message)s",
+    datefmt = "%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("MT5Bridge")
+
+try:
+    from flask import Flask, request, jsonify
+except ImportError:
+    print("Install Flask: pip install flask")
+    exit(1)
+
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
+    log.warning("MetaTrader5 not installed — running in SIMULATION mode")
+
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# ─── Configuration ────────────────────────────────────────────────────────────
+
+MT5_LOGIN    = int(os.getenv("MT5_LOGIN",    "0"))
+MT5_PASSWORD = os.getenv("MT5_PASSWORD",     "")
+MT5_SERVER   = os.getenv("MT5_SERVER_NAME",  "")
+MT5_PATH     = os.getenv("MT5_PATH",         "")
+BRIDGE_PORT  = int(os.getenv("MT5_BRIDGE_PORT", "5000"))
+API_KEY      = os.getenv("MT5_BRIDGE_API_KEY", "")
+BRIDGE_MODE  = os.getenv("MT5_BRIDGE_MODE", "live").lower()
+ALLOW_ANON   = os.getenv("MT5_BRIDGE_ALLOW_ANONYMOUS", "false").lower() == "true"
+
+# ─── Flask app ────────────────────────────────────────────────────────────────
+
+app    = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
+_lock  = threading.Lock()
 
 
-def info(**kwargs):
-    defaults = {"volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01, "trade_exemode": 1, "filling_mode": 3}
-    defaults.update(kwargs)
-    return types.SimpleNamespace(**defaults)
+def auth_check() -> bool:
+    """Verify API key; live bridge is never anonymously accessible."""
+    if not API_KEY:
+        return BRIDGE_MODE == 'simulation' and ALLOW_ANON
+    return request.headers.get("X-Api-Key") == API_KEY
 
 
-def fake_mt5():
-    return types.SimpleNamespace(
-        SYMBOL_TRADE_EXECUTION_MARKET=2,
-        SYMBOL_FILLING_FOK=1,
-        SYMBOL_FILLING_IOC=2,
-        ORDER_FILLING_FOK=0,
-        ORDER_FILLING_IOC=1,
-        ORDER_FILLING_RETURN=2,
-    )
+def err(msg: str, code: int = 400):
+    return jsonify({"ok": False, "error": msg}), code
 
 
-def test_volume_limits_and_step():
-    ok, _ = bridge.validate_trade_volume(0.03, info(),)
-    assert ok
-    assert not bridge.validate_trade_volume(0.005, info())[0]
-    assert not bridge.validate_trade_volume(100.01, info())[0]
-    assert not bridge.validate_trade_volume(0.025, info())[0]
+# ─── MT5 Connection ───────────────────────────────────────────────────────────
+
+def ensure_connected() -> bool:
+    """Ensure MT5 is initialized and logged in."""
+    if BRIDGE_MODE == 'simulation':
+        return True  # explicitly configured simulation mode
+
+    if not mt5.initialize(path=MT5_PATH if MT5_PATH else None):
+        log.error(f"MT5 init failed: {mt5.last_error()}")
+        return False
+
+    if MT5_LOGIN:
+        if not mt5.login(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER):
+            log.error(f"MT5 login failed: {mt5.last_error()}")
+            return False
+
+    return True
 
 
-def test_return_filling_for_non_market_execution():
-    mt5 = fake_mt5()
-    assert bridge.choose_market_filling_mode(info(trade_exemode=1), mt5) == mt5.ORDER_FILLING_RETURN
+def get_magic() -> int:
+    return 20240901  # unique magic number for this bot
 
 
-def test_market_execution_uses_supported_ioc():
-    mt5 = fake_mt5()
-    assert bridge.choose_market_filling_mode(info(trade_exemode=mt5.SYMBOL_TRADE_EXECUTION_MARKET, filling_mode=2), mt5) == mt5.ORDER_FILLING_IOC
+# ─── Simulation fallback ─────────────────────────────────────────────────────
 
+_sim_ticket = 1000
+_sim_positions: dict = {}
 
-def test_market_execution_fails_when_no_supported_fill_policy():
-    mt5 = fake_mt5()
-    with pytest.raises(ValueError):
-        bridge.choose_market_filling_mode(info(trade_exemode=mt5.SYMBOL_TRADE_EXECUTION_MARKET, filling_mode=0), mt5)
-
-
-
-def deal(**kwargs):
-    defaults = {
-        "ticket": 100,
-        "order": 200,
-        "position_id": 42,
-        "entry": 1,
-        "time": 1000,
-        "time_msc": 1000000,
-        "price": 1.2345,
-        "profit": 25.0,
-        "commission": -2.0,
-        "swap": -1.0,
-        "fee": -0.5,
-        "comment": "",
+def sim_open(symbol, side, volume, sl, tp, price) -> dict:
+    global _sim_ticket, _sim_positions
+    _sim_ticket += 1
+    pos = {
+        "ticket": _sim_ticket, "symbol": symbol, "type": side,
+        "volume": volume, "price": price, "sl": sl, "tp": tp,
+        "time": int(datetime.now(timezone.utc).timestamp()),
     }
-    defaults.update(kwargs)
-    return types.SimpleNamespace(**defaults)
+    _sim_positions[_sim_ticket] = pos
+    return pos
 
 
-def test_position_history_aggregates_net_pnl_and_uses_latest_close():
-    deals = [
-        deal(ticket=10, entry=0, time_msc=100, price=1.20, profit=0.0, commission=-1.0, comment="ta_open"),
-        deal(ticket=11, entry=1, time_msc=200, price=1.25, profit=40.0, commission=-1.5, swap=-0.5, fee=-0.2, comment=""),
-        deal(ticket=12, entry=1, time_msc=300, price=1.26, profit=10.0, commission=-0.5, fee=-0.1, comment="sl"),
-    ]
-    summary = bridge.summarize_position_deals(deals)
-    assert summary is not None
-    assert summary["position_id"] == 42
-    assert summary["close_price"] == 1.26
-    assert summary["close_reason"] == "SL"
-    assert summary["net_profit"] == 43.7
+def sim_close(ticket: int, fraction: float = 1.0) -> dict:
+    pos = _sim_positions.get(ticket)
+    if not pos:
+        return {"ok": False, "error": "ticket not found"}
+    fraction = max(0.0, min(1.0, float(fraction)))
+    close_volume = pos["volume"] * fraction
+    import random
+    close_price = pos["price"] * (1 + random.uniform(-0.005, 0.005))
+    pnl = (close_price - pos["price"]) * (1 if pos["type"] == "BUY" else -1) * close_volume
+    if fraction >= 1.0:
+        _sim_positions.pop(ticket, None)
+        remaining = 0.0
+    else:
+        pos["volume"] = round(pos["volume"] - close_volume, 8)
+        remaining = pos["volume"]
+    return {"ok": True, "ticket": ticket, "closed_volume": round(close_volume, 8),
+            "remaining_volume": remaining, "close_price": close_price, "profit": round(pnl, 2)}
 
 
-def test_position_history_requires_a_closing_deal():
-    assert bridge.summarize_position_deals([deal(entry=0, profit=0)]) is None
+def resolve_position_ticket(order_result, mt5_module):
+    """Resolve the MT5 position id from an executed order/deal."""
+    deal_ticket = int(getattr(order_result, "deal", 0) or 0)
+    if deal_ticket:
+        deals = mt5_module.history_deals_get(ticket=deal_ticket)
+        if deals:
+            for deal in reversed(deals):
+                position_id = int(getattr(deal, "position_id", 0) or 0)
+                if position_id > 0:
+                    return position_id, deal_ticket
+
+    order_ticket = int(getattr(order_result, "order", 0) or 0)
+    if order_ticket:
+        orders = mt5_module.history_orders_get(ticket=order_ticket)
+        if orders:
+            for order in reversed(orders):
+                position_id = int(getattr(order, "position_id", 0) or 0)
+                if position_id > 0:
+                    return position_id, deal_ticket
+
+    return 0, deal_ticket
+
+def account_position_mode(info, mt5_module):
+    """Return explicit MT5 position-account mode for execution safety."""
+    margin_mode = getattr(info, "margin_mode", None)
+    hedging_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", None)
+    netting_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_RETAIL_NETTING", None)
+    exchange_mode = getattr(mt5_module, "ACCOUNT_MARGIN_MODE_EXCHANGE", None)
+    if hedging_mode is not None and margin_mode == hedging_mode:
+        return "HEDGING"
+    if margin_mode in (netting_mode, exchange_mode):
+        return "NETTING_OR_EXCHANGE"
+    return "UNKNOWN"
 
 
-def test_position_ticket_resolution_prefers_deal_position_id():
-    mt5 = types.SimpleNamespace(
-        history_deals_get=lambda ticket: [
-            types.SimpleNamespace(position_id=777)
-        ],
-        history_orders_get=lambda ticket: [],
+MT5_TIMEFRAMES = {
+    "M1": "TIMEFRAME_M1",
+    "M5": "TIMEFRAME_M5",
+    "M15": "TIMEFRAME_M15",
+    "M30": "TIMEFRAME_M30",
+    "H1": "TIMEFRAME_H1",
+    "H4": "TIMEFRAME_H4",
+    "D1": "TIMEFRAME_D1",
+}
+
+
+def timeframe_constant(timeframe: str, mt5_module):
+    """Resolve a domain timeframe to the corresponding MetaTrader5 constant."""
+    key = str(timeframe or "").strip().upper()
+    attr = MT5_TIMEFRAMES.get(key)
+    if not attr:
+        raise ValueError(
+            "Unsupported timeframe; expected one of " +
+            ", ".join(MT5_TIMEFRAMES.keys())
+        )
+    value = getattr(mt5_module, attr, None)
+    if value is None:
+        raise RuntimeError(f"MT5 timeframe constant {attr} is unavailable")
+    return value
+
+
+def _rate_field(row, name, default=0):
+    """Read a field from a numpy record or dict-like fixture."""
+    try:
+        return getattr(row, name)
+    except AttributeError:
+        try:
+            return row[name]
+        except (KeyError, TypeError, IndexError):
+            return default
+
+
+def normalize_rates(rates) -> list[dict]:
+    """Convert MT5 rates into the Node bridge candle schema."""
+    if rates is None:
+        return []
+
+    result = []
+    for row in rates:
+        try:
+            time_s = int(_rate_field(row, "time"))
+            candle = {
+                "time": time_s * 1000,
+                "open": float(_rate_field(row, "open")),
+                "high": float(_rate_field(row, "high")),
+                "low": float(_rate_field(row, "low")),
+                "close": float(_rate_field(row, "close")),
+            }
+            real_volume = float(_rate_field(row, "real_volume", 0) or 0)
+            tick_volume = float(_rate_field(row, "tick_volume", 0) or 0)
+            candle["volume"] = real_volume if real_volume > 0 else tick_volume
+        except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+            continue
+
+        if not all(
+            isinstance(value, (int, float)) and
+            value == value and
+            value not in (float("inf"), float("-inf"))
+            for value in candle.values()
+        ):
+            continue
+
+        if any(candle[field] <= 0 for field in ("open", "high", "low", "close")):
+            continue
+
+        result.append(candle)
+
+    result.sort(key=lambda candle: candle["time"])
+    dedup = {}
+    for candle in result:
+        dedup[candle["time"]] = candle
+    return list(dedup.values())
+
+
+def fetch_closed_candles(mt5_module, symbol: str, timeframe: str, count: int):
+    """Fetch only closed bars; position 0 is the still-forming bar in MT5."""
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 5000:
+        raise ValueError("count must be an integer between 1 and 5000")
+
+    tf = timeframe_constant(timeframe, mt5_module)
+    rates = mt5_module.copy_rates_from_pos(symbol, tf, 1, count)
+    return normalize_rates(rates)
+
+
+# ─── Endpoints ───────────────────────────────────────────────────────────────
+
+def validate_trade_permissions(side: str, symbol_info, mt5_module) -> tuple[bool, str]:
+    """Validate broker trade-mode permission for the requested direction."""
+    mode = int(getattr(symbol_info, "trade_mode", 4) or 0)
+    disabled = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_DISABLED", 0))
+    long_only = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_LONGONLY", 1))
+    short_only = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_SHORTONLY", 2))
+    close_only = int(getattr(mt5_module, "SYMBOL_TRADE_MODE_CLOSEONLY", 3))
+
+    if mode in (disabled, close_only):
+        return False, f"symbol trade mode {mode} does not allow opening positions"
+    if side == "BUY" and mode == short_only:
+        return False, "symbol is short-only"
+    if side == "SELL" and mode == long_only:
+        return False, "symbol is long-only"
+    return True, "OK"
+
+
+def validate_stop_distance(side: str, price: float, sl: float, tp: float, symbol_info) -> tuple[bool, str]:
+    """Validate SL/TP against broker-declared stop distance in points."""
+    point = float(getattr(symbol_info, "point", 0) or 0)
+    stops_level = float(getattr(symbol_info, "trade_stops_level", 0) or 0)
+    if not (point > 0 and stops_level > 0):
+        return True, "OK"
+
+    minimum = stops_level * point
+    if side == "BUY":
+        sl_distance = price - sl
+        tp_distance = tp - price
+    else:
+        sl_distance = sl - price
+        tp_distance = price - tp
+
+    if sl_distance < minimum - max(1e-12, minimum * 1e-9):
+        return False, f"SL distance {sl_distance} below broker minimum {minimum}"
+    if tp_distance < minimum - max(1e-12, minimum * 1e-9):
+        return False, f"TP distance {tp_distance} below broker minimum {minimum}"
+    return True, "OK"
+
+
+def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
+    """Validate requested lots against broker symbol limits."""
+    import math
+    try:
+        volume = float(volume)
+        minimum = float(getattr(symbol_info, "volume_min", 0))
+        maximum = float(getattr(symbol_info, "volume_max", 0))
+        step = float(getattr(symbol_info, "volume_step", 0))
+    except (TypeError, ValueError):
+        return False, "Invalid broker volume metadata"
+    if not all(math.isfinite(v) and v > 0 for v in (volume, minimum, maximum, step)):
+        return False, "Invalid broker volume metadata"
+    if maximum < minimum:
+        return False, "Broker volume_max is below volume_min"
+    eps = max(step * 1e-9, 1e-12)
+    if volume < minimum - eps:
+        return False, f"Volume {volume} below broker minimum {minimum}"
+    if volume > maximum + eps:
+        return False, f"Volume {volume} above broker maximum {maximum}"
+    units = (volume - minimum) / step
+    if abs(units - round(units)) > max(1e-8, eps / step):
+        return False, f"Volume {volume} is not aligned to broker step {step}"
+    return True, "OK"
+
+def validate_aggregate_volume(symbol: str, side: str, volume: float, symbol_info, mt5_module) -> tuple[bool, str]:
+    """Validate the broker's aggregate per-direction volume limit."""
+    limit = float(getattr(symbol_info, "volume_limit", 0) or 0)
+    if not (limit > 0):
+        return True, "OK"
+
+    positions = mt5_module.positions_get(symbol=symbol) or []
+    buy_type = getattr(mt5_module, "POSITION_TYPE_BUY", 0)
+    current = 0.0
+    wanted_type = buy_type if side == "BUY" else 1
+
+    for pos in positions:
+        if int(getattr(pos, "type", 1)) == wanted_type:
+            current += float(getattr(pos, "volume", 0) or 0)
+
+    projected = current + float(volume)
+    eps = max(1e-9, limit * 1e-8)
+    if projected > limit + eps:
+        return False, (
+            f"Aggregate {side} volume {projected} exceeds "
+            f"broker volume_limit {limit}"
+        )
+    return True, "OK"
+
+
+def calculate_order_estimates(mt5_module, order_type, symbol, volume, open_price, stop_price) -> tuple[float, float]:
+    """Return estimated stop-loss loss and required margin in account currency."""
+    profit = mt5_module.order_calc_profit(
+        order_type, symbol, volume, open_price, stop_price
     )
-    result = types.SimpleNamespace(order=123, deal=456)
-    position, deal = bridge.resolve_position_ticket(result, mt5)
-    assert position == 777
-    assert deal == 456
+    if profit is None:
+        raise RuntimeError(
+            f"order_calc_profit failed: {mt5_module.last_error()}"
+        )
 
-
-def test_position_ticket_resolution_falls_back_to_order_position_id():
-    mt5 = types.SimpleNamespace(
-        history_deals_get=lambda ticket: [],
-        history_orders_get=lambda ticket: [
-            types.SimpleNamespace(position_id=888)
-        ],
+    margin = mt5_module.order_calc_margin(
+        order_type, symbol, volume, open_price
     )
-    result = types.SimpleNamespace(order=123, deal=0)
-    position, deal = bridge.resolve_position_ticket(result, mt5)
-    assert position == 888
-    assert deal == 0
+    if margin is None:
+        raise RuntimeError(
+            f"order_calc_margin failed: {mt5_module.last_error()}"
+        )
+
+    loss = max(0.0, -float(profit))
+    margin_value = float(margin)
+    if loss != loss or margin_value != margin_value or margin_value < 0:
+        raise RuntimeError("MT5 returned invalid risk estimates")
+    return loss, margin_value
+
+def choose_market_filling_mode(symbol_info, mt5_module):
+    """Choose a filling policy permitted by the symbol execution mode."""
+    execution_market = getattr(mt5_module, "SYMBOL_TRADE_EXECUTION_MARKET", None)
+    execution_mode = getattr(symbol_info, "trade_exemode", None)
+    order_return = getattr(mt5_module, "ORDER_FILLING_RETURN", None)
+    order_ioc = getattr(mt5_module, "ORDER_FILLING_IOC", None)
+    order_fok = getattr(mt5_module, "ORDER_FILLING_FOK", None)
+    if execution_mode != execution_market and order_return is not None:
+        return order_return
+    flags = int(getattr(symbol_info, "filling_mode", 0) or 0)
+    symbol_ioc = int(getattr(mt5_module, "SYMBOL_FILLING_IOC", 2))
+    symbol_fok = int(getattr(mt5_module, "SYMBOL_FILLING_FOK", 1))
+    if order_ioc is not None and (flags & symbol_ioc):
+        return order_ioc
+    if order_fok is not None and (flags & symbol_fok):
+        return order_fok
+    raise ValueError("No broker-supported market filling mode is available")
+
+@app.route("/ping", methods=["GET"])
+def ping():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    if BRIDGE_MODE == 'simulation':
+        ok = ALLOW_ANON or bool(API_KEY)
+        return jsonify({
+            "ok": ok, "mode": BRIDGE_MODE, "mt5_available": MT5_AVAILABLE,
+            "connected": True,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }), (200 if ok else 503)
+
+    with _lock:
+        connected = bool(MT5_AVAILABLE and API_KEY and ensure_connected())
+
+    status = 200 if connected else 503
+    return jsonify({
+        "ok": connected,
+        "mode": BRIDGE_MODE,
+        "mt5_available": MT5_AVAILABLE,
+        "connected": connected,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }), status
 
 
-def test_position_ticket_resolution_fails_closed_without_identity():
-    mt5 = types.SimpleNamespace(
-        history_deals_get=lambda ticket: [],
-        history_orders_get=lambda ticket: [],
+@app.route("/health", methods=["GET"])
+def health():
+    return ping()
+
+
+@app.route("/account", methods=["GET"])
+def account():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    if BRIDGE_MODE == 'simulation':
+        return jsonify({"equity": 10000.0, "balance": 10000.0,
+                        "margin": 0.0, "free_margin": 10000.0, "margin_level": 0.0})
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+        info = mt5.account_info()
+        if not info:
+            return err(f"Account info failed: {mt5.last_error()}")
+        return jsonify({
+            "equity":       info.equity,
+            "balance":      info.balance,
+            "margin":       info.margin,
+            "free_margin":  info.margin_free,
+            "margin_level": info.margin_level,
+            "currency":     info.currency,
+            "server":        info.server,
+            "login":        info.login,
+            "position_mode": account_position_mode(info, mt5),
+        })
+
+
+@app.route("/tick", methods=["GET"])
+def tick():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    symbol = request.args.get("symbol", "")
+    if not symbol:
+        return err("symbol required")
+
+    if BRIDGE_MODE == 'simulation':
+        import random
+        mid = {"EURUSD": 1.0850, "GBPUSD": 1.2700, "USDJPY": 149.50,
+               "XAUUSD": 2020.0, "BTCUSDT": 50000.0}.get(symbol, 1.0)
+        spread = mid * 0.0002
+        return jsonify({"symbol": symbol, "bid": mid - spread/2,
+                        "ask": mid + spread/2, "time": int(datetime.now(timezone.utc).timestamp())})
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+        sym = mt5.symbol_info(symbol)
+        if not sym:
+            return err(f"Symbol {symbol} not found")
+        if not sym.visible:
+            mt5.symbol_select(symbol, True)
+        tick_data = mt5.symbol_info_tick(symbol)
+        if not tick_data:
+            return err(f"No tick for {symbol}: {mt5.last_error()}")
+        return jsonify({
+            "symbol": symbol,
+            "bid":    tick_data.bid,
+            "ask":    tick_data.ask,
+            "time":   tick_data.time,
+            "spread": round((tick_data.ask - tick_data.bid) / sym.point, 1),
+        })
+
+
+@app.route("/contract", methods=["GET"])
+def contract():
+    """Return broker-confirmed symbol economics from MT5 symbol_info."""
+    if not auth_check():
+        return err("Unauthorized", 401)
+    symbol = request.args.get("symbol", "").strip()
+    if not symbol:
+        return err("symbol required")
+    if BRIDGE_MODE == "simulation":
+        return err("Broker contract metadata is unavailable in simulation mode", 503)
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+        info = mt5.symbol_info(symbol)
+        if not info:
+            return err(f"Symbol {symbol} not found")
+        if not info.visible:
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol)
+        if not info:
+            return err(f"Symbol {symbol} unavailable after selection")
+        return jsonify({
+            "symbol": info.name,
+            "description": getattr(info, "description", ""),
+            "currency_base": getattr(info, "currency_base", ""),
+            "currency_profit": getattr(info, "currency_profit", ""),
+            "trade_contract_size": getattr(info, "trade_contract_size", 0),
+            "point": getattr(info, "point", 0),
+            "digits": getattr(info, "digits", 0),
+            "volume_min": getattr(info, "volume_min", 0),
+            "volume_max": getattr(info, "volume_max", 0),
+            "volume_step": getattr(info, "volume_step", 0),
+            "trade_calc_mode": getattr(info, "trade_calc_mode", None),
+            "trade_mode": getattr(info, "trade_mode", None),
+            "trade_exemode": getattr(info, "trade_exemode", None),
+            "trade_tick_size": getattr(info, "trade_tick_size", 0),
+            "trade_tick_value": getattr(info, "trade_tick_value", 0),
+            "trade_tick_value_loss": getattr(info, "trade_tick_value_loss", 0),
+            "trade_tick_value_profit": getattr(info, "trade_tick_value_profit", 0),
+            "volume_limit": getattr(info, "volume_limit", 0),
+            "trade_stops_level": getattr(info, "trade_stops_level", 0),
+            "trade_freeze_level": getattr(info, "trade_freeze_level", 0),
+            "margin_initial": getattr(info, "margin_initial", 0),
+            "margin_maintenance": getattr(info, "margin_maintenance", 0),
+            "currency_margin": getattr(info, "currency_margin", ""),
+            "time": int(datetime.now(timezone.utc).timestamp()),
+        })
+
+
+@app.route("/candles", methods=["GET"])
+def candles():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    symbol = request.args.get("symbol", "").strip()
+    timeframe = request.args.get("timeframe", "H1").strip().upper()
+    if not symbol:
+        return err("symbol required", 400)
+
+    try:
+        count = int(request.args.get("count", "250"))
+    except (TypeError, ValueError):
+        return err("count must be an integer", 400)
+
+    if BRIDGE_MODE == "simulation":
+        return err("Candle bridge is unavailable in simulation mode", 503)
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+
+        info = mt5.symbol_info(symbol)
+        if not info:
+            return err(f"Symbol {symbol} not found", 404)
+
+        if not info.visible:
+            if not mt5.symbol_select(symbol, True):
+                return err(f"Symbol {symbol} could not be selected", 503)
+            info = mt5.symbol_info(symbol)
+            if not info:
+                return err(f"Symbol {symbol} unavailable after selection", 503)
+
+        try:
+            data = fetch_closed_candles(mt5, symbol, timeframe, count)
+        except ValueError as exc:
+            return err(str(exc), 400)
+        except RuntimeError as exc:
+            return err(str(exc), 503)
+
+        if not data:
+            return err(
+                f"No closed candle data for {symbol}/{timeframe}: {mt5.last_error()}",
+                503,
+            )
+
+        return jsonify({
+            "ok": True,
+            "symbol": info.name,
+            "timeframe": timeframe,
+            "candles": data,
+            "count": len(data),
+        })
+
+
+@app.route("/trade", methods=["POST"])
+def trade():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    data   = request.get_json(force=True)
+    symbol = data.get("symbol", "")
+    side   = data.get("side", "").upper()
+    volume = float(data.get("volume", 0))
+    sl     = float(data.get("sl", 0))
+    tp     = float(data.get("tp", 0))
+    comment= str(data.get("comment", "bot"))[:31]
+
+    if not symbol or side not in ("BUY", "SELL") or volume <= 0:
+        return err("Invalid parameters: symbol, side, volume required")
+
+    if BRIDGE_MODE == 'simulation':
+        # Simulation mode
+        tick_r = tick()
+        if isinstance(tick_r, tuple):
+            tick_data = tick_r[0].get_json()
+        else:
+            tick_data = tick_r.get_json()
+        price = tick_data["ask"] if side == "BUY" else tick_data["bid"]
+        pos   = sim_open(symbol, side, volume, sl, tp, price)
+        log.info(f"[SIM] {side} {volume} {symbol} @ {price} SL={sl} TP={tp}")
+        return jsonify({"ok": True, "ticket": pos["ticket"], "price": price,
+                        "volume": volume, "symbol": symbol, "mode": "simulation"})
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+
+        sym_info = mt5.symbol_info(symbol)
+        if not sym_info:
+            return err(f"Symbol {symbol} not found")
+        if not sym_info.visible:
+            if not mt5.symbol_select(symbol, True):
+                return err(f"Symbol {symbol} could not be selected", 503)
+            sym_info = mt5.symbol_info(symbol)
+            if not sym_info:
+                return err(f"Symbol {symbol} unavailable after selection", 503)
+
+        if getattr(sym_info, "trade_mode", None) == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", object()):
+            return err(f"Symbol {symbol} trading is disabled", 409)
+
+        permission_ok, permission_reason = validate_trade_permissions(
+            side, sym_info, mt5
+        )
+        if not permission_ok:
+            return err(permission_reason, 409)
+
+        volume_ok, volume_reason = validate_trade_volume(volume, sym_info)
+        if not volume_ok:
+            return err(volume_reason, 422)
+
+        aggregate_ok, aggregate_reason = validate_aggregate_volume(
+            symbol, side, volume, sym_info, mt5
+        )
+        if not aggregate_ok:
+            return err(aggregate_reason, 422)
+
+        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+        tick_data  = mt5.symbol_info_tick(symbol)
+        if not tick_data:
+            return err(f"No tick: {mt5.last_error()}")
+
+        price = tick_data.ask if side == "BUY" else tick_data.bid
+
+        # Final broker-side monetary risk guard. MT5 calculates profit and
+        # margin in the current account/trading environment.
+        if sl <= 0:
+            return err("Live MT5 orders require a positive stop-loss", 422)
+        if (side == "BUY" and sl >= price) or (side == "SELL" and sl <= price):
+            return err("Stop-loss direction is invalid for the requested side", 422)
+        if (side == "BUY" and tp <= price) or (side == "SELL" and tp >= price):
+            return err("Take-profit direction is invalid for the requested side", 422)
+
+        stops_ok, stops_reason = validate_stop_distance(
+            side, price, sl, tp, sym_info
+        )
+        if not stops_ok:
+            return err(stops_reason, 422)
+
+        account = mt5.account_info()
+        if not account:
+            return err(f"Account info failed for risk guard: {mt5.last_error()}", 503)
+
+        try:
+            estimated_loss, estimated_margin = calculate_order_estimates(
+                mt5, order_type, symbol, volume, price, sl
+            )
+        except RuntimeError as exc:
+            return err(str(exc), 503)
+
+        equity = float(getattr(account, "equity", 0.0))
+        if not (equity > 0):
+            return err("Invalid account equity for risk guard", 503)
+
+        risk_limit = equity * 0.02
+        if estimated_loss > risk_limit + max(0.01, risk_limit * 1e-9):
+            return err(
+                f"Estimated stop-loss risk {estimated_loss:.2f} exceeds "
+                f"single-trade limit {risk_limit:.2f}",
+                422,
+            )
+
+        free_margin = float(getattr(account, "margin_free", 0.0))
+        if estimated_margin > free_margin + max(0.01, free_margin * 1e-9):
+            return err(
+                f"Estimated margin {estimated_margin:.2f} exceeds "
+                f"free margin {free_margin:.2f}",
+                422,
+            )
+
+        try:
+            deviation = int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20"))
+        except (TypeError, ValueError):
+            return err("MT5_MAX_DEVIATION_POINTS must be an integer", 500)
+        if deviation < 0:
+            return err("MT5_MAX_DEVIATION_POINTS must be >= 0", 500)
+
+        try:
+            filling_mode = choose_market_filling_mode(sym_info, mt5)
+        except ValueError as exc:
+            return err(str(exc), 422)
+
+        request_data = {
+            "action":      mt5.TRADE_ACTION_DEAL,
+            "symbol":      symbol,
+            "volume":      volume,
+            "type":        order_type,
+            "price":       price,
+            "sl":          sl,
+            "tp":          tp,
+            "deviation":   deviation,
+            "magic":       get_magic(),
+            "comment":     comment,
+            "type_time":   mt5.ORDER_TIME_GTC,
+            "type_filling": filling_mode,
+        }
+
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(
+                f"Trade check failed: retcode={check.retcode} "
+                f"comment={getattr(check, 'comment', '')}",
+                422,
+            )
+
+        result = mt5.order_send(request_data)
+        if result is None:
+            return err(f"order_send returned None: {mt5.last_error()}", 503)
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return err(f"Trade failed: retcode={result.retcode} comment={result.comment}")
+
+        # Resolve the actual position ticket from the executed deal. MT5
+        # distinguishes order, deal and position identifiers; downstream
+        # close/modify operations require the position ticket.
+        position_ticket, deal_ticket = resolve_position_ticket(result, mt5)
+
+        if not position_ticket:
+            return err(
+                f"Trade executed but position identity could not be resolved: order={result.order} deal={deal_ticket}",
+                503,
+            )
+
+        log.info(
+            f"[LIVE] {side} {volume} {symbol} order={result.order} deal={deal_ticket} "
+            f"position={position_ticket} @ {result.price}"
+        )
+        return jsonify({
+            "ok": True,
+            "ticket": position_ticket,
+            "order_ticket": int(result.order),
+            "deal_ticket": deal_ticket,
+            "price": result.price,
+            "volume": volume,
+            "symbol": symbol,
+            "retcode": result.retcode,
+            "estimated_loss": estimated_loss,
+            "risk_limit": risk_limit,
+            "estimated_margin": float(estimated_margin),
+            "free_margin": free_margin,
+        })
+
+
+@app.route("/modify", methods=["POST"])
+def modify():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    data   = request.get_json(force=True)
+    ticket = int(data.get("ticket", 0))
+    sl     = float(data.get("sl", 0))
+    tp     = float(data.get("tp", 0))
+
+    if not ticket:
+        return err("ticket required")
+
+    if BRIDGE_MODE == 'simulation':
+        if ticket in _sim_positions:
+            _sim_positions[ticket]["sl"] = sl
+            _sim_positions[ticket]["tp"] = tp
+        return jsonify({"ok": True, "ticket": ticket, "sl": sl, "tp": tp})
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+
+        # Find position
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return err(f"Position {ticket} not found: {mt5.last_error()}")
+
+        pos = positions[0]
+        request_data = {
+            "action":   mt5.TRADE_ACTION_SLTP,
+            "symbol":   pos.symbol,
+            "position": ticket,
+            "sl":       sl,
+            "tp":       tp,
+        }
+        result = mt5.order_send(request_data)
+        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
+            return err(f"Modify failed: {result.retcode if result else mt5.last_error()}")
+
+        return jsonify({"ok": True, "ticket": ticket, "sl": sl, "tp": tp})
+
+
+@app.route("/close", methods=["POST"])
+def close():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    data   = request.get_json(force=True)
+    ticket = int(data.get("ticket", 0))
+    if not ticket:
+        return err("ticket required")
+
+    if BRIDGE_MODE == 'simulation':
+        result = sim_close(ticket, 1.0)
+        return jsonify(result)
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return err(f"Position {ticket} not found")
+
+        pos       = positions[0]
+        tick_data = mt5.symbol_info_tick(pos.symbol)
+        if not tick_data:
+            return err(f"No tick for close {pos.symbol}: {mt5.last_error()}", 503)
+        close_price = tick_data.bid if pos.type == 0 else tick_data.ask  # 0=BUY
+
+        volume_ok, volume_reason = validate_trade_volume(float(pos.volume), mt5.symbol_info(pos.symbol))
+        if not volume_ok:
+            return err(volume_reason, 422)
+
+        close_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+        try:
+            filling_mode = choose_market_filling_mode(mt5.symbol_info(pos.symbol), mt5)
+        except ValueError as exc:
+            return err(str(exc), 422)
+        request_data = {
+            "action":      mt5.TRADE_ACTION_DEAL,
+            "symbol":      pos.symbol,
+            "volume":      pos.volume,
+            "type":        close_type,
+            "position":    ticket,
+            "price":       close_price,
+            "deviation":   int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20")),
+            "magic":       get_magic(),
+            "comment":     "bot-close",
+            "type_time":   mt5.ORDER_TIME_GTC,
+            "type_filling": filling_mode,
+        }
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"Close order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(f"Close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
+        result = mt5.order_send(request_data)
+        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
+            return err(f"Close failed: {result.retcode if result else mt5.last_error()}")
+
+        summary = summarize_position_deals(
+            mt5.history_deals_get(position=ticket) or []
+        )
+        if not summary:
+            # The broker accepted the close, but realized deal history is not
+            # yet observable. Return UNKNOWN to the caller so reconciliation
+            # can resolve the final PnL instead of recording pre-close PnL.
+            return err(
+                f"Position {ticket} closed but realized deal history is unavailable",
+                503,
+            )
+
+        profit = summary["net_profit"]
+        close_price_realized = summary["close_price"]
+        log.info(
+            f"[LIVE] Closed {ticket} {pos.symbol} realized_net={profit:.2f} "
+            f"close_price={close_price_realized}"
+        )
+        return jsonify({
+            "ok": True,
+            "ticket": ticket,
+            "profit": profit,
+            "close_price": close_price_realized,
+            "close_reason": summary["close_reason"],
+            "close_deal_ticket": summary["close_deal_ticket"],
+        })
+
+
+@app.route("/close_partial", methods=["POST"])
+def close_partial():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    data     = request.get_json(force=True)
+    ticket   = int(data.get("ticket", 0))
+    fraction = float(data.get("fraction", 0.5))
+
+    if not ticket or not (0 < fraction <= 1.0):
+        return err("ticket and fraction (0..1] required")
+
+    if BRIDGE_MODE == 'simulation':
+        result = sim_close(ticket, fraction)
+        return jsonify(result)
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return err(f"Position {ticket} not found")
+
+        pos       = positions[0]
+        sym_info  = mt5.symbol_info(pos.symbol)
+        if not sym_info:
+            return err(f"Symbol {pos.symbol} metadata unavailable", 503)
+        vol_step  = float(getattr(sym_info, "volume_step", 0))
+        if not vol_step > 0:
+            return err(f"Invalid broker volume step for {pos.symbol}", 422)
+        close_vol = max(vol_step, round(pos.volume * fraction / vol_step) * vol_step)
+        close_vol = min(close_vol, pos.volume)
+        if close_vol >= float(pos.volume) - max(1e-12, vol_step * 1e-9):
+            return err(
+                "Requested partial close rounds to full position; refusing implicit full close",
+                422,
+            )
+        volume_ok, volume_reason = validate_trade_volume(close_vol, sym_info)
+        if not volume_ok:
+            return err(volume_reason, 422)
+
+        tick_data   = mt5.symbol_info_tick(pos.symbol)
+        if not tick_data:
+            return err(f"No tick for partial close {pos.symbol}: {mt5.last_error()}", 503)
+        close_price = tick_data.bid if pos.type == 0 else tick_data.ask
+        close_type  = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+        try:
+            filling_mode = choose_market_filling_mode(sym_info, mt5)
+        except ValueError as exc:
+            return err(str(exc), 422)
+
+        request_data = {
+            "action":      mt5.TRADE_ACTION_DEAL,
+            "symbol":      pos.symbol,
+            "volume":      close_vol,
+            "type":        close_type,
+            "position":    ticket,
+            "price":       close_price,
+            "deviation":   int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20")),
+            "magic":       get_magic(),
+            "comment":     f"bot-partial-{int(fraction*100)}pct",
+            "type_time":   mt5.ORDER_TIME_GTC,
+            "type_filling": filling_mode,
+        }
+        check = mt5.order_check(request_data)
+        if check is None:
+            return err(f"Partial close order_check returned None: {mt5.last_error()}", 503)
+        if int(getattr(check, "retcode", -1)) != 0:
+            return err(f"Partial close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
+        result = mt5.order_send(request_data)
+        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
+            return err(f"Partial close failed: {result.retcode if result else mt5.last_error()}")
+
+        deal_ticket = int(getattr(result, "deal", 0) or 0)
+        deals = mt5.history_deals_get(ticket=deal_ticket) if deal_ticket else []
+        if not deals:
+            return err(
+                f"Partial close {ticket} executed but realized deal history is unavailable",
+                503,
+            )
+
+        close_deal = deals[-1]
+        realized_profit = round(
+            float(getattr(close_deal, "profit", 0) or 0) +
+            float(getattr(close_deal, "commission", 0) or 0) +
+            float(getattr(close_deal, "swap", 0) or 0) +
+            float(getattr(close_deal, "fee", 0) or 0),
+            8,
+        )
+
+        remaining_positions = mt5.positions_get(ticket=ticket) or []
+        if not remaining_positions:
+            return err(
+                f"Partial close {ticket} executed but remaining position could not be verified",
+                503,
+            )
+        remaining_volume = float(remaining_positions[0].volume)
+        if not (0 < remaining_volume < float(pos.volume)):
+            return err(
+                f"Partial close {ticket} returned invalid remaining volume {remaining_volume}",
+                503,
+            )
+
+        log.info(
+            f"[LIVE] Partial close {ticket}: {close_vol}/{pos.volume} lots "
+            f"remaining={remaining_volume} realized={realized_profit:.8f}"
+        )
+        return jsonify({
+            "ok": True,
+            "ticket": ticket,
+            "deal_ticket": deal_ticket,
+            "closed_volume": close_vol,
+            "remaining_volume": round(remaining_volume, 8),
+            "close_price": float(getattr(close_deal, "price", close_price) or close_price),
+            "profit": realized_profit,
+        })
+
+
+@app.route("/positions", methods=["GET"])
+def positions():
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    if BRIDGE_MODE == 'simulation':
+        return jsonify({"positions": list(_sim_positions.values()), "count": len(_sim_positions)})
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+        pos_list = mt5.positions_get()
+        if pos_list is None:
+            return jsonify({"positions": [], "count": 0})
+        result = []
+        for p in pos_list:
+            result.append({
+                "ticket":  p.ticket,
+                "symbol":  p.symbol,
+                "type":    "BUY" if p.type == 0 else "SELL",
+                "volume":  p.volume,
+                "price":   p.price_open,
+                "sl":      p.sl,
+                "tp":      p.tp,
+                "profit":  p.profit,
+                "swap":    p.swap,
+                "comment": p.comment,
+                "time":    p.time,
+            })
+        return jsonify({"positions": result, "count": len(result)})
+
+
+def summarize_position_deals(deals):
+    """Build authoritative close data from all deals belonging to one position."""
+    if not deals:
+        return None
+
+    def value(deal, name, default=0):
+        try:
+            return float(getattr(deal, name, default) or default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def int_value(deal, name, default=0):
+        try:
+            return int(getattr(deal, name, default) or default)
+        except (TypeError, ValueError):
+            return int(default)
+
+    ordered = sorted(
+        deals,
+        key=lambda d: (
+            int_value(d, "time_msc", int_value(d, "time", 0) * 1000),
+            int_value(d, "ticket", 0),
+        ),
     )
-    result = types.SimpleNamespace(order=123, deal=456)
-    position, deal = bridge.resolve_position_ticket(result, mt5)
-    assert position == 0
-    assert deal == 456
+    closing = [d for d in ordered if int_value(d, "entry", 0) in (1, 2, 3)]
+    if not closing:
+        return None
 
-
-def test_account_position_mode_detects_hedging():
-    mt5 = types.SimpleNamespace(
-        ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
-        ACCOUNT_MARGIN_MODE_RETAIL_NETTING=0,
-        ACCOUNT_MARGIN_MODE_EXCHANGE=1,
+    latest = closing[-1]
+    net_profit = sum(
+        value(d, "profit") + value(d, "commission") +
+        value(d, "swap") + value(d, "fee")
+        for d in ordered
     )
-    assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=2), mt5) == "HEDGING"
+    comments = [str(getattr(d, "comment", "") or "").lower() for d in reversed(closing)]
+    matched_comment = next((c for c in comments if "sl" in c or "tp" in c), "")
+    close_reason = "SL" if "sl" in matched_comment else "TP" if "tp" in matched_comment else "manual"
+
+    return {
+        "close_price": value(latest, "price"),
+        "net_profit": round(net_profit, 8),
+        "close_reason": close_reason,
+        "position_id": int_value(latest, "position_id"),
+        "close_deal_ticket": int_value(latest, "ticket"),
+    }
 
 
-def test_account_position_mode_detects_netting():
-    mt5 = types.SimpleNamespace(
-        ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
-        ACCOUNT_MARGIN_MODE_RETAIL_NETTING=0,
-        ACCOUNT_MARGIN_MODE_EXCHANGE=1,
-    )
-    assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=0), mt5) == "NETTING_OR_EXCHANGE"
+@app.route("/history", methods=["GET"])
+def history():
+    if not auth_check():
+        return err("Unauthorized", 401)
+    if BRIDGE_MODE == 'simulation':
+        return jsonify({"deals": [], "count": 0, "closed": False})
+
+    with _lock:
+        if not ensure_connected():
+            return err("MT5 not connected", 503)
+        from datetime import timedelta
+        position_raw = request.args.get("position", "").strip()
+        if position_raw:
+            try:
+                position_id = int(position_raw)
+            except ValueError:
+                return err("position must be an integer", 400)
+            if position_id <= 0:
+                return err("position must be positive", 400)
+            deals = mt5.history_deals_get(position=position_id)
+            if deals is None:
+                return jsonify({"deals": [], "count": 0, "closed": False})
+            summary = summarize_position_deals(deals)
+            if not summary:
+                return jsonify({"deals": [], "count": len(deals), "closed": False})
+            return jsonify({"deals": [], "count": len(deals), "closed": True, **summary})
+
+        utcnow = datetime.now(timezone.utc)
+        deals = mt5.history_deals_get(utcnow - timedelta(days=30), utcnow)
+        if deals is None:
+            return jsonify({"deals": [], "count": 0})
+        result = [
+            {
+                "ticket": d.ticket, "order": d.order,
+                "position_id": getattr(d, "position_id", 0),
+                "entry": getattr(d, "entry", None), "symbol": d.symbol,
+                "type": d.type, "volume": d.volume, "price": d.price,
+                "profit": d.profit, "commission": getattr(d, "commission", 0),
+                "swap": getattr(d, "swap", 0), "fee": getattr(d, "fee", 0),
+                "time": d.time, "time_msc": getattr(d, "time_msc", 0),
+                "comment": d.comment,
+            }
+            for d in deals
+        ]
+        return jsonify({"deals": result[-50:], "count": len(deals)})
 
 
-def test_account_position_mode_fails_closed_unknown():
-    mt5 = types.SimpleNamespace(
-        ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
-        ACCOUNT_MARGIN_MODE_RETAIL_NETTING=0,
-        ACCOUNT_MARGIN_MODE_EXCHANGE=1,
-    )
-    assert bridge.account_position_mode(types.SimpleNamespace(margin_mode=99), mt5) == "UNKNOWN"
+# ─── Main ────────────────────────────────────────────────────────────────────
 
-def test_aggregate_volume_limit_blocks_same_direction():
-    mt5 = types.SimpleNamespace(POSITION_TYPE_BUY=0)
-    positions = [
-        types.SimpleNamespace(type=0, volume=1.5),
-        types.SimpleNamespace(type=1, volume=0.5),
-    ]
-    mt5.positions_get = lambda symbol: positions
-    ok, reason = bridge.validate_aggregate_volume(
-        "EURUSD.a", "BUY", 1.0,
-        info(volume_limit=2.0), mt5
-    )
-    assert not ok
-    assert "volume_limit" in reason
-
-
-def test_aggregate_volume_limit_allows_other_direction():
-    mt5 = types.SimpleNamespace(POSITION_TYPE_BUY=0)
-    positions = [
-        types.SimpleNamespace(type=0, volume=1.5),
-        types.SimpleNamespace(type=1, volume=0.5),
-    ]
-    mt5.positions_get = lambda symbol: positions
-    ok, _ = bridge.validate_aggregate_volume(
-        "EURUSD.a", "SELL", 1.0,
-        info(volume_limit=2.0), mt5
-    )
-    assert ok
-
-def test_trade_permissions_respect_direction():
-    mt5 = types.SimpleNamespace(
-        SYMBOL_TRADE_MODE_DISABLED=0,
-        SYMBOL_TRADE_MODE_LONGONLY=1,
-        SYMBOL_TRADE_MODE_SHORTONLY=2,
-        SYMBOL_TRADE_MODE_CLOSEONLY=3,
-    )
-    assert bridge.validate_trade_permissions(
-        "BUY", info(trade_mode=1), mt5
-    )[0]
-    assert not bridge.validate_trade_permissions(
-        "SELL", info(trade_mode=1), mt5
-    )[0]
-    assert not bridge.validate_trade_permissions(
-        "BUY", info(trade_mode=3), mt5
-    )[0]
-
-
-def test_stop_distance_uses_broker_points():
-    symbol = info(point=0.01, trade_stops_level=10)
-    ok, _ = bridge.validate_stop_distance("BUY", 100.0, 99.9, 100.1, symbol)
-    assert ok
-    assert not bridge.validate_stop_distance("BUY", 100.0, 99.95, 100.1, symbol)[0]
-    assert not bridge.validate_stop_distance("SELL", 100.0, 100.1, 99.95, symbol)[0]
-
-
-def test_timeframe_constant_supports_all_trading_timeframes():
-    mt5 = types.SimpleNamespace(
-        TIMEFRAME_M1=1,
-        TIMEFRAME_M5=5,
-        TIMEFRAME_M15=15,
-        TIMEFRAME_M30=30,
-        TIMEFRAME_H1=60,
-        TIMEFRAME_H4=240,
-        TIMEFRAME_D1=1440,
-    )
-    assert bridge.timeframe_constant("M1", mt5) == 1
-    assert bridge.timeframe_constant("M5", mt5) == 5
-    assert bridge.timeframe_constant("M15", mt5) == 15
-    assert bridge.timeframe_constant("M30", mt5) == 30
-    assert bridge.timeframe_constant("H1", mt5) == 60
-    assert bridge.timeframe_constant("H4", mt5) == 240
-    assert bridge.timeframe_constant("D1", mt5) == 1440
-
-
-def test_timeframe_constant_rejects_unknown_timeframe():
-    mt5 = types.SimpleNamespace(TIMEFRAME_H1=60)
-    with pytest.raises(ValueError):
-        bridge.timeframe_constant("H2", mt5)
-
-
-def test_normalize_rates_uses_real_volume_then_tick_volume_and_milliseconds():
-    rows = [
-        {
-            "time": 1002,
-            "open": 1.2,
-            "high": 1.3,
-            "low": 1.1,
-            "close": 1.25,
-            "tick_volume": 7,
-            "real_volume": 11,
-        },
-        {
-            "time": 1001,
-            "open": 1.1,
-            "high": 1.2,
-            "low": 1.0,
-            "close": 1.15,
-            "tick_volume": 9,
-            "real_volume": 0,
-        },
-        {
-            "time": 1001,
-            "open": 9.0,
-            "high": 9.0,
-            "low": 9.0,
-            "close": 9.0,
-            "tick_volume": 99,
-            "real_volume": 99,
-        },
-    ]
-    candles = bridge.normalize_rates(rows)
-    assert [c["time"] for c in candles] == [1001000, 1002000]
-    assert candles[0]["volume"] == 9
-    assert candles[1]["volume"] == 11
-
-
-def test_fetch_closed_candles_skips_forming_bar_and_passes_count():
-    class FakeMT5:
-        TIMEFRAME_H1 = 60
-
-        def __init__(self):
-            self.calls = []
-
-        def copy_rates_from_pos(self, symbol, timeframe, start_pos, count):
-            self.calls.append((symbol, timeframe, start_pos, count))
-            return [{
-                "time": 1000,
-                "open": 1.0,
-                "high": 1.1,
-                "low": 0.9,
-                "close": 1.05,
-                "tick_volume": 10,
-                "real_volume": 0,
-            }]
-
-    mt5 = FakeMT5()
-    result = bridge.fetch_closed_candles(mt5, "EURUSD.a", "H1", 250)
-    assert result[0]["time"] == 1000000
-    assert mt5.calls == [("EURUSD.a", 60, 1, 250)]
-
-
-def test_fetch_closed_candles_rejects_unsafe_count():
-    mt5 = types.SimpleNamespace(TIMEFRAME_H1=60)
-    with pytest.raises(ValueError):
-        bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 0)
-    with pytest.raises(ValueError):
-        bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 5001)
+if __name__ == "__main__":
+    log.info(f"MT5 Bridge starting on port {BRIDGE_PORT}")
+    log.info(f"Configured mode: {BRIDGE_MODE}")
+    if BRIDGE_MODE not in ('live', 'simulation'):
+        log.error('MT5_BRIDGE_MODE must be live or simulation')
+        raise SystemExit(1)
+    if BRIDGE_MODE == 'live' and not MT5_AVAILABLE:
+        log.error('Live bridge requested but MetaTrader5 package is unavailable — FAIL CLOSED')
+        raise SystemExit(1)
+    if BRIDGE_MODE == 'live' and not API_KEY:
+        log.error('MT5_BRIDGE_API_KEY is required in live mode — FAIL CLOSED')
+        raise SystemExit(1)
+    if BRIDGE_MODE == 'simulation' and not ALLOW_ANON and not API_KEY:
+        log.error('Simulation mode also requires MT5_BRIDGE_API_KEY unless MT5_BRIDGE_ALLOW_ANONYMOUS=true is explicitly set')
+        raise SystemExit(1)
+    if MT5_AVAILABLE:
+        log.info(f"Connecting: login={MT5_LOGIN} server={MT5_SERVER}")
+        if not ensure_connected():
+            log.error("MT5 connection failed — check credentials in .env")
+            exit(1)
+        log.info("MT5 connected ✅")
+    elif BRIDGE_MODE == 'simulation':
+        log.info('Running in explicitly configured simulation mode')
+    log.info(f"API Key: {'SET' if API_KEY else 'ANONYMOUS SIMULATION ONLY' if ALLOW_ANON else 'MISSING'}")
+    app.run(host="127.0.0.1", port=BRIDGE_PORT, threaded=True, debug=False)

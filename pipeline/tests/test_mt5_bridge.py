@@ -203,3 +203,73 @@ def test_stop_distance_uses_broker_points():
     assert ok
     assert not bridge.validate_stop_distance("BUY", 100.0, 99.95, 100.1, symbol)[0]
     assert not bridge.validate_stop_distance("SELL", 100.0, 100.1, 99.95, symbol)[0]
+
+
+def test_timeframe_constant_supports_all_trading_timeframes():
+    mt5 = types.SimpleNamespace(
+        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15,
+        TIMEFRAME_M30=30, TIMEFRAME_H1=60, TIMEFRAME_H4=240,
+        TIMEFRAME_D1=1440,
+    )
+    assert bridge.timeframe_constant("M1", mt5) == 1
+    assert bridge.timeframe_constant("M5", mt5) == 5
+    assert bridge.timeframe_constant("M15", mt5) == 15
+    assert bridge.timeframe_constant("M30", mt5) == 30
+    assert bridge.timeframe_constant("H1", mt5) == 60
+    assert bridge.timeframe_constant("H4", mt5) == 240
+    assert bridge.timeframe_constant("D1", mt5) == 1440
+
+
+def test_timeframe_constant_rejects_unknown_timeframe():
+    mt5 = types.SimpleNamespace(TIMEFRAME_H1=60)
+    with pytest.raises(ValueError):
+        bridge.timeframe_constant("H2", mt5)
+
+
+def test_normalize_rates_uses_real_volume_then_tick_volume_and_milliseconds():
+    rows = [
+        {
+            "time": 1002, "open": 1.2, "high": 1.3, "low": 1.1, "close": 1.25,
+            "tick_volume": 7, "real_volume": 11,
+        },
+        {
+            "time": 1001, "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15,
+            "tick_volume": 9, "real_volume": 0,
+        },
+        {
+            "time": 1001, "open": 9.0, "high": 9.0, "low": 9.0, "close": 9.0,
+            "tick_volume": 99, "real_volume": 99,
+        },
+    ]
+    candles = bridge.normalize_rates(rows)
+    assert [c["time"] for c in candles] == [1001000, 1002000]
+    assert candles[0]["volume"] == 9
+    assert candles[1]["volume"] == 11
+
+
+def test_fetch_closed_candles_skips_forming_bar_and_passes_count():
+    class FakeMT5:
+        TIMEFRAME_H1 = 60
+
+        def __init__(self):
+            self.calls = []
+
+        def copy_rates_from_pos(self, symbol, timeframe, start_pos, count):
+            self.calls.append((symbol, timeframe, start_pos, count))
+            return [{
+                "time": 1000, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
+                "tick_volume": 10, "real_volume": 0,
+            }]
+
+    mt5 = FakeMT5()
+    result = bridge.fetch_closed_candles(mt5, "EURUSD.a", "H1", 250)
+    assert result[0]["time"] == 1000000
+    assert mt5.calls == [("EURUSD.a", 60, 1, 250)]
+
+
+def test_fetch_closed_candles_rejects_unsafe_count():
+    mt5 = types.SimpleNamespace(TIMEFRAME_H1=60)
+    with pytest.raises(ValueError):
+        bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 0)
+    with pytest.raises(ValueError):
+        bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 5001)
