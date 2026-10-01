@@ -269,3 +269,21 @@ def test_fetch_closed_candles_rejects_unsafe_count():
         bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 0)
     with pytest.raises(ValueError):
         bridge.fetch_closed_candles(mt5, "EURUSD", "H1", 5001)
+
+
+def test_idempotency_cache_replays_success_and_unknown():
+    bridge._idempotency_cache.clear()
+
+    payload = {"ok": True, "ticket": 42, "symbol": "EURUSD.a"}
+    bridge._idempotency_record("trade-1", "SUCCESS", payload)
+    cached = bridge._idempotency_lookup("trade-1")
+    assert cached is not None
+    assert cached[1] == "SUCCESS"
+    assert cached[2] == payload
+
+    unknown_payload = {"ok": False, "error": "identity unresolved"}
+    bridge._idempotency_record("trade-2", "UNKNOWN", unknown_payload)
+    cached_unknown = bridge._idempotency_lookup("trade-2")
+    assert cached_unknown is not None
+    assert cached_unknown[1] == "UNKNOWN"
+    assert cached_unknown[2] == unknown_payload
