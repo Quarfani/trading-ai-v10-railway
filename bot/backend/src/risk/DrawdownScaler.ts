@@ -31,9 +31,16 @@ export class DrawdownScaler {
   private logger      = new Logger('DrawdownScaler');
   private peakEquity  = 0;
   private lastUpdated = 0;
+  private readonly peakKey: string;
 
-  constructor(private db: DatabaseManager, initialBalance: number, private failClosed = false) {
+  constructor(
+    private db: DatabaseManager,
+    initialBalance: number,
+    private failClosed = false,
+    accountKey = 'default',
+  ) {
     this.peakEquity = initialBalance;
+    this.peakKey = `peak_equity:${accountKey.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     this.loadPeak();
   }
 
@@ -115,7 +122,7 @@ export class DrawdownScaler {
 
   private savePeak() {
     try {
-      this.db.setSetting('equity_peak', String(this.peakEquity));
+      this.db.setSetting(this.peakKey, String(this.peakEquity));
       this.lastUpdated = Date.now();
     } catch (e) {
       if (this.failClosed) throw new Error(`Equity peak persistence failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -124,7 +131,7 @@ export class DrawdownScaler {
 
   private loadPeak() {
     try {
-      const saved = this.db.getSetting('equity_peak');
+      const saved = this.db.getSetting(this.peakKey);
       if (saved) {
         this.peakEquity = Math.max(this.peakEquity, Number(saved));
         this.logger.info(`Loaded equity peak: $${this.peakEquity.toFixed(2)}`);
