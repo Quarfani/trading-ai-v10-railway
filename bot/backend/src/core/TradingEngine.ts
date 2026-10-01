@@ -1253,15 +1253,20 @@ export class TradingEngine extends EventEmitter {
       }
 
       // Risk pipeline
+      let admissionTicker = ticker;
+      const refreshedAdmissionTicker = await this.fetchTicker(symbol);
+      if (refreshedAdmissionTicker) {
+        admissionTicker = refreshedAdmissionTicker;
+      }
 
-    const livePrices: Record<string, number> = ticker
-      ? {
-          [symbol]: (ticker.bid + ticker.ask) / 2,
-        }
-      : {};
+      const livePrices: Record<string, number> = admissionTicker
+        ? {
+            [symbol]: (admissionTicker.bid + admissionTicker.ask) / 2,
+          }
+        : {};
 
-    const marketDefinition =
-      getMarketDefinition(symbol);
+      const marketDefinition =
+        getMarketDefinition(symbol);
 
     if (marketDefinition) {
       const conversionRates =
@@ -1316,7 +1321,7 @@ export class TradingEngine extends EventEmitter {
       await this.risk.check(
         adjustedSignal,
         openTrades,
-        ticker ?? undefined,
+        admissionTicker ?? undefined,
         equity,
         quality.total,
         livePrices,
@@ -1370,8 +1375,8 @@ export class TradingEngine extends EventEmitter {
     // ── Re-apply absolute risk cap ─────────────────────────────────────
     const executableEntryPrice =
       adjustedSignal.side === 'BUY'
-        ? ticker?.ask
-        : ticker?.bid;
+        ? admissionTicker?.ask
+        : admissionTicker?.bid;
 
     if (
       executableEntryPrice == null ||
