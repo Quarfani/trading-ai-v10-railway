@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current commit: 9db43bc8dcf64486a14f013b966eaf4e2d999b22
-Current message: test: cover Monte Carlo capital promotion gate
+Current commit: 8ad5f9d7e56dcbef52638508f172d5f5d6437b9e
+Current message: test: extend non-USD conversion coverage
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -44,7 +44,7 @@ Latest CI on main is green after c37ad360f5a9415482f9cdd494ad53765abbc47d.
 6. Long paper/testnet/cloud E2E evidence remains outstanding.
 
 ## NEXT TASK
-Harden non-USD live broker E2E for EUR/GBP/JPY accounts and Forex/Metals, including fail-closed conversion and broker-confirmed contract economics; then extend long paper/testnet/cloud E2E.
+Add PositionSizer integration coverage for non-USD account currencies and broker contract economics (EUR/GBP/JPY accounts; EURUSD/GBPUSD/USDJPY/XAUUSD; Oil only with broker-confirmed metadata), then extend long paper/testnet/cloud E2E.
 
 ## STOP PROTOCOL
 Verify main SHA and CI; record blockers; update this file; keep the local AI_DEVELOPMENT_HANDOFF_CURRENT.md checkpoint; define one concrete NEXT TASK.
