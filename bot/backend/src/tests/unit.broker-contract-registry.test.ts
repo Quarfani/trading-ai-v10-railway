@@ -16,6 +16,7 @@ const unverified = {
   venue: 'MT5',
   contractSize: 1000,
   priceIncrement: 0.01,
+  pipSize: 0.01,
   minVolume: 0.01,
   maxVolume: 50,
   volumeStep: 0.01,
@@ -85,6 +86,20 @@ assert(
   registry.getMarketDefinition('EURUSD.a')?.brokerSymbol === 'EURUSD.a',
   'broker symbol casing must be preserved exactly for MT5 lookup',
 );
+registry.register({
+  ...verified,
+  symbol: 'GBPUSD.a',
+  baseAsset: 'GBP',
+  quoteCurrency: 'USD',
+  assetClass: 'FOREX',
+  priceIncrement: 0.00001,
+  pipSize: 0.0001,
+  observedAt: now + 1,
+});
+assert(
+  registry.getMarketDefinition('GBPUSD.a')?.economics.pipSize === 0.0001,
+  'broker pip size must survive conversion into MarketDefinition',
+);
 
 let chronologyRejected = false;
 try {
@@ -102,7 +117,7 @@ assert(
   'broker contract expiry must be later than observedAt',
 );
 
-console.log('Result: 9 passed, 0 failed');
+console.log('Result: 10 passed, 0 failed');
 }
 
 main().catch(error => {
