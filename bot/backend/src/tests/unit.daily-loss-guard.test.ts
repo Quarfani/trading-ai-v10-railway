@@ -11,9 +11,12 @@ const trade = {
   openedAt: Date.now(), status: "open", timeframe: "H1",
 } as any;
 
+const settings = new Map<string, string>();
 const db = {
   getOpenTrades: () => [trade],
   getTodayStats: () => ({ pnl: 0 }),
+  getSetting: (key: string) => settings.get(key) ?? null,
+  setSetting: (key: string, value: string) => settings.set(key, value),
 } as any;
 const telegram = { sendMessage: async () => {} } as any;
 const config = {
@@ -55,8 +58,25 @@ assert((guard as any).calcFloating() === null, "missing prices must fail closed"
 const allowed = await guard.canTrade({ "EURUSD.a": 2, EURUSD: 1.25 });
 assert(allowed, "daily loss guard must not confuse a small positive floating PnL with a loss");
 
+const noTradesDb = {
+  getOpenTrades: () => [],
+  getTodayStats: () => ({ pnl: -1900 }),
+  getSetting: (key: string) => settings.get(key) ?? null,
+  setSetting: (key: string, value: string) => settings.set(key, value),
+} as any;
+const anchorConfig = {
+  ...config,
+  accountName: "anchor-test",
+  mode: "mt5",
+  maxDailyLoss: 0.10,
+  accountBalance: 10_000,
+} as any;
+const anchorGuard = new DailyLossGuard(anchorConfig, noTradesDb, telegram);
+assert(await anchorGuard.canTrade({}, 20_000), "first live equity observation should establish the daily anchor");
+assert(await anchorGuard.canTrade({}, 18_100), "daily loss should be measured from persisted start-of-day equity anchor");
+
 clearBrokerContracts();
-console.log("Result: 3 passed, 0 failed");
+console.log("Result: 5 passed, 0 failed");
 }
 
 main().catch(error => {
