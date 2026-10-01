@@ -403,7 +403,7 @@ def trade():
         if int(getattr(check, "retcode", -1)) != 0:
             return err(
                 f"Trade check failed: retcode={check.retcode} "
-                f"comment={getattr(check, "comment", "")}",
+                f"comment={getattr(check, 'comment', '')}",
                 422,
             )
 
@@ -548,7 +548,7 @@ def close():
         if check is None:
             return err(f"Close order_check returned None: {mt5.last_error()}", 503)
         if int(getattr(check, "retcode", -1)) != 0:
-            return err(f"Close check failed: retcode={check.retcode} comment={getattr(check, "comment", "")}", 422)
+            return err(f"Close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
         result = mt5.order_send(request_data)
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Close failed: {result.retcode if result else mt5.last_error()}")
@@ -623,7 +623,7 @@ def close_partial():
         if check is None:
             return err(f"Partial close order_check returned None: {mt5.last_error()}", 503)
         if int(getattr(check, "retcode", -1)) != 0:
-            return err(f"Partial close check failed: retcode={check.retcode} comment={getattr(check, "comment", "")}", 422)
+            return err(f"Partial close check failed: retcode={check.retcode} comment={getattr(check, 'comment', '')}", 422)
         result = mt5.order_send(request_data)
         if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
             return err(f"Partial close failed: {result.retcode if result else mt5.last_error()}")
