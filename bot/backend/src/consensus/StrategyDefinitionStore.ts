@@ -210,7 +210,20 @@ export class StrategyDefinitionStore {
             definition.strategyId + '/' + symbol + '/' + timeframe +
             ': ' + snapshotPromotion.reasons.join('; '),
           );
-        }        const createdAt = snapshot.createdAt ?? 0;
+        const snapshotMc = (snapshotEvidence as any)?.monteCarloStress;
+        if (snapshotMc && ['SMALL_CAPITAL', 'PRODUCTION'].includes(target)) {
+          if (
+            Number.isFinite(snapshotMc.maxDDP95) &&
+            snapshotMc.maxDDP95 > definition.riskProfile.maximumDrawdown
+          ) {
+            throw new Error(
+              '[StrategyDefinitionStore] Monte Carlo P95 drawdown exceeds the strategy risk-profile maximumDrawdown for ' +
+              definition.strategyId + '/' + symbol + '/' + timeframe,
+            );
+          }
+        }
+
+        const createdAt = snapshot.createdAt ?? 0;
         if (
           !Number.isFinite(createdAt) ||
           Date.now() - createdAt > this.evidencePolicy.maxAgeMs
