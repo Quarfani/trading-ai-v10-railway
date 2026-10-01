@@ -49,7 +49,7 @@ async function main() {
   // External modules not created by TradingEngine
   const mlPipeline = new MLTrainingPipeline(db);
   const discovery  = new AutoSymbolDiscovery(engine['scanner'] as any, db);
-  const wfo        = new WalkForwardOptimizer(config.dbPath);
+  const wfo        = new WalkForwardOptimizer(config.dbPath, config.accountCurrency ?? 'USD');
   const mc         = new MonteCarloSimulator();
   const corrMatrix = new CorrelationMatrixBuilder();
 
