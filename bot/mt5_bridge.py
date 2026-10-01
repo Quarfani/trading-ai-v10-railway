@@ -147,10 +147,28 @@ def sim_close(ticket: int, fraction: float = 1.0) -> dict:
 
 @app.route("/ping", methods=["GET"])
 def ping():
-    ok = (BRIDGE_MODE == 'simulation' and ALLOW_ANON) or (BRIDGE_MODE == 'live' and MT5_AVAILABLE and bool(API_KEY))
-    status = 200 if ok else 503
-    return jsonify({"ok": ok, "mode": BRIDGE_MODE, "mt5_available": MT5_AVAILABLE,
-                    "ts": datetime.now(timezone.utc).isoformat()}), status
+    if not auth_check():
+        return err("Unauthorized", 401)
+
+    if BRIDGE_MODE == 'simulation':
+        ok = ALLOW_ANON or bool(API_KEY)
+        return jsonify({
+            "ok": ok, "mode": BRIDGE_MODE, "mt5_available": MT5_AVAILABLE,
+            "connected": True,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }), (200 if ok else 503)
+
+    with _lock:
+        connected = bool(MT5_AVAILABLE and API_KEY and ensure_connected())
+
+    status = 200 if connected else 503
+    return jsonify({
+        "ok": connected,
+        "mode": BRIDGE_MODE,
+        "mt5_available": MT5_AVAILABLE,
+        "connected": connected,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }), status
 
 
 @app.route("/health", methods=["GET"])

@@ -142,7 +142,7 @@ export class HealthMonitor {
     try {
       const r = await axios.get(`${this.config.mt5.bridgeUrl}/health`, {
         timeout: 4000,
-        headers: { 'X-Api-Key': process.env.MT5_BRIDGE_API_KEY ?? '' },
+        headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
       });
       return r.data?.ok === true;
     } catch { return false; }
