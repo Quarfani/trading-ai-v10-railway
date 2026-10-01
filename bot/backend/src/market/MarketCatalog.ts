@@ -158,6 +158,7 @@ export function getMarketDefinition(symbol: string, timeframe: Timeframe = 'H1')
           : 'CFD',
       contractSize: spec.contractSize,
       priceIncrement: spec.pip,
+      pipSize: spec.pip,
       minVolume: spec.minVolume,
       maxVolume: spec.maxVolume,
       volumeStep: spec.volumeStep,
