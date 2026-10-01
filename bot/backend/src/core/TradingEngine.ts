@@ -1191,6 +1191,13 @@ export class TradingEngine extends EventEmitter {
       }
     }
 
+    if (!marketDefinition) {
+      this.logger.info(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=MARKET_DEFINITION reason=missing_or_unverified`,
+      );
+      return;
+    }
+
     const risk =
       await this.risk.check(
         adjustedSignal,
@@ -1219,8 +1226,9 @@ export class TradingEngine extends EventEmitter {
     );
 
     // ── Apply time & recovery volume multipliers ───────────────────────
-    const spec =
-      getSymbolSpec(symbol, tf);
+    // Broker-confirmed economics remain authoritative through every final
+    // volume transformation.
+    const economics = marketDefinition.economics;
 
     const rawVolume =
       risk.volume *
@@ -1230,13 +1238,13 @@ export class TradingEngine extends EventEmitter {
     const stepped =
       Math.floor(
         rawVolume /
-          spec.volumeStep +
+          economics.volumeStep +
           1e-12,
-      ) * spec.volumeStep;
+      ) * economics.volumeStep;
 
     const adjustedVolume =
       Math.min(
-        spec.maxVolume,
+        economics.maxVolume,
         Math.max(
           0,
           Number(
