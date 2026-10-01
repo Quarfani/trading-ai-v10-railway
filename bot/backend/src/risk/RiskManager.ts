@@ -345,9 +345,18 @@ export class RiskManager {
 
     reasons.push(`Slippage ${slippagePips.toFixed(2)} pips`);
 
+    const newsEnabled = this.config.newsFilter?.enabled ?? true;
+    const newsNow = Date.now();
+
+    if (newsEnabled && !this.news.isFresh(newsNow)) {
+      return this.block('news_data_stale', [
+        'Economic calendar is unavailable or stale; news gate is fail-closed',
+      ]);
+    }
+
     const newsBlock = this.news.isBlocked(
       signal.symbol,
-      Date.now(),
+      newsNow,
       this.config.newsFilter?.blockMediumImpact ?? false,
     );
 
@@ -474,6 +483,7 @@ export class RiskManager {
 
   async refreshNews() {
     await this.news.refresh();
+    return this.news.isFresh();
   }
 
   getCircuitBreakerStatus() {

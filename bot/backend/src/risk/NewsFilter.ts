@@ -71,6 +71,7 @@ export class NewsFilter {
   private readonly CRITICAL_PRE  = 60 * 60_000;
   private readonly CRITICAL_POST = 60 * 60_000;
   private readonly FETCH_TTL     = 60 * 60_000; // re-fetch calendar every 1h
+  private readonly MAX_STALE      = 2 * 60 * 60_000;
 
   /**
    * Check whether trading a symbol is blocked due to upcoming/recent news.
@@ -80,12 +81,11 @@ export class NewsFilter {
     now    = Date.now(),
     blockMedium = false,
   ): { blocked: boolean; event?: NewsEvent } {
-    const sym       = symbol.toUpperCase();
+    const sym = symbol.toUpperCase();
     const currencies = this.getCurrencies(sym);
 
     for (const ev of this.events) {
-      const affectedCurrencies = this.getCurrencies(sym);
-      if (!affectedCurrencies.includes(ev.currency)) continue;
+      if (!currencies.includes(ev.currency)) continue;
 
       const isCritical = CRITICAL_KEYWORDS.some(k =>
         ev.title.toLowerCase().includes(k.toLowerCase()));
@@ -113,6 +113,14 @@ export class NewsFilter {
     return { blocked: false };
   }
 
+  isFresh(now = Date.now()): boolean {
+    return this.lastFetch > 0 && now - this.lastFetch <= this.MAX_STALE;
+  }
+
+  getLastFetchAt(): number {
+    return this.lastFetch;
+  }
+
   /** Fetch the economic calendar if stale. */
   async refresh(): Promise<void> {
     if (Date.now() - this.lastFetch < this.FETCH_TTL) return;
@@ -133,7 +141,7 @@ export class NewsFilter {
       this.lastFetch = Date.now();
       this.logger.info(`News calendar updated: ${this.events.length} events`);
     } catch (e: any) {
-      this.logger.warn(`News fetch failed: ${e.message} — using cached events`);
+      this.logger.warn(`News fetch failed: ${e.message} — cached calendar age=${this.lastFetch > 0 ? Math.round((Date.now() - this.lastFetch) / 60_000) + 'm' : 'unknown'}`);
     }
   }
 
