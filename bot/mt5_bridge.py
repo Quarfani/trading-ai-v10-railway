@@ -1210,7 +1210,7 @@ def positions():
 
 
 def summarize_position_deals(deals):
-    """Build authoritative close data from all deals belonging to one position."""
+    """Build authoritative cumulative realized data from one MT5 position."""
     if not deals:
         return None
 
@@ -1233,19 +1233,51 @@ def summarize_position_deals(deals):
             int_value(d, "ticket", 0),
         ),
     )
-    closing = [d for d in ordered if int_value(d, "entry", 0) in (1, 2, 3)]
+
+    opening = [
+        d for d in ordered
+        if int_value(d, "entry", 0) == 0
+    ]
+    closing = [
+        d for d in ordered
+        if int_value(d, "entry", 0) in (1, 2, 3)
+    ]
     if not closing:
         return None
 
+    opened_volume = sum(value(d, "volume") for d in opening)
+    closed_volume = sum(value(d, "volume") for d in closing)
+    remaining_volume = max(0.0, opened_volume - closed_volume)
+
     latest = closing[-1]
+
+    # Cumulative position-level realized result so far. This includes the
+    # opening deal's commission/swap/fee because those costs belong to the
+    # position and must be represented in the eventual net result.
     net_profit = sum(
         value(d, "profit") + value(d, "commission") +
         value(d, "swap") + value(d, "fee")
         for d in ordered
     )
-    comments = [str(getattr(d, "comment", "") or "").lower() for d in reversed(closing)]
-    matched_comment = next((c for c in comments if "sl" in c or "tp" in c), "")
-    close_reason = "SL" if "sl" in matched_comment else "TP" if "tp" in matched_comment else "manual"
+
+    comments = [
+        str(getattr(d, "comment", "") or "").lower()
+        for d in reversed(closing)
+    ]
+    matched_comment = next(
+        (c for c in comments if "sl" in c or "tp" in c),
+        "",
+    )
+    close_reason = (
+        "SL" if "sl" in matched_comment
+        else "TP" if "tp" in matched_comment
+        else "manual"
+    )
+
+    closed = (
+        opened_volume > 0 and
+        closed_volume >= opened_volume - max(1e-10, opened_volume * 1e-8)
+    )
 
     return {
         "close_price": value(latest, "price"),
@@ -1253,8 +1285,11 @@ def summarize_position_deals(deals):
         "close_reason": close_reason,
         "position_id": int_value(latest, "position_id"),
         "close_deal_ticket": int_value(latest, "ticket"),
+        "opened_volume": round(opened_volume, 8),
+        "closed_volume": round(closed_volume, 8),
+        "remaining_volume": round(remaining_volume, 8),
+        "closed": closed,
     }
-
 
 @app.route("/history", methods=["GET"])
 def history():
@@ -1281,7 +1316,7 @@ def history():
             summary = summarize_position_deals(deals)
             if not summary:
                 return jsonify({"deals": [], "count": len(deals), "closed": False})
-            return jsonify({"deals": [], "count": len(deals), "closed": True, **summary})
+            return jsonify({"deals": [], "count": len(deals), **summary})
 
         utcnow = datetime.now(timezone.utc)
         deals = mt5.history_deals_get(utcnow - timedelta(days=30), utcnow)
