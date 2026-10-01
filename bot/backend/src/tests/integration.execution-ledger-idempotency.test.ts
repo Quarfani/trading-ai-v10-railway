@@ -504,6 +504,45 @@ async function main() {
   assert(stateRow.status === "EXECUTED", "illegal transitions must preserve terminal EXECUTED state");
   stateDb.raw().close();
 
+  const sqlStateDb = new DatabaseManager(":memory:");
+  await sqlStateDb.initialize();
+  sqlStateDb.createExecutionLedger({
+    executionId: "sql-state-1",
+    operationKey: "sql-state-op",
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+  });
+  let invalidInsertBlocked = false;
+  try {
+    sqlStateDb.raw().prepare(
+      "INSERT INTO execution_ledger (executionId,operationKey,action,status,createdAt,updatedAt) VALUES (?,?,?,?,?,?)",
+    ).run("sql-state-bad", "sql-state-bad-op", "OPEN", "BROKEN", Date.now(), Date.now());
+  } catch {
+    invalidInsertBlocked = true;
+  }
+  assert(invalidInsertBlocked, "SQLite trigger must reject unknown execution states");
+
+  sqlStateDb.raw().prepare(
+    "UPDATE execution_ledger SET status='EXECUTED' WHERE executionId='sql-state-1'",
+  ).run();
+  let terminalRollbackBlocked = false;
+  try {
+    sqlStateDb.raw().prepare(
+      "UPDATE execution_ledger SET status='UNKNOWN' WHERE executionId='sql-state-1'",
+    ).run();
+  } catch {
+    terminalRollbackBlocked = true;
+  }
+  assert(terminalRollbackBlocked, "SQLite trigger must reject EXECUTED -> UNKNOWN");
+  assert(
+    sqlStateDb.getExecutionByOperationKey("sql-state-op").status === "EXECUTED",
+    "illegal SQL transition must preserve EXECUTED state",
+  );
+  sqlStateDb.raw().close();
+
   const corruptDb = new DatabaseManager(":memory:");
   await corruptDb.initialize();
 
