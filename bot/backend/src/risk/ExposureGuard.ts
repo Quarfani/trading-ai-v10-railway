@@ -38,6 +38,7 @@ function notional(
   prices: Record<string, number>,
   accountCurrency: string,
   requireBrokerContract = false,
+  requireMarkPrice = false,
 ): { ok: true; value: number } | { ok: false; reason: string } {
   const market = requireBrokerContract
     ? getBrokerMarketDefinition(position.symbol, position.timeframe ?? 'H1')
@@ -63,8 +64,19 @@ function notional(
     };
   }
 
+  const markPrice = requireMarkPrice
+    ? Number(prices[position.symbol])
+    : Number(prices[position.symbol] ?? position.entry);
+
+  if (!(markPrice > 0) || !Number.isFinite(markPrice)) {
+    return {
+      ok: false,
+      reason: `Current mark price unavailable for ${position.symbol}`,
+    };
+  }
+
   const value =
-    Number(position.entry) *
+    markPrice *
     Number(position.volume) *
     Number(market.economics.contractSize) *
     quoteToAccount;
@@ -113,7 +125,13 @@ export function checkExposureAndLeverage(
   let currentExposure = 0;
 
   for (const trade of openTrades) {
-    const result = notional(trade, prices, accountCurrency, requireBrokerContract);
+    const result = notional(
+      trade,
+      prices,
+      accountCurrency,
+      requireBrokerContract,
+      true,
+    );
     if (result.ok === false) {
       return {
         allowed: false,
@@ -124,7 +142,13 @@ export function checkExposureAndLeverage(
     currentExposure += result.value;
   }
 
-  const added = notional(newPosition, prices, accountCurrency, requireBrokerContract);
+  const added = notional(
+    newPosition,
+    prices,
+    accountCurrency,
+    requireBrokerContract,
+    false,
+  );
   if (added.ok === false) {
     return {
       allowed: false,
