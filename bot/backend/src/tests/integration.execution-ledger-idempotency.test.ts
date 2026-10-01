@@ -285,6 +285,44 @@ async function main() {
     modifyDb.raw().close();
   }
 
+  const partialRejectDb = new DatabaseManager(":memory:");
+  await partialRejectDb.initialize();
+  registerBrokerContract({
+    symbol: "EURUSD.a", baseAsset: "EUR", quoteCurrency: "USD", assetClass: "FOREX",
+    contractType: "CFD", venue: "MT5", contractSize: 100000, priceIncrement: 0.00001,
+    minVolume: 0.01, maxVolume: 100, volumeStep: 0.01, marginModel: "BROKER_DEFINED",
+    source: "partial-reject-test", observedAt: Date.now(), verified: true,
+  });
+  const partialRejectGateway = new ExecutionGateway(
+    { ...baseConfig("mt5"), symbols: ["EURUSD.a"] },
+    partialRejectDb,
+  );
+  const originalRejectPost = (axios as any).post;
+  (axios as any).post = async () => ({
+    data: { ok: false, remaining_volume: 0.06, profit: 3.75, error: "rejected" },
+  });
+  try {
+    const rejected = await partialRejectGateway.closePartial(
+      {
+        id: 912, ticket: 912, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+        volume: 0.10, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
+        openedAt: 1_800_000_000_012, source: "PARTIAL_REJECT_TEST",
+      } as any,
+      0.04,
+      1.11,
+      "PARTIAL",
+    );
+    assert(!rejected.ok, "MT5 partial close ok=false must fail the operation");
+    const rejectedLedger = partialRejectDb.raw()
+      .prepare("SELECT status FROM execution_ledger WHERE action='PARTIAL_CLOSE'")
+      .get() as any;
+    assert(rejectedLedger.status === "UNKNOWN", "MT5 partial close ok=false must remain UNKNOWN");
+  } finally {
+    (axios as any).post = originalRejectPost;
+    partialRejectDb.raw().close();
+    clearBrokerContracts();
+  }
+
   const resolveDb = new DatabaseManager(":memory:");
   await resolveDb.initialize();
   const created = resolveDb.createExecutionLedger({
