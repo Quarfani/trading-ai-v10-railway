@@ -16,7 +16,15 @@ import { marketRegimeDetector }         from '../core/MarketRegimeDetector';
 import { ConsensusOrchestrator }        from '../consensus/ConsensusOrchestrator';
 import { DatabaseManager }             from '../database/DatabaseManager';
 import { calculateATR }                from '../utils/ATR';
-import { COST_MODEL_VERSION, CostProfile, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
+import {
+  COST_MODEL_VERSION,
+  CostProfile,
+  calculateGrossPnlAccount,
+  estimateCosts,
+  estimateEntryCosts,
+  estimateExitCosts,
+  estimateHoldingCost,
+} from '../market/CostModel';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
 import { getMarketDefinition }         from '../market/MarketCatalog';
@@ -256,7 +264,8 @@ export class Backtester {
 
     let openPos: {
       side: Side; entry: number; sl: number; tp: number;
-      size: number; openedAt: number; openBar: number; source: string; entryQuoteToAccount: number;
+      size: number; openedAt: number; openBar: number; source: string;
+      entryQuoteToAccount: number; entryCostAccount: number;
     } | null = null;
 
     const recordEquity = (at: number, equity: number) => {
@@ -406,9 +415,24 @@ export class Backtester {
             entryQuoteToAccount,
           );
           if (size > 0) {
+            const entryCostAccount = estimateEntryCosts({
+              price: simulatedEntry,
+              volume: size,
+              contractSize: economics!.contractSize,
+              quoteToAccount: entryQuoteToAccount,
+            }, costProfile);
+
             openPos = {
-              side: sig.side, entry: simulatedEntry, sl: sig.sl, tp: sig.tp,
-              size, openedAt: cur.time, openBar: i, source: sig.source, entryQuoteToAccount,
+              side: sig.side,
+              entry: simulatedEntry,
+              sl: sig.sl,
+              tp: sig.tp,
+              size,
+              openedAt: cur.time,
+              openBar: i,
+              source: sig.source,
+              entryQuoteToAccount,
+              entryCostAccount,
             };
           }
         } catch (e) {
@@ -436,7 +460,7 @@ export class Backtester {
           quoteToAccount: markRate,
           side: openPos.side,
         });
-        const markCosts = estimateCosts({
+        const holdingCost = estimateHoldingCost({
           entryPrice: openPos.entry,
           exitPrice: cur.close,
           volume: openPos.size,
@@ -446,7 +470,23 @@ export class Backtester {
           exitQuoteToAccount: markRate,
           holdingDays: Math.max(0, (cur.time - openPos.openedAt) / (24 * 3_600_000)),
         }, costProfile);
-        recordEquity(cur.time, balance + markGross - markCosts.total);
+        const liquidationExitCost = estimateExitCosts({
+          price: cur.close,
+          volume: openPos.size,
+          contractSize: economics!.contractSize,
+          quoteToAccount: markRate,
+        }, costProfile);
+
+        // Balance does not include opening costs until the position settles.
+        // Mark-to-liquidation equity therefore deducts the one-time entry cost,
+        // accrued holding cost, and the current hypothetical exit cost exactly once.
+        const liquidationCosts =
+          openPos.entryCostAccount + holdingCost + liquidationExitCost;
+
+        recordEquity(
+          cur.time,
+          balance + markGross - liquidationCosts,
+        );
       } else {
         recordEquity(cur.time, balance);
       }
