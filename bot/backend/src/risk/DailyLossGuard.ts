@@ -35,22 +35,43 @@ export class DailyLossGuard {
     currentPrices?: Record<string, number>,
     currentEquity?: number,
   ): Promise<boolean> {
-    const stats       = this.db.getTodayStats();
+    const stats = this.db.getTodayStats();
     const realizedPnl = Number(stats?.pnl ?? 0);
-    const denominator = this.resolveDailyStartEquity(currentEquity);
 
-    const floatingPnl = this.calcFloating(currentPrices);
-    if (floatingPnl == null) {
-      this.logger.warn('Daily loss guard: floating P&L state unavailable — trading blocked');
-      return false;
-    }
-    const totalLoss   = realizedPnl + floatingPnl;
-    if (!(denominator > 0) || !Number.isFinite(denominator)) {
-      this.logger.warn('Daily loss guard: daily start equity unavailable — trading blocked');
-      return false;
+    let dailyLossNumerator: number;
+    let denominator: number;
+
+    if (
+      this.config.mode !== 'paper' &&
+      Number.isFinite(Number(currentEquity)) &&
+      Number(currentEquity) > 0
+    ) {
+      // Live venues already report equity including unrealized PnL. Compare
+      // today's current equity directly to the persisted start-of-day anchor
+      // to avoid double-counting realized PnL plus floating PnL from prior days.
+      denominator = this.resolveDailyStartEquity(Number(currentEquity));
+      if (!(denominator > 0) || !Number.isFinite(denominator)) {
+        this.logger.warn('Daily loss guard: daily start equity unavailable — trading blocked');
+        return false;
+      }
+      dailyLossNumerator = Number(currentEquity) - denominator;
+    } else {
+      // Paper balance does not include floating PnL, so retain the explicit
+      // realized + floating calculation there.
+      const floatingPnl = this.calcFloating(currentPrices);
+      if (floatingPnl == null) {
+        this.logger.warn('Daily loss guard: floating P&L state unavailable — trading blocked');
+        return false;
+      }
+      denominator = this.resolveDailyStartEquity(undefined);
+      if (!(denominator > 0) || !Number.isFinite(denominator)) {
+        this.logger.warn('Daily loss guard: daily start equity unavailable — trading blocked');
+        return false;
+      }
+      dailyLossNumerator = realizedPnl + floatingPnl;
     }
 
-    const lossPct     = -totalLoss / denominator;
+    const lossPct = -dailyLossNumerator / denominator;
 
     if (lossPct >= this.config.maxDailyLoss) {
       const today = new Date().toISOString().slice(0, 10);
