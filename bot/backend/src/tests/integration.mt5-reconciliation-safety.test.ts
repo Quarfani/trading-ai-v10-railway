@@ -50,6 +50,19 @@ async function main() {
 
     (axios as any).get = async () => ({
       data: {
+        closed: false,
+        remaining_volume: 0.6,
+        close_price: 1.105,
+        net_profit: 4.25,
+        close_reason: "manual",
+      },
+    });
+    const partialHistory = await (reconciler as any).getMT5History(77, false);
+    assert(partialHistory?.profit === 4.25, "partial history must expose cumulative realized PnL");
+    assert(partialHistory?.closed === false, "partial history must remain marked open");
+
+    (axios as any).get = async () => ({
+      data: {
         closed: true,
         remaining_volume: 0,
         close_price: 1.1000,
@@ -114,7 +127,7 @@ async function main() {
       db.raw().close();
     }
 
-    console.log("Result: 6 passed, 0 failed");
+    console.log("Result: 8 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
