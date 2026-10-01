@@ -28,6 +28,17 @@ export interface BrokerContractDefinition {
   maxVolume: number;
   volumeStep: number;
   marginModel: MarginModel;
+  tickSize?: number;
+  tickValue?: number;
+  tickValueLoss?: number;
+  tickValueProfit?: number;
+  volumeLimit?: number;
+  tradeMode?: number;
+  tradeExecutionMode?: number;
+  stopsLevel?: number;
+  freezeLevel?: number;
+  marginInitial?: number;
+  marginMaintenance?: number;
   leverage?: number;
   quoteCurrencyPerAccountCurrency?: number;
   source: string;
@@ -93,6 +104,30 @@ export function validateBrokerContract(
     errors.push('contract definition is not verified');
   }
 
+  const optionalPositive: Array<[string, number | undefined]> = [
+    ['tickSize', definition.tickSize],
+    ['tickValue', definition.tickValue],
+    ['tickValueLoss', definition.tickValueLoss],
+    ['tickValueProfit', definition.tickValueProfit],
+    ['volumeLimit', definition.volumeLimit],
+    ['stopsLevel', definition.stopsLevel],
+    ['freezeLevel', definition.freezeLevel],
+    ['marginInitial', definition.marginInitial],
+    ['marginMaintenance', definition.marginMaintenance],
+  ];
+  for (const [name, value] of optionalPositive) {
+    if (value != null && (!Number.isFinite(value) || value < 0)) {
+      errors.push(name + ' must be finite and >= 0');
+    }
+  }
+
+  if (definition.tradeMode != null && (!Number.isInteger(definition.tradeMode) || definition.tradeMode < 0 || definition.tradeMode > 4)) {
+    errors.push('tradeMode must be an integer between 0 and 4');
+  }
+  if (definition.tradeExecutionMode != null && (!Number.isInteger(definition.tradeExecutionMode) || definition.tradeExecutionMode < 0)) {
+    errors.push('tradeExecutionMode must be a non-negative integer');
+  }
+
   if (
     definition.leverage != null &&
     (!Number.isFinite(definition.leverage) || definition.leverage <= 0)
@@ -133,6 +168,17 @@ export function toMarketDefinition(
       maxVolume: definition.maxVolume,
       volumeStep: definition.volumeStep,
       marginModel: definition.marginModel,
+      tickSize: definition.tickSize,
+      tickValue: definition.tickValue,
+      tickValueLoss: definition.tickValueLoss,
+      tickValueProfit: definition.tickValueProfit,
+      volumeLimit: definition.volumeLimit,
+      tradeMode: definition.tradeMode,
+      tradeExecutionMode: definition.tradeExecutionMode,
+      stopsLevel: definition.stopsLevel,
+      freezeLevel: definition.freezeLevel,
+      marginInitial: definition.marginInitial,
+      marginMaintenance: definition.marginMaintenance,
     },
   };
 }

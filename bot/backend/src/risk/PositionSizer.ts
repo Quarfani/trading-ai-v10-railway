@@ -66,6 +66,20 @@ export class PositionSizer {
       );
       return 0;
     }
+
+    const tradeMode = market.economics.tradeMode;
+    if (
+      tradeMode === 0 ||
+      tradeMode === 3 ||
+      (side === 'BUY' && tradeMode === 2) ||
+      (side === 'SELL' && tradeMode === 1)
+    ) {
+      this.logger.warn(
+        '[' + symbol + '/' + timeframe + '] Broker trade mode=' +
+        String(tradeMode) + ' rejects ' + side + ' opening — sizing blocked',
+      );
+      return 0;
+    }
     const quoteToAccount = resolveQuoteToAccount(
       market.quoteCurrency,
       this.config.accountCurrency ?? 'USD',

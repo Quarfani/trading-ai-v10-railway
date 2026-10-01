@@ -57,6 +57,17 @@ export interface MarketEconomics {
   maxVolume: number;
   volumeStep: number;
   marginModel: MarginModel;
+  tickSize?: number;
+  tickValue?: number;
+  tickValueLoss?: number;
+  tickValueProfit?: number;
+  volumeLimit?: number;
+  tradeMode?: number;
+  tradeExecutionMode?: number;
+  stopsLevel?: number;
+  freezeLevel?: number;
+  marginInitial?: number;
+  marginMaintenance?: number;
 }
 
 export interface MarketDefinition {

@@ -20,6 +20,18 @@ export interface MT5ContractPayload {
   volume_max?: number;
   volume_step?: number;
   time?: number;
+  trade_calc_mode?: number;
+  trade_mode?: number;
+  trade_exemode?: number;
+  trade_tick_size?: number;
+  trade_tick_value?: number;
+  trade_tick_value_loss?: number;
+  trade_tick_value_profit?: number;
+  volume_limit?: number;
+  trade_stops_level?: number;
+  trade_freeze_level?: number;
+  margin_initial?: number;
+  margin_maintenance?: number;
 }
 
 export function inferMT5AssetClass(
@@ -95,6 +107,17 @@ export function buildMT5BrokerContractDefinition(
     observedAt: Number(data?.time) * 1000 || now,
     expiresAt: now + 24 * 3_600_000,
     verified: true,
+    tickSize: Number(data?.trade_tick_size) || undefined,
+    tickValue: Number(data?.trade_tick_value) || undefined,
+    tickValueLoss: Number(data?.trade_tick_value_loss) || undefined,
+    tickValueProfit: Number(data?.trade_tick_value_profit) || undefined,
+    volumeLimit: Number(data?.volume_limit) || undefined,
+    tradeMode: Number.isFinite(Number(data?.trade_mode)) ? Number(data?.trade_mode) : undefined,
+    tradeExecutionMode: Number.isFinite(Number(data?.trade_exemode)) ? Number(data?.trade_exemode) : undefined,
+    stopsLevel: Number(data?.trade_stops_level) || undefined,
+    freezeLevel: Number(data?.trade_freeze_level) || undefined,
+    marginInitial: Number(data?.margin_initial) || undefined,
+    marginMaintenance: Number(data?.margin_maintenance) || undefined,
   };
 }
 export class SymbolValidator {

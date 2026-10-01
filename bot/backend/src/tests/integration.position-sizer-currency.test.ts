@@ -155,8 +155,45 @@ async function main() {
     "PositionSizer must fail closed for broker-declared unsupported timeframe",
   );
 
+  registerBrokerContract({
+    symbol: "EURUSD",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:test-trade-mode",
+    observedAt: Date.now(),
+    verified: true,
+    tradeMode: 2,
+  });
+
+  const longOnlyBlocked = sizer.size(
+    "EURUSD", "BUY", 1.1000, 1.0950, 70, 10_000, 1.1100,
+    { EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    longOnlyBlocked === 0,
+    "BUY must be blocked when broker trade mode is SHORTONLY",
+  );
+
+  const shortAllowed = sizer.size(
+    "EURUSD", "SELL", 1.1000, 1.1050, 70, 10_000, 1.0900,
+    { EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    shortAllowed > 0,
+    "SELL must remain allowed when broker trade mode is SHORTONLY",
+  );
+
   clearBrokerContracts();
-  console.log("Result: 8 passed, 0 failed");
+  console.log("Result: 10 passed, 0 failed");
 }
 
 main().catch(error => {
