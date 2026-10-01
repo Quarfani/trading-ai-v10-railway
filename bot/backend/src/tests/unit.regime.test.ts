@@ -56,6 +56,17 @@ describe('MarketRegimeDetector', () => {
     expect(r2.updatedAt).toBeGreaterThan(0);
   });
 
+  test('supports uncached historical inference', () => {
+    const r1 = detector.detect('XAUUSD', 'H1', makeCandles(200, 'flat'));
+    const r2 = detector.detect(
+      'XAUUSD',
+      'H1',
+      makeCandles(200, 'down'),
+      { useCache: false },
+    );
+    expect(r2).not.toBe(r1);
+  });
+
   test('volumeMultiplier is within expected range', () => {
     expect(MarketRegimeDetector.volumeMultiplier('TRENDING')).toBe(1.0);
     expect(MarketRegimeDetector.volumeMultiplier('VOLATILE')).toBe(0.5);
