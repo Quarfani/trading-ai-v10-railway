@@ -64,7 +64,15 @@ export class ExecutionGateway {
     const existing = this.db.getExecutionByOperationKey(operationKey);
     if (existing) {
       if (existing.status === 'EXECUTED' && existing.resultJson) {
-        return { success: true, trade: JSON.parse(existing.resultJson) as Trade, retries: existing.retryCount ?? 0 };
+        try {
+          return { success: true, trade: JSON.parse(existing.resultJson) as Trade, retries: existing.retryCount ?? 0 };
+        } catch {
+          return {
+            success: false,
+            error: 'Persisted EXECUTED result is invalid; manual reconciliation is required and no broker request was sent',
+            retries: existing.retryCount ?? 0,
+          };
+        }
       }
       return {
         success: false,
@@ -82,11 +90,19 @@ export class ExecutionGateway {
     if (!claimed) {
       const raced = this.db.getExecutionByOperationKey(operationKey);
       if (raced?.status === 'EXECUTED' && raced.resultJson) {
-        return {
-          success: true,
-          trade: JSON.parse(raced.resultJson) as Trade,
-          retries: raced.retryCount ?? 0,
-        };
+        try {
+          return {
+            success: true,
+            trade: JSON.parse(raced.resultJson) as Trade,
+            retries: raced.retryCount ?? 0,
+          };
+        } catch {
+          return {
+            success: false,
+            error: 'Persisted racing EXECUTED result is invalid; manual reconciliation is required and no broker request was sent',
+            retries: raced.retryCount ?? 0,
+          };
+        }
       }
       return {
         success: false,
