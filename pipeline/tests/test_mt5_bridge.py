@@ -494,3 +494,9 @@ def test_idempotency_loader_rejects_infinite_timestamps(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "_IDEMPOTENCY_STATE_PATH", str(state))
     bridge._idempotency_load_disk()
     assert bridge._idempotency_lookup("infinite") is None
+
+def test_simulation_tick_helper_is_independent_of_flask_request():
+    bridge.BRIDGE_MODE = "simulation"
+    tick = bridge.simulation_tick("EURUSD")
+    assert tick["symbol"] == "EURUSD"
+    assert tick["ask"] > tick["bid"] > 0
