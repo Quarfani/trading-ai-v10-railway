@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current commit: 4e50d6ac3d07e7ee9ac5e3ee39ecf0c668ab3bd7
-Current message: fix: persist WFO Monte Carlo stress in evidence snapshots
+Current commit: cae00d90f9394d0e4ba8ed1185fbfc72745966ee
+Current message: fix: keep Monte Carlo policy backward compatible for existing callers
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -48,3 +48,5 @@ Wire Monte Carlo Stress metrics into typed StrategyEvidence/promotion policy, th
 
 ## STOP PROTOCOL
 Verify main SHA and CI; record blockers; update this file; keep the local AI_DEVELOPMENT_HANDOFF_CURRENT.md checkpoint; define one concrete NEXT TASK.
+- Typed StrategyEvidence now includes optional Monte Carlo stress evidence.
+- Monte Carlo promotion thresholds are configurable via EVIDENCE_* environment variables and backward-compatible by default.
