@@ -180,6 +180,77 @@ async function main() {
     clearBrokerContracts();
   }
 
+  const replayCloseDb = new DatabaseManager(":memory:");
+  await replayCloseDb.initialize();
+  registerBrokerContract({
+    symbol: "EURUSD.a", baseAsset: "EUR", quoteCurrency: "USD", assetClass: "FOREX",
+    contractType: "CFD", venue: "MT5", contractSize: 100000, priceIncrement: 0.00001,
+    minVolume: 0.01, maxVolume: 100, volumeStep: 0.01, marginModel: "BROKER_DEFINED",
+    source: "replay-result-test", observedAt: Date.now(), verified: true,
+  });
+  const replayCloseGateway = new ExecutionGateway(
+    { ...baseConfig("mt5"), symbols: ["EURUSD.a"] },
+    replayCloseDb,
+  );
+  const originalReplayPost = (axios as any).post;
+  let replayCloseCalls = 0;
+  (axios as any).post = async () => {
+    replayCloseCalls += 1;
+    return { data: { ok: true, profit: 17.25 } };
+  };
+  const replayCloseTrade = {
+    id: 910, ticket: 910, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+    volume: 0.01, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
+    openedAt: 1_800_000_000_010, source: "REPLAY_CLOSE_TEST",
+  } as any;
+  try {
+    const close1 = await replayCloseGateway.closeAtMarket(replayCloseTrade, 1.11, "MANUAL");
+    const close2 = await replayCloseGateway.closeAtMarket(replayCloseTrade, 1.11, "MANUAL");
+    assert(close1.ok && close2.ok, "successful close replay must remain successful");
+    assert(close1.profit === close2.profit, "close replay must return the same persisted profit");
+    assert(replayCloseCalls === 1, "close replay must not call the broker twice");
+  } finally {
+    (axios as any).post = originalReplayPost;
+    replayCloseDb.raw().close();
+    clearBrokerContracts();
+  }
+
+  const replayPartialDb = new DatabaseManager(":memory:");
+  await replayPartialDb.initialize();
+  registerBrokerContract({
+    symbol: "EURUSD.a", baseAsset: "EUR", quoteCurrency: "USD", assetClass: "FOREX",
+    contractType: "CFD", venue: "MT5", contractSize: 100000, priceIncrement: 0.00001,
+    minVolume: 0.01, maxVolume: 100, volumeStep: 0.01, marginModel: "BROKER_DEFINED",
+    source: "replay-partial-test", observedAt: Date.now(), verified: true,
+  });
+  const replayPartialGateway = new ExecutionGateway(
+    { ...baseConfig("mt5"), symbols: ["EURUSD.a"] },
+    replayPartialDb,
+  );
+  const originalPartialPost = (axios as any).post;
+  let partialCalls = 0;
+  (axios as any).post = async () => {
+    partialCalls += 1;
+    return { data: { ok: true, remaining_volume: 0.06, profit: 3.75 } };
+  };
+  const replayPartialTrade = {
+    id: 911, ticket: 911, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+    volume: 0.10, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
+    openedAt: 1_800_000_000_011, source: "REPLAY_PARTIAL_TEST",
+  } as any;
+  try {
+    const partial1 = await replayPartialGateway.closePartial(replayPartialTrade, 0.04, 1.11, "PARTIAL");
+    const partial2 = await replayPartialGateway.closePartial(replayPartialTrade, 0.04, 1.11, "PARTIAL");
+    assert(partial1.ok && partial2.ok, "successful partial-close replay must remain successful");
+    assert(partial1.profit === 3.75 && partial2.profit === 3.75, "partial replay must return persisted profit");
+    assert(partial1.remainingVolume === 0.06 && partial2.remainingVolume === 0.06, "partial replay must return persisted remaining volume");
+    assert(partialCalls === 1, "partial replay must not call the broker twice");
+  } finally {
+    (axios as any).post = originalPartialPost;
+    replayPartialDb.raw().close();
+    clearBrokerContracts();
+  }
+
   const modifyDb = new DatabaseManager(":memory:");
   await modifyDb.initialize();
   const modifyGateway = new ExecutionGateway(baseConfig("mt5"), modifyDb);
