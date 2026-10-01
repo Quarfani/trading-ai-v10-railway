@@ -543,12 +543,9 @@ export class ExecutionGateway {
 
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
     if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
-    if (t.id) {
-      const lockUntil = this.partialLocks.get(t.id) ?? 0;
-      if (Date.now() < lockUntil) return { ok: false, profit: 0, remainingVolume: t.volume };
-      this.partialLocks.set(t.id, Date.now() + 120_000);
-      setTimeout(() => this.partialLocks.delete(t.id!), 125_000).unref?.();
-    }
+
+    // A replay of the same operation is safe and must return the persisted
+    // result before the short-lived in-process lock can reject it.
     const key = this.stableKey('PARTIAL_CLOSE', { id: t.id, ticket: t.ticket, symbol: t.symbol, volume, exitPrice, reason });
     const op = this.beginDestructive(key, 'PARTIAL_CLOSE', t, { volume, exitPrice, reason });
     if (op.existing) {
@@ -570,6 +567,12 @@ export class ExecutionGateway {
       }
     }
 
+    if (t.id) {
+      const lockUntil = this.partialLocks.get(t.id) ?? 0;
+      if (Date.now() < lockUntil) return { ok: false, profit: 0, remainingVolume: t.volume };
+      this.partialLocks.set(t.id, Date.now() + 120_000);
+      setTimeout(() => this.partialLocks.delete(t.id!), 125_000).unref?.();
+    }
     try {
       if (this.config.mode === 'paper') {
         if (!t.ticket) throw new Error('Paper trade has no ticket');
