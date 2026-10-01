@@ -11,10 +11,10 @@ function assert(condition: unknown, message: string): asserts condition {
 function baseConfig(mode: "paper" | "mt5"): SystemConfig {
   return {
     mode, dataSource: mode === "mt5" ? "mt5" : "binance",
-    accountCurrency: "USD", accountBalance: 10_000, accountName: "ledger-test",
+    accountCurrency: "EUR", accountBalance: 10_000, accountName: "ledger-test",
     riskPerTrade: 0.01, maxOpenTrades: 5, minConfidence: 0.55, maxDailyLoss: 0.02,
     dailyProfitTarget: 0.03, consecutiveLossLimit: 3, cooldownMinutes: 60, mlRequired: false,
-    symbols: ["BTCUSDT"], timeframes: ["H1"], scanInterval: 60_000, dbPath: ":memory:",
+    symbols: ["EURUSD"], timeframes: ["H1"], scanInterval: 60_000, dbPath: ":memory:",
     mt5: { login: 1, password: "x", server: "x", bridgeUrl: "http://mt5.test", bridgeApiKey: "secret" },
     binance: { apiKey: "", secret: "", env: "testnet", futures: true },
     telegram: { token: "", chatId: "" },
@@ -22,10 +22,10 @@ function baseConfig(mode: "paper" | "mt5"): SystemConfig {
   } as SystemConfig;
 }
 
-function signal(ts: number): Signal {
+function signal(ts: number, symbol = "EURUSD"): Signal {
   return {
-    symbol: "BTCUSDT", side: "BUY", price: 100, confidence: 0.8,
-    sl: 90, tp: 120, source: "LEDGER_TEST", reason: "idempotency",
+    symbol, side: "BUY", price: 1.1000, confidence: 0.8,
+    sl: 1.0900, tp: 1.1200, source: "LEDGER_TEST", reason: "idempotency",
     timestamp: ts, timeframe: "H1",
   };
 }
@@ -37,9 +37,14 @@ async function main() {
 
   // Successful paper replay must return the exact persisted execution result
   // without creating a second trade/ledger row.
-  const paper = new ExecutionGateway(baseConfig("paper"), db);
+  let rateCalls = 0;
+  const paperRates = {
+    getRate: async () => (++rateCalls === 1 ? 0.90 : 0.95),
+  } as any;
+  const paper = new ExecutionGateway(baseConfig("paper"), db, paperRates);
   const first = await paper.execute(signal(1_800_000_000_001), 0.01, "H1");
   assert(first.success && first.trade, "first paper execution must succeed");
+  assert(first.trade.entryQuoteToAccount === 0.90, "paper execution must persist entry FX rate");
   const second = await paper.execute(signal(1_800_000_000_001), 0.01, "H1");
   assert(second.success && second.trade, "executed operation must be replayable");
   assert(second.trade.ticket === first.trade.ticket, "replay must return the same ticket");
@@ -59,7 +64,7 @@ async function main() {
   (axios as any).post = async () => { postCalls += 1; throw new Error("simulated transport failure"); };
 
   try {
-    const liveSignal = { ...signal(1_800_000_000_002), symbol: "EURUSD.a" };
+    const liveSignal = signal(1_800_000_000_002, "EURUSD.a");
     const failed = await mt5.execute(liveSignal, 0.01, "H1");
     assert(!failed.success, "simulated MT5 failure must fail execution");
     assert(postCalls === 1, "first UNKNOWN operation must send exactly once");
@@ -75,7 +80,7 @@ async function main() {
     clearBrokerContracts();
   }
 
-  console.log("Result: 9 passed, 0 failed");
+  console.log("Result: 10 passed, 0 failed");
 }
 
 main().catch(error => {
