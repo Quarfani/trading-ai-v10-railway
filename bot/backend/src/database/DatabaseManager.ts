@@ -43,4 +43,6 @@ export class DatabaseManager {
       t.status, t.openedAt, t.source,
       t.account ?? 'default', t.commission ?? 0, t.realizedProfit ?? 0,
       t.entryQuoteToAccount ?? null, t.exitQuoteToAccount ?? null,
-    );    return Number(r.lastInsertRowid);
+    );
+    return Number(r.lastInsertRowid);
+  }
