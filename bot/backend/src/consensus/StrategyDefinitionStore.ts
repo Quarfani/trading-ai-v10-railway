@@ -210,14 +210,7 @@ export class StrategyDefinitionStore {
             definition.strategyId + '/' + symbol + '/' + timeframe +
             ': ' + snapshotPromotion.reasons.join('; '),
           );
-        }
-          throw new Error(
-            '[StrategyDefinitionStore] evidence snapshot version mismatch for ' +
-            definition.strategyId + '/' + symbol + '/' + timeframe,
-          );
-        }
-
-        const createdAt = snapshot.createdAt ?? 0;
+        }        const createdAt = snapshot.createdAt ?? 0;
         if (
           !Number.isFinite(createdAt) ||
           Date.now() - createdAt > this.evidencePolicy.maxAgeMs
