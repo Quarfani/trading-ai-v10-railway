@@ -164,6 +164,45 @@ async function main() {
     assert(partialTrade.realizedProfit === 4.25, 'authoritative MT5 partial close must preserve cumulative realized PnL');
     mt5PartialDb.raw().close();
 
+    const mt5PartialMismatchDb = await newDb();
+    const mismatchTradeId = mt5PartialMismatchDb.insertTrade({
+      ticket: 80, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 1.0,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5PartialMismatchDb.createExecutionLedger({
+      executionId: 'mt5-partial-mismatch', operationKey: 'mt5-partial-mismatch-op',
+      action: 'PARTIAL_CLOSE', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.4,
+      request: { tradeId: mismatchTradeId, volume: 0.4, exitPrice: 1.105, reason: 'PARTIAL' },
+    });
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) {
+        return { data: { ok: true, positions: [{
+          ticket: 80, symbol: 'EURUSD', type: 'BUY', volume: 0.6, sl: 1.09, tp: 1.12,
+        }] } };
+      }
+      if (url.endsWith('/history')) {
+        return { data: {
+          closed: false, remaining_volume: 0.7, close_price: 1.105,
+          net_profit: 4.25, close_reason: 'manual', close_deal_ticket: 12346,
+        } };
+      }
+      throw new Error('unexpected URL');
+    };
+    let mismatchBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5PartialMismatchDb, new TelegramBot(mt5Cfg)).run();
+    } catch { mismatchBlocked = true; }
+    assert(mismatchBlocked, 'conflicting MT5 partial position/history state must block startup');
+    assert(
+      mt5PartialMismatchDb.getOpenTrades()[0].volume === 1.0,
+      'conflicting MT5 partial state must not mutate internal volume',
+    );
+    assert(
+      mt5PartialMismatchDb.getExecutionByOperationKey('mt5-partial-mismatch-op').status === 'UNKNOWN',
+      'conflicting MT5 partial state must remain unresolved',
+    );
+    mt5PartialMismatchDb.raw().close();
+
     const mt5DuplicateDb = await newDb();
     const duplicateTradeId = mt5DuplicateDb.insertTrade({
       ticket: 78, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
@@ -244,7 +283,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 15 passed, 0 failed');
+  console.log('Result: 19 passed, 0 failed');
 }
 
 main().catch(error => {
