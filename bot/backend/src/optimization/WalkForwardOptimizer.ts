@@ -23,12 +23,10 @@
  *   - rollingWindow (10 → 50) : نافذة الـ Rolling metrics
  * ══════════════════════════════════════════════════════════════════════════
  */
-import { Candle }          from '../types/trading.types';
+import { Candle, Timeframe } from '../types/trading.types';
 import { Backtester }      from '../backtest/Backtester';
 import { DatabaseManager } from '../database/DatabaseManager';
 import { Logger }          from '../utils/Logger';
-import * as os             from 'os';
-import * as path           from 'path';
 
 export interface OptimParams {
   atrMult:       number;
@@ -46,6 +44,9 @@ export interface WalkForwardWindow {
   trainMetrics:{ winRate: number; sharpe: number; profitFactor: number; totalReturn: number };
   testMetrics: { winRate: number; sharpe: number; profitFactor: number; totalReturn: number };
   oos_valid:   boolean; // out-of-sample passed minimum threshold
+  leakagePassed: boolean;
+  purgedCount: number;
+  embargoMs: number;
 }
 
 export interface WalkForwardResult {
@@ -58,6 +59,8 @@ export interface WalkForwardResult {
   recommendation: 'TRADE' | 'CAUTION' | 'DO_NOT_TRADE';
   reason:         string;
   runAt:          number;
+  valid:           boolean;
+  validationReasons: string[];
 }
 
 // Parameter search grid
@@ -74,42 +77,84 @@ export class WalkForwardOptimizer {
 
   constructor(private dbPath: string) {}
 
-  async run(symbol: string, allCandles: Candle[]): Promise<WalkForwardResult> {
+  async run(symbol: string, allCandles: Candle[], timeframe: Timeframe = 'H1', historicalCurrencyRates: HistoricalRateSeries = {}): Promise<WalkForwardResult> {
     this.logger.info(`Walk-Forward: ${symbol} | ${allCandles.length} candles`);
 
     if (allCandles.length < TRAIN_BARS + TEST_BARS) {
       return this.insufficient(symbol);
     }
 
+    const observations = allCandles.map((candle) => ({
+      startTime: candle.time,
+      endTime: candle.time + (TIMEFRAME_MS[timeframe] ?? TIMEFRAME_MS.H1),
+      value: candle,
+    }));
+
+    const planned = buildPurgedWalkForwardFolds(observations, {
+      trainSize: TRAIN_BARS,
+      validationSize: TEST_BARS,
+      stepSize: STEP_BARS,
+      purgeMs: TIMEFRAME_MS[timeframe] ?? TIMEFRAME_MS.H1,
+      embargoMs: TIMEFRAME_MS[timeframe] ?? TIMEFRAME_MS.H1,
+      minTrainSize: Math.max(1, TRAIN_BARS - 2),
+    });
+
+    if (!planned.passed) {
+      return this.insufficient(
+        symbol,
+        'Purged/embargoed WFO planning failed: ' + planned.reason,
+      );
+    }
+
     const windows: WalkForwardWindow[] = [];
-    let slideStart = 0;
 
-    while (slideStart + TRAIN_BARS + TEST_BARS <= allCandles.length) {
-      const trainCandles = allCandles.slice(slideStart, slideStart + TRAIN_BARS);
-      const testCandles  = allCandles.slice(slideStart + TRAIN_BARS, slideStart + TRAIN_BARS + TEST_BARS);
+    for (const fold of planned.folds) {
+      const trainCandles = fold.train.map(item => item.value);
+      const testCandles = fold.validation.map(item => item.value);
+      this.logger.info(
+        `  Window ${windows.length + 1}: train=${trainCandles.length} test=${testCandles.length} purge=${fold.purgedCount} embargoMs=${fold.embargoMs}`,
+      );
 
-      this.logger.info(`  Window ${windows.length + 1}: train[${slideStart}..${slideStart + TRAIN_BARS}] test[${slideStart + TRAIN_BARS}..${slideStart + TRAIN_BARS + TEST_BARS}]`);
+      const { bestParams, bestMetrics } = await this.optimizeOnTrain(
+        symbol,
+        trainCandles,
+        timeframe,
+        historicalCurrencyRates,
+      );
+      const testMetrics = await this.evaluateOnTest(
+        symbol,
+        testCandles,
+        bestParams,
+        timeframe,
+        historicalCurrencyRates,
+      );
 
-      const { bestParams, bestMetrics } = await this.optimizeOnTrain(symbol, trainCandles);
-      const testMetrics  = await this.evaluateOnTest(symbol, testCandles, bestParams);
+      const leakagePassed = !fold.train.some(
+        observation => observation.endTime >= fold.validationStart,
+      );
 
-      const oos_valid = testMetrics.winRate >= 0.45 && testMetrics.sharpe >= 0.3;
+      const oos_valid =
+        testMetrics.valid &&
+        leakagePassed &&
+        testMetrics.winRate >= 0.45 &&
+        testMetrics.sharpe >= 0.3;
 
       windows.push({
-        trainStart:  allCandles[slideStart].time,
-        trainEnd:    allCandles[slideStart + TRAIN_BARS - 1].time,
-        testStart:   allCandles[slideStart + TRAIN_BARS].time,
-        testEnd:     allCandles[slideStart + TRAIN_BARS + TEST_BARS - 1].time,
+        trainStart: fold.train[0].startTime,
+        trainEnd: fold.train[fold.train.length - 1].endTime,
+        testStart: fold.validationStart,
+        testEnd: fold.validationEnd,
         bestParams,
         trainMetrics: bestMetrics,
         testMetrics,
         oos_valid,
+        leakagePassed,
+        purgedCount: fold.purgedCount,
+        embargoMs: fold.embargoMs,
       });
-
-      slideStart += STEP_BARS;
     }
 
-    return this.buildResult(symbol, windows);
+    return this.buildResult(symbol, windows, planned.passed, planned.reason);
   }
 
   // ─── Grid search on training data ────────────────────────────────────────
@@ -159,13 +204,23 @@ export class WalkForwardOptimizer {
       process.env[`SPEC_${symbol}_ATR_MULT`] = String(params.atrMult);
       process.env[`SPEC_${symbol}_TP_RATIO`] = String(params.tpRatio);
 
-      const tmpDb = new (await import('../database/DatabaseManager')).DatabaseManager(
-        path.join(os.tmpdir(), `wfo_${Date.now()}_${Math.random().toString(36).slice(2)}.db`)
+      const bt = new Backtester({
+        mode: 'paper',
+        accountCurrency: 'USD',
+        accountBalance: 10_000,
+        minConfidence: params.minConfidence,
+      } as any);
+      const res = await bt.run(
+        symbol,
+        candles,
+        10_000,
+        timeframe,
+        historicalCurrencyRates,
       );
-      await tmpDb.initialize();
 
-      const bt  = new Backtester({ minConfidence: params.minConfidence } as any);
-      const res = await bt.run(symbol, candles, 10_000);
+      if (!res.valid) {
+        return { winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false };
+      }
 
       // Restore env
       if (originalEnv.atrMult !== undefined) process.env[`SPEC_${symbol}_ATR_MULT`] = originalEnv.atrMult;
@@ -179,21 +234,26 @@ export class WalkForwardOptimizer {
         profitFactor: res.profitFactor,
         totalReturn:  res.totalReturn,
         maxDD:        res.maxDrawdownPct / 100,
+        valid:        true,
       };
     } catch {
-      return { winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1 };
+      return { winRate: 0, sharpe: 0, profitFactor: 0, totalReturn: 0, maxDD: 1, valid: false };
     }
   }
 
   private async evaluateOnTest(
-    symbol: string, candles: Candle[], params: OptimParams
+    symbol: string,
+    candles: Candle[],
+    params: OptimParams,
+    timeframe: Timeframe,
+    historicalCurrencyRates: HistoricalRateSeries,
   ): Promise<any> {
-    return this.quickBacktest(symbol, candles, params);
+    return this.quickBacktest(symbol, candles, params, timeframe, historicalCurrencyRates);
   }
 
   // ─── Build final result ───────────────────────────────────────────────────
 
-  private buildResult(symbol: string, windows: WalkForwardWindow[]): WalkForwardResult {
+  private buildResult(symbol: string, windows: WalkForwardWindow[], valid = true, validationReason = ''): WalkForwardResult {
     if (!windows.length) return this.insufficient(symbol);
 
     const validWindows = windows.filter(w => w.oos_valid);
@@ -228,17 +288,19 @@ export class WalkForwardOptimizer {
 
     this.logger.info(`WFO ${symbol}: ${recommendation} | OOS WR=${(oos_winRate*100).toFixed(1)}% Sharpe=${oos_sharpe.toFixed(2)}`);
 
-    return { symbol, windows, finalParams, oos_winRate, oos_sharpe, oos_profit, recommendation, reason, runAt: Date.now() };
+    return { symbol, windows, finalParams, oos_winRate, oos_sharpe, oos_profit, recommendation, reason, runAt: Date.now(), valid, validationReasons: validationReason ? [validationReason] : [] };
   }
 
-  private insufficient(symbol: string): WalkForwardResult {
+  private insufficient(symbol: string, reason = 'Insufficient candle data for walk-forward optimization'): WalkForwardResult {
     return {
       symbol, windows: [],
       finalParams: { atrMult: 1.5, tpRatio: 2.0, minConfidence: 0.60, rollingWindow: 30 },
       oos_winRate: 0, oos_sharpe: 0, oos_profit: 0,
       recommendation: 'CAUTION',
-      reason: 'Insufficient candle data for walk-forward optimization',
+      reason,
       runAt: Date.now(),
+      valid: false,
+      validationReasons: [reason],
     };
   }
 
