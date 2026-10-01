@@ -237,6 +237,45 @@ export class ExecutionGateway {
     }
   }
 
+  private async convertBrokerProfitToAccount(
+    profit: number,
+    profitCurrency: string | null,
+  ): Promise<number> {
+    if (!Number.isFinite(profit)) {
+      throw new Error('Broker realized PnL is not finite');
+    }
+
+    const accountCurrency = (
+      this.config.accountCurrency ?? 'USD'
+    ).trim().toUpperCase();
+    const currency = (profitCurrency ?? '').trim().toUpperCase();
+    if (!currency || currency === accountCurrency) return profit;
+
+    if (
+      accountCurrency === 'USD' &&
+      ['USDT', 'USDC', 'BUSD'].includes(currency)
+    ) {
+      return profit;
+    }
+
+    const rate = await this.currencyRates?.getRate(currency);
+    if (
+      rate == null ||
+      !(rate > 0) ||
+      !Number.isFinite(rate)
+    ) {
+      throw new Error(
+        `Broker PnL conversion unavailable: ${currency}->${accountCurrency}`,
+      );
+    }
+
+    const converted = profit * rate;
+    if (!Number.isFinite(converted)) {
+      throw new Error('Converted broker PnL is not finite');
+    }
+    return converted;
+  }
+
   private async closeBrokerTrade(
     t: Trade,
     operationKey: string,
@@ -270,7 +309,13 @@ export class ExecutionGateway {
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
-      return { realizedProfit: result.realizedProfit };
+      const realizedProfit = result.realizedProfit == null
+        ? null
+        : await this.convertBrokerProfitToAccount(
+            result.realizedProfit,
+            result.realizedProfitCurrency,
+          );
+      return { realizedProfit };
     }
 
     throw new Error('Paper close must use closeAtMarket');
