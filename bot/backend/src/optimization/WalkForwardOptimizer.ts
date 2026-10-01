@@ -273,6 +273,8 @@ export class WalkForwardOptimizer {
         profitFactor: res.profitFactor,
         totalReturn: res.totalReturn,
         maxDD: res.maxDrawdownPct / 100,
+        totalTrades: res.totalTrades,
+        totalCost: res.totalCost,
         valid: true,
       };
     } catch {
