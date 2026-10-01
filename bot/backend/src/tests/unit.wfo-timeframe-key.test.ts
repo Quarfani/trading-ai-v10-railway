@@ -5,6 +5,7 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+async function main() {
 const db = new DatabaseManager(':memory:');
 await db.initialize();
 
@@ -27,3 +28,6 @@ assert(wfo.loadParams(db, 'EURUSD', 'H1')?.atrMult === 1.2, 'H1 params must be i
 assert(wfo.loadParams(db, 'EURUSD', 'M5')?.atrMult === 2.0, 'M5 params must be isolated');
 
 console.log('Result: 4 passed, 0 failed');
+}
+
+main().catch(error => { console.error(error); process.exitCode = 1; });
