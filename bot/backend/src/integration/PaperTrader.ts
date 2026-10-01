@@ -129,6 +129,12 @@ export class PaperTrader {
     const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount,side:t.side});
     const profile=getCostProfile(t.symbol);
+    const exitCosts=estimateExitCosts({
+      price:fill,
+      volume:t.volume,
+      contractSize:economics.contractSize,
+      quoteToAccount,
+    },profile);
     const entryRate=t.entryQuoteToAccount ?? 1;
     const holdingCost=estimateHoldingCost({
       entryPrice:t.entry,
