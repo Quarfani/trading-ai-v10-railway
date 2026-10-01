@@ -316,6 +316,7 @@ export class RiskManager {
       signal.symbol,
       ticker.bid,
       ticker.ask,
+      signal.timeframe ?? 'H1',
     );
 
     if (!sc.ok) {

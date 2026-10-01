@@ -1,10 +1,11 @@
 import { getMarketDefinition } from '../market/MarketCatalog';
-import { getSymbolSpec } from '../config/symbolConfig';
+import { getSymbolSpec, hasExplicitSpreadPolicy } from '../config/symbolConfig';
+import { Timeframe } from '../market/market.types';
 
 
 export class SpreadFilter {
   /** Returns true if spread is acceptable. */
-  check(symbol: string, bid: number, ask: number): { ok: boolean; spreadPips: number } {
+  check(symbol: string, bid: number, ask: number, timeframe: Timeframe = 'H1'): { ok: boolean; spreadPips: number } {
     const market = getMarketDefinition(symbol);
     if (!market || !(market.economics.priceIncrement > 0)) {
       return { ok: false, spreadPips: Infinity };
@@ -13,7 +14,10 @@ export class SpreadFilter {
     // Spread threshold remains a strategy/config policy, but the pip/point
     // conversion is always broker/canonical-market aware.
     const policySymbol = market.symbol;
-    const policy = getSymbolSpec(policySymbol);
+    if (!hasExplicitSpreadPolicy(policySymbol, timeframe)) {
+      return { ok: false, spreadPips: Infinity };
+    }
+    const policy = getSymbolSpec(policySymbol, timeframe);
     const spreadPips = Math.abs(ask - bid) / market.economics.priceIncrement;
     return { ok: spreadPips <= policy.spreadMaxPips, spreadPips };
   }

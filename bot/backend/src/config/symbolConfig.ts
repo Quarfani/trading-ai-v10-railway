@@ -127,6 +127,16 @@ export function getBaseSymbolSpec(symbol: string): SymbolSpec {
   return base;
 }
 
+export function hasExplicitSpreadPolicy(symbol: string, timeframe: Timeframe = 'H1'): boolean {
+  const normalized = symbol.trim().toUpperCase();
+  if (isConfiguredSymbol(normalized)) return true;
+
+  return (
+    process.env[`SPEC_${normalized}_${timeframe}_SPREAD_MAX_PIPS`] != null ||
+    process.env[`SPEC_${normalized}_SPREAD_MAX_PIPS`] != null
+  );
+}
+
 export function getSymbolSpec(symbol: string, timeframe: Timeframe = 'H1'): SymbolSpec {
   const base = getBaseSymbolSpec(symbol);
   return { ...base, ...envOverride(symbol.toUpperCase(), timeframe) };
