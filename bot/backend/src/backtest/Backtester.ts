@@ -20,6 +20,8 @@ import { getSymbolSpec }               from '../config/symbolConfig';
 import { COST_MODEL_VERSION, calculateGrossPnlAccount, estimateCosts } from '../market/CostModel';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { getCostProfile }              from '../market/CostProfiles';
+import { getMarketDefinition }         from '../market/MarketCatalog';
+import { HistoricalRateSeries, resolveHistoricalQuoteToAccount } from '../market/HistoricalCurrencySeries';
 import { Logger }                      from '../utils/Logger';
 import * as path                       from 'path';
 import * as fs                         from 'fs';
@@ -45,6 +47,7 @@ export interface BacktestResult {
   sharpeRatio: number; sortinoRatio: number; calmarRatio: number;
   maxConsecWins: number; maxConsecLosses: number;
   totalCommission: number; totalSpread: number; totalCost: number; costModelVersion: string;
+  valid: boolean; blockedReason?: string;
   simulationErrors: number;
   trades: BacktestTrade[]; equityCurve: Array<{ t: number; equity: number }>;
   monthlyBreakdown: MonthlyBreakdown[];
@@ -84,7 +87,7 @@ export class Backtester {
 
   constructor(private config: SystemConfig) {}
 
-  async run(symbol: string, candles: Candle[], startBalance = 10_000, timeframe: Timeframe = 'H1'): Promise<BacktestResult> {
+  async run(symbol: string, candles: Candle[], startBalance = 10_000, timeframe: Timeframe = 'H1', historicalCurrencyRates: HistoricalRateSeries = {}): Promise<BacktestResult> {
     const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}.db`);
     const db    = new DatabaseManager(tmpDb);
     await db.initialize();
@@ -98,6 +101,13 @@ export class Backtester {
     marketRegimeDetector.invalidate(symbol);
     const spec = getSymbolSpec(symbol);
     const costProfile = getCostProfile(symbol);
+    const market = getMarketDefinition(symbol);
+    const accountCurrency = (this.config.accountCurrency ?? 'USD').toUpperCase();
+    const quoteCurrency = market?.quoteCurrency ?? 'USD';
+    let valid = true;
+    let blockedReason: string | undefined;
+    const conversionAt = (time: number): number | null =>
+      resolveHistoricalQuoteToAccount(quoteCurrency, accountCurrency, time, historicalCurrencyRates);
 
     const trades: BacktestTrade[]                    = [];
     const equityCurve: Array<{ t: number; equity: number }> = [];
@@ -111,7 +121,7 @@ export class Backtester {
 
     let openPos: {
       side: Side; entry: number; sl: number; tp: number;
-      size: number; openedAt: number; openBar: number; source: string;
+      size: number; openedAt: number; openBar: number; source: string; entryQuoteToAccount: number;
     } | null = null;
 
     const WARMUP = 250;
@@ -131,12 +141,19 @@ export class Backtester {
           const exitPrice  = hitSL ? openPos.sl : hitTP ? openPos.tp : cur.close;
           const exitReason = hitSL ? 'SL' : hitTP ? 'TP' : 'TIMEOUT';
 
+          const exitQuoteToAccount = conversionAt(cur.time);
+          if (exitQuoteToAccount == null) {
+            valid = false;
+            blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+            break;
+          }
+
           const rawPnl = calculateGrossPnlAccount({
             entryPrice: openPos.entry,
             exitPrice,
             volume: openPos.size,
             contractSize: spec.contractSize,
-            quoteToAccount: 1,
+            quoteToAccount: exitQuoteToAccount,
             side: openPos.side,
           });
 
@@ -145,7 +162,9 @@ export class Backtester {
             exitPrice,
             volume: openPos.size,
             contractSize: spec.contractSize,
-            quoteToAccount: 1,
+            quoteToAccount: exitQuoteToAccount,
+            entryQuoteToAccount: openPos.entryQuoteToAccount,
+            exitQuoteToAccount,
           }, costProfile);
 
           const pnl = rawPnl - costs.total;
@@ -184,6 +203,13 @@ export class Backtester {
       // ── Signal generation ─────────────────────────────────────────────
       if (!openPos && i % 4 === 0) {
         try {
+          const entryQuoteToAccount = conversionAt(cur.time);
+          if (entryQuoteToAccount == null) {
+            valid = false;
+            blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+            break;
+          }
+
           const regime = marketRegimeDetector.detect(symbol, timeframe, slice.slice(-100));
           if (regime.regime === 'VOLATILE') continue;
 
@@ -198,13 +224,13 @@ export class Backtester {
           const atr = calculateATR(slice.slice(-50), 14);
           if (!atr) continue;
 
-          const riskPerUnit=Math.abs(sig.price-sig.sl)*spec.contractSize;
+          const riskPerUnit=Math.abs(sig.price-sig.sl)*spec.contractSize*entryQuoteToAccount;
           const rawSize=riskPerUnit>0?(balance*0.01)/riskPerUnit:0;
           const size=Math.min(spec.maxVolume,Math.floor(rawSize/spec.volumeStep)*spec.volumeStep);
           if (size>=spec.minVolume) {
             openPos = {
               side: sig.side, entry: cur.close, sl: sig.sl, tp: sig.tp,
-              size, openedAt: cur.time, openBar: i, source: sig.source,
+              size, openedAt: cur.time, openBar: i, source: sig.source, entryQuoteToAccount,
             };
           }
         } catch (e) {
@@ -218,7 +244,7 @@ export class Backtester {
 
     return this.buildResult(
       symbol, timeframe, startBalance, balance, trades, equityCurve,
-      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost,
+      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost, valid, blockedReason,
     );
   }
 
@@ -228,6 +254,7 @@ export class Backtester {
     monthlyBreakdown: MonthlyBreakdown[],
     maxDDPct: number, maxDDUsd: number,
     totalCommission: number, totalSpread: number, simulationErrors: number, totalCost: number,
+    valid = true, blockedReason?: string,
   ): BacktestResult {
     const wins   = trades.filter(t => t.pnl > 0);
     const losses = trades.filter(t => t.pnl <= 0);
@@ -285,6 +312,8 @@ export class Backtester {
       totalSpread:     +totalSpread.toFixed(2),
       totalCost:       +totalCost.toFixed(2),
       costModelVersion: COST_MODEL_VERSION,
+      valid,
+      blockedReason,
       trades,
       equityCurve,
       monthlyBreakdown,
