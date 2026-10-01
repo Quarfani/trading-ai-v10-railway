@@ -398,7 +398,7 @@ export class WalkForwardOptimizer {
       symbol, windows: [],
       finalParams: { atrMult: 1.5, tpRatio: 2.0, minConfidence: 0.60, rollingWindow: 30 },
       oos_winRate: 0, oos_sharpe: 0, oos_profit: 0,
-      recommendation: 'CAUTION',
+      recommendation: 'DO_NOT_TRADE',
       reason,
       runAt: Date.now(),
       valid: false,
