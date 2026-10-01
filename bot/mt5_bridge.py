@@ -30,6 +30,8 @@ import json
 import threading
 import logging
 import time
+import hmac
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -95,7 +97,8 @@ def auth_check() -> bool:
     """Verify API key; live bridge is never anonymously accessible."""
     if not API_KEY:
         return BRIDGE_MODE == 'simulation' and ALLOW_ANON
-    return request.headers.get("X-Api-Key") == API_KEY
+    provided = request.headers.get("X-Api-Key", "")
+    return hmac.compare_digest(provided, API_KEY)
 
 
 def err(msg: str, code: int = 400):
@@ -628,17 +631,29 @@ def trade():
     if not auth_check():
         return err("Unauthorized", 401)
 
-    data   = request.get_json(force=True)
-    symbol = data.get("symbol", "")
-    side   = data.get("side", "").upper()
-    volume = float(data.get("volume", 0))
-    sl     = float(data.get("sl", 0))
-    tp     = float(data.get("tp", 0))
-    comment= str(data.get("comment", "bot"))[:31]
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return err("JSON object required", 422)
+
+    symbol = str(data.get("symbol", "")).strip()
+    side = str(data.get("side", "")).upper()
+    comment = str(data.get("comment", "bot"))[:31]
     idempotency_key = str(data.get("idempotency_key", "")).strip()
 
-    if not symbol or side not in ("BUY", "SELL") or volume <= 0:
-        return err("Invalid parameters: symbol, side, volume required")
+    try:
+        volume = float(data.get("volume", 0))
+        sl = float(data.get("sl", 0))
+        tp = float(data.get("tp", 0))
+    except (TypeError, ValueError):
+        return err("volume, sl and tp must be numeric", 422)
+
+    if (
+        not symbol or
+        side not in ("BUY", "SELL") or
+        not all(math.isfinite(value) for value in (volume, sl, tp)) or
+        volume <= 0
+    ):
+        return err("Invalid parameters: symbol, side, finite volume/sl/tp required", 422)
     if BRIDGE_MODE == 'live' and not idempotency_key:
         return err("idempotency_key is required in live mode", 422)
     cached = _idempotency_lookup(idempotency_key)
