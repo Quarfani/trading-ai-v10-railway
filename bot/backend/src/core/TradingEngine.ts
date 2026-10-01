@@ -109,6 +109,7 @@ export class TradingEngine extends EventEmitter {
 
   private timer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private brokerContractRefreshTimer: NodeJS.Timeout | null = null;
 
   private lastTradeAt: Record<string, number> = {};
 
@@ -462,6 +463,30 @@ export class TradingEngine extends EventEmitter {
       5 * 60_000,
     );
 
+    // Refresh broker-confirmed MT5 economics well before the 24h registry TTL.
+    // Refresh failures do not alter the current valid-symbol rotation; if the
+    // broker data remains unavailable past TTL, MarketCatalog fails closed.
+    this.brokerContractRefreshTimer = setInterval(
+      () => {
+        this.validator.refreshBrokerContracts(this.validSymbols)
+          .then(result => {
+            if (result.refreshed || result.failed.length) {
+              this.logger.info(
+                '[MT5_CONTRACT_REFRESH] refreshed=' + result.refreshed +
+                ' failed=' + result.failed.length,
+              );
+            }
+          })
+          .catch(error => {
+            this.logger.warn(
+              '[MT5_CONTRACT_REFRESH] failed: ' +
+              (error?.message ?? String(error)),
+            );
+          });
+      },
+      6 * 3_600_000,
+    );
+
     this.logHeartbeat();
   }
 
@@ -477,6 +502,11 @@ export class TradingEngine extends EventEmitter {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+
+    if (this.brokerContractRefreshTimer) {
+      clearInterval(this.brokerContractRefreshTimer);
+      this.brokerContractRefreshTimer = null;
     }
 
     this.reconciler.stop();

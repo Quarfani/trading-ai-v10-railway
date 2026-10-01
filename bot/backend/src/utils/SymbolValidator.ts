@@ -13,6 +13,36 @@ export class SymbolValidator {
 
   constructor(private config: SystemConfig) {}
 
+  /**
+   * Refresh broker-confirmed contract economics without changing symbol rotation.
+   * Existing registry entries remain usable until their TTL expires; repeated
+   * refresh failures therefore cannot silently replace broker data with static
+   * assumptions, while an expired contract ultimately blocks live sizing.
+   */
+  async refreshBrokerContracts(
+    symbols: string[] = this.config.symbols,
+  ): Promise<{ refreshed: number; failed: string[] }> {
+    let refreshed = 0;
+    const failed: string[] = [];
+
+    for (const symbol of symbols) {
+      if (this.resolveSource(symbol) !== 'mt5') continue;
+
+      try {
+        await this.enrichBrokerContract(symbol);
+        refreshed += 1;
+      } catch (error: any) {
+        failed.push(symbol);
+        this.logger.warn(
+          '[MT5] ' + symbol + ' broker contract refresh failed: ' +
+          (error?.message ?? 'unknown'),
+        );
+      }
+    }
+
+    return { refreshed, failed };
+  }
+
   async validate(): Promise<string[]> {
     const valid: string[] = [];
 
