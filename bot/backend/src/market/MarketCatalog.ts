@@ -13,15 +13,9 @@ import {
   MarketVenue,
   normalizeSymbol,
 } from './market.types';
-import { getSymbolSpec } from '../config/symbolConfig';
+import { getSymbolSpec, isConfiguredSymbol } from '../config/symbolConfig';
 
-const CRYPTO_SYMBOLS = new Set([
-  'BTCUSDT',
-  'ETHUSDT',
-  'BNBUSDT',
-  'SOLUSDT',
-  'XRPUSDT',
-]);
+const STABLE_QUOTES = ['USDT', 'USDC', 'BUSD'] as const;
 
 const METAL_SYMBOLS = new Set([
   'XAUUSD',
@@ -40,7 +34,7 @@ const KNOWN_FOREX_CODES = new Set([
 ]);
 
 function inferAssetClass(symbol: string): AssetClass | null {
-  if (CRYPTO_SYMBOLS.has(symbol)) return 'CRYPTO';
+  if (isConfiguredSymbol(symbol) && STABLE_QUOTES.some(quote => symbol.endsWith(quote))) return 'CRYPTO';
   if (METAL_SYMBOLS.has(symbol)) return 'METAL';
   if (INDEX_SYMBOLS.has(symbol)) return 'INDEX';
 

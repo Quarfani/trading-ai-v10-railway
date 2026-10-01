@@ -110,6 +110,10 @@ function envOverride(symbol: string): Partial<SymbolSpec> {
   return o;
 }
 
+export function isConfiguredSymbol(symbol: string): boolean {
+  return Object.prototype.hasOwnProperty.call(MAP, symbol.trim().toUpperCase());
+}
+
 export function getBaseSymbolSpec(symbol: string): SymbolSpec {
   const base = { ...DEFAULTS, ...(MAP[symbol.toUpperCase()] ?? {}) };
   if (!base.lotSize) base.lotSize = base.contractSize;
