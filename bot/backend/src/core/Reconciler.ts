@@ -56,6 +56,30 @@ export class Reconciler {
     this.logger.info('Reconciler started (10s interval)');
   }
 
+  async reconcileNow(): Promise<{ checked: number; failures: number }> {
+    const open = this.db.getOpenTrades();
+    let failures = 0;
+
+    for (const t of open) {
+      try {
+        await this.reconcileOne(t);
+      } catch (e: any) {
+        failures++;
+        const message = `Startup reconciliation failure for ${t.symbol}: ${e?.message ?? e}`;
+        this.logger.error(message);
+        if (this.config.mode !== 'paper') {
+          await this.emergency.activate(message);
+        }
+      }
+    }
+
+    if (failures > 0) {
+      throw new Error(`Startup reconciliation failed for ${failures}/${open.length} open trade(s)`);
+    }
+
+    return { checked: open.length, failures };
+  }
+
   stop(): void {
     if (this.interval) { clearInterval(this.interval); this.interval = null; }
   }
