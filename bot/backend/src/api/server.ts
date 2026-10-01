@@ -19,6 +19,7 @@ import { rateLimit }           from './rateLimit';
 import { exportTradesCSV, getEquityCurve } from '../analytics/CsvExporter';
 import { Backtester }          from '../backtest/Backtester';
 import { marketRegimeDetector } from '../core/MarketRegimeDetector';
+import { getBrokerContractStatus } from '../market/MarketCatalog';
 
 const ALLOWED_ORIGIN = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
 
@@ -252,6 +253,14 @@ export function createApi(engine: TradingEngine) {
   // ── Symbols ───────────────────────────────────────────────────────────
   app.get('/api/symbols', (_: Request, res: Response) =>
     res.json({ symbols: engine.validSymbols })
+  );
+
+  app.get('/api/contracts', (_: Request, res: Response) =>
+    res.json(
+      engine.config.mode === 'mt5'
+        ? getBrokerContractStatus(engine.validSymbols)
+        : { ready: true, count: 0, contracts: [] },
+    )
   );
 
   extendApiV8(app, engine);

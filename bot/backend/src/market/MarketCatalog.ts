@@ -72,6 +72,10 @@ export function clearBrokerContracts(): void {
   BROKER_CONTRACTS.clear();
 }
 
+export function getBrokerContractStatus(symbols?: string[]) {
+  return BROKER_CONTRACTS.status(symbols);
+}
+
 export function getBrokerConversionSymbols(
   baseCurrency: string,
   quoteCurrency: string,

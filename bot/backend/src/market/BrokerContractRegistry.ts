@@ -250,6 +250,51 @@ export class BrokerContractRegistry {
     return this.get(symbol)?.verified === true;
   }
 
+  status(symbols?: string[]): {
+    ready: boolean;
+    count: number;
+    contracts: Array<{
+      symbol: string;
+      assetClass: AssetClass;
+      quoteCurrency: string;
+      verified: boolean;
+      observedAt: number;
+      expiresAt: number | null;
+      supportedTimeframes?: Timeframe[];
+    }>;
+  } {
+    const selected = symbols?.length
+      ? symbols.map(symbol => symbol.trim().toUpperCase())
+      : [...this.definitions.keys()];
+
+    const contracts = selected.map(symbol => {
+      const definition = this.definitions.get(symbol);
+      return definition
+        ? {
+            symbol: definition.symbol,
+            assetClass: definition.assetClass,
+            quoteCurrency: definition.quoteCurrency.trim().toUpperCase(),
+            verified: definition.verified,
+            observedAt: definition.observedAt,
+            expiresAt: definition.expiresAt ?? null,
+            supportedTimeframes: definition.supportedTimeframes
+              ? [...definition.supportedTimeframes]
+              : undefined,
+          }
+        : null;
+    }).filter((value): value is NonNullable<typeof value> => value !== null);
+
+    return {
+      ready: selected.length > 0 && contracts.length === selected.length &&
+        contracts.every(contract =>
+          contract.verified &&
+          (contract.expiresAt == null || contract.expiresAt > Date.now())
+        ),
+      count: contracts.length,
+      contracts,
+    };
+  }
+
   clear(): void {
     this.definitions.clear();
   }

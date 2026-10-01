@@ -94,7 +94,7 @@ import { AITradeJournal } from '../journal/AITradeJournal';
 
 import { getSymbolSpec } from '../config/symbolConfig';
 import { detectFalseSignal } from '../filters/FalseSignalEngine';
-import { getMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerContractStatus, getMarketDefinition } from '../market/MarketCatalog';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 
 type Broadcaster = (event: string, data: unknown) => void;
@@ -535,20 +535,43 @@ export class TradingEngine extends EventEmitter {
     return this.isRunning;
   }
 
+  private brokerContractsReady(): boolean {
+    if (this.config.mode !== 'mt5') return true;
+
+    return this.validSymbols.every(symbol => {
+      const market = getMarketDefinition(symbol);
+      if (!market) return false;
+      if (
+        market.supportedTimeframes &&
+        this.config.timeframes.some(tf => !market.supportedTimeframes!.includes(tf))
+      ) return false;
+      return true;
+    });
+  }
+
   isReady() {
     return (
       this.isRunning &&
       this.ready &&
-      this.validSymbols.length > 0
+      this.validSymbols.length > 0 &&
+      this.brokerContractsReady()
     );
   }
 
   readiness() {
+    const brokerContracts = this.config.mode === 'mt5'
+      ? getBrokerContractStatus(this.validSymbols)
+      : { ready: true, count: 0, contracts: [] };
+
+    const contractsReady = this.brokerContractsReady();
+
     return {
-      ready: this.isReady(),
+      ready: this.isRunning && this.ready && this.validSymbols.length > 0 && contractsReady,
       running: this.isRunning,
       symbols: this.validSymbols.length,
       mode: this.config.mode,
+      contractsReady,
+      brokerContracts,
     };
   }
 
