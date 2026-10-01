@@ -70,4 +70,63 @@ try {
 }
 assert(blocked, 'promotion without evidence must fail');
 
-console.log('Result: 8 passed, 0 failed');
+const noMonteCarlo = {
+  ...definition,
+  lifecycle: 'SMALL_CAPITAL' as const,
+  evidence: {
+    ...definition.evidence!,
+    outOfSampleTrades: 220,
+    outOfSampleProfitFactor: 1.6,
+    walkForwardStability: 0.70,
+    parameterSensitivity: 0.70,
+    regimeCoverage: 0.70,
+  },
+};
+let productionBlocked = false;
+try {
+  promoteStrategy(
+    noMonteCarlo,
+    'PRODUCTION',
+    'production must require hardened evidence',
+  );
+} catch {
+  productionBlocked = true;
+}
+assert(
+  productionBlocked,
+  'PRODUCTION must require both the larger OOS sample and Monte Carlo stress evidence',
+);
+
+const productionReady = {
+  ...definition,
+  lifecycle: 'SMALL_CAPITAL' as const,
+  evidence: {
+    ...definition.evidence!,
+    sampleSize: 400,
+    outOfSampleTrades: 320,
+    outOfSampleProfitFactor: 1.7,
+    walkForwardStability: 0.75,
+    parameterSensitivity: 0.72,
+    regimeCoverage: 0.76,
+    monteCarloStress: {
+      simulations: 2000,
+      futureTrades: 200,
+      p5FinalBalance: 8500,
+      p50FinalBalance: 11200,
+      maxDDP95: 0.24,
+      probabilityLoss: 0.25,
+      probabilityDD20: 0.40,
+      probabilityRuin: 0.01,
+      unrecoveredRate: 0.10,
+      recoveryTradesP95: 35,
+    },
+  },
+};
+const production = promoteStrategy(
+  productionReady,
+  'PRODUCTION',
+  'production evidence gate passed',
+).definition;
+assert(production.lifecycle === 'PRODUCTION', 'hardened production evidence should allow promotion');
+
+console.log('Result: 10 passed, 0 failed');
