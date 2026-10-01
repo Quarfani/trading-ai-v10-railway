@@ -54,6 +54,7 @@ export class ScheduledWFO {
     private db:       DatabaseManager,
     private scanner:  MarketScanner,
     private telegram: TelegramBot,
+    private readonly engineIsActive: () => boolean = () => false,
   ) {
     this.wfo = new WalkForwardOptimizer(
       db.path,
@@ -78,7 +79,12 @@ export class ScheduledWFO {
 
   /** Force an immediate WFO run (callable from TelegramCommands /wfo) */
   async runNow(symbol?: string): Promise<void> {
-    if (!this.isAllowedToMutateParams()) throw new Error('Live WFO is disabled; explicit LIVE_WFO_ACK is required outside paper mode');
+    if (this.engineIsActive()) {
+      throw new Error('Stop the trading engine before running scheduled WFO');
+    }
+    if (!this.isAllowedToMutateParams()) {
+      throw new Error('Live WFO is disabled; explicit LIVE_WFO_ACK is required outside paper mode');
+    }
     await this.runWFO(symbol ? [symbol] : this.config.symbols);
   }
 
@@ -112,7 +118,7 @@ export class ScheduledWFO {
   // ─── Internal ──────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
-    if (this.running) return;
+    if (this.running || this.engineIsActive()) return;
 
     const now        = new Date();
     const month      = `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`;
