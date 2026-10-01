@@ -307,13 +307,26 @@ export class Reconciler {
         `Binance position ${t.symbol} is absent but authoritative close reconciliation is unresolved`,
       );
     } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
-        // Partial close
-        const remaining = Math.abs(pos.positionAmt);
-        this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
-        this.db.raw()
-          .prepare('UPDATE trades SET volume=? WHERE id=?')
-          .run(remaining, t.id!);
+      const unresolvedClose =
+        t.id != null &&
+        this.db.hasUnresolvedExecutionForTrade(
+          Number(t.id),
+          ['CLOSE', 'CLOSE_AT_MARKET'],
+        );
+      if (unresolvedClose) {
+        throw new Error(
+          `Binance close operation is unresolved for ${t.symbol}; refusing to mutate internal volume until authoritative fill state is available`,
+        );
       }
+
+      // No unresolved destructive close exists: retain the historical
+      // partial-position reconciliation behavior.
+      const remaining = Math.abs(pos.positionAmt);
+      this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
+      this.db.raw()
+        .prepare('UPDATE trades SET volume=? WHERE id=?')
+        .run(remaining, t.id!);
+    }
   }
 
   private async tryReconcileBinanceAuthoritativeClose(t: Trade): Promise<boolean> {
