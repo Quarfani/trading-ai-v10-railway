@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { SystemConfig } from '../types/trading.types';
 import { Logger } from './Logger';
-import { registerBrokerContract } from '../market/MarketCatalog';
+import { getMarketDefinition, registerBrokerContract } from '../market/MarketCatalog';
 import { AssetClass } from '../market/market.types';
 import { BrokerContractDefinition } from '../market/BrokerContractRegistry';
 
@@ -144,7 +144,8 @@ export class SymbolValidator {
           : await this.validateBinance(symbol);
 
       if (ok) {
-        valid.push(symbol);
+        const market = getMarketDefinition(symbol);
+        valid.push(market?.brokerSymbol ?? symbol);
       } else {
         this.logger.warn(
           `[SymbolValidator] ${symbol} not tradeable - removed from rotation`,

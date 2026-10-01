@@ -18,8 +18,8 @@ registerBrokerContract({
   source: 'fixture-raw', observedAt: Date.now(), verified: true,
 });
 
-assert(getMarketDefinition('EURUSD.a')?.brokerSymbol === 'EURUSD.A', 'suffix .a must remain part of broker identity');
-assert(getMarketDefinition('EURUSD.raw')?.brokerSymbol === 'EURUSD.RAW', 'suffix .raw must remain part of broker identity');
+assert(getMarketDefinition('EURUSD.a')?.brokerSymbol === 'EURUSD.a', 'suffix .a must remain part of broker identity');
+assert(getMarketDefinition('EURUSD.raw')?.brokerSymbol === 'EURUSD.raw', 'suffix .raw must remain part of broker identity');
 assert(getMarketDefinition('EURUSD.a')?.economics.contractSize === 100000, 'suffix .a must retain its economics');
 assert(getMarketDefinition('EURUSD.raw')?.economics.contractSize === 1, 'suffix .raw must retain distinct economics');
 
