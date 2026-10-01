@@ -192,7 +192,6 @@ export class PositionSizer {
     timeframe: Timeframe = 'H1',
   ): number {
     if (!(equity > 0) || !(volume > 0) || !Number.isFinite(volume)) return 0;
-    const spec = getSymbolSpec(symbol, timeframe);
     const market = getMarketDefinition(symbol);
     if (!market) return 0;
     const quoteToAccount = resolveQuoteToAccount(
