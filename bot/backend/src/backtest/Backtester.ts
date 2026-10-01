@@ -60,6 +60,46 @@ const MAX_TRADE_BARS = 200;
 // H4 candle duration in milliseconds
 const H4_MS = 4 * 60 * 60 * 1000;
 
+export function calculateBacktestPositionSize(
+  balance: number,
+  riskFraction: number,
+  entry: number,
+  sl: number,
+  contractSize: number,
+  minVolume: number,
+  maxVolume: number,
+  volumeStep: number,
+  quoteToAccount: number,
+): number {
+  if (
+    !(balance > 0) ||
+    !(riskFraction > 0) ||
+    !Number.isFinite(entry) ||
+    !Number.isFinite(sl) ||
+    !(contractSize > 0) ||
+    !(minVolume > 0) ||
+    !(maxVolume >= minVolume) ||
+    !(volumeStep > 0) ||
+    !(quoteToAccount > 0) ||
+    ![balance, riskFraction, entry, sl, contractSize, minVolume, maxVolume, volumeStep, quoteToAccount].every(Number.isFinite)
+  ) {
+    return 0;
+  }
+
+  const riskPerUnit = Math.abs(entry - sl) * contractSize * quoteToAccount;
+  if (!(riskPerUnit > 0) || !Number.isFinite(riskPerUnit)) return 0;
+
+  const raw = Math.min(
+    (balance * riskFraction) / riskPerUnit,
+    maxVolume,
+  );
+  if (!(raw > 0) || !Number.isFinite(raw)) return 0;
+
+  const steps = Math.floor(raw / volumeStep + 1e-12);
+  const volume = +(steps * volumeStep).toFixed(8);
+  return volume >= minVolume ? volume : 0;
+}
+
 /**
  * Resample an array of 1m-ish candles into H4 candles.
  * Groups input candles by 4-hour UTC bucket and OHLCV-aggregates them.
