@@ -89,7 +89,45 @@ async function main() {
   );
 
   clearBrokerContracts();
-  console.log("Result: 5 passed, 0 failed");
+
+  registerBrokerContract({
+    symbol: "EURUSD.a",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100_000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 0.05,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:suffix",
+    observedAt: Date.now(),
+    verified: true,
+  });
+
+  const suffixed = sizer.size(
+    "EURUSD.a", "BUY", 1.1000, 1.0990, 70, 10_000, 1.1040,
+    { "EURUSD.a": 1.1000, EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    suffixed === 0.05,
+    `suffixed MT5 symbol must use its broker max volume; got ${suffixed}`,
+  );
+
+  clearBrokerContracts();
+  const unknownSuffixed = sizer.size(
+    "EURUSD.a", "BUY", 1.1000, 1.0990, 70, 10_000, 1.1040,
+    { "EURUSD.a": 1.1000, EURUSD: 1.1000 }, "H1",
+  );
+  assert(
+    unknownSuffixed === 0,
+    "unknown suffixed MT5 symbol must fail closed instead of inheriting static economics",
+  );
+
+  console.log("Result: 7 passed, 0 failed");
 }
 
 main().catch(error => {
