@@ -270,6 +270,50 @@ async function main() {
     clearBrokerContracts();
   }
 
+  const binanceCloseDb = new DatabaseManager(":memory:");
+  await binanceCloseDb.initialize();
+  const binanceCloseCfg = {
+    ...baseConfig("paper"),
+    mode: "binance",
+    dataSource: "binance",
+    accountCurrency: "USD",
+  } as SystemConfig;
+  const binanceCloseGateway = new ExecutionGateway(binanceCloseCfg, binanceCloseDb);
+  const binanceCloseTradeId = binanceCloseDb.insertTrade({
+    ticket: 1201, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open",
+    openedAt: Date.now(), source: "BINANCE_CLIENT_ORDER_ID_TEST",
+  } as any);
+  const capturedCloseIds: string[] = [];
+  (binanceCloseGateway as any).binance.closePosition = async (
+    _ticket: number,
+    _symbol: string,
+    _volume: number,
+    _side: string,
+    clientOrderId?: string,
+  ) => {
+    capturedCloseIds.push(String(clientOrderId ?? ""));
+    return {
+      ok: true,
+      realizedProfit: 10,
+      realizedProfitCurrency: "USDT",
+    };
+  };
+  const binanceCloseTrade = {
+    id: binanceCloseTradeId, ticket: 1201, symbol: "BTCUSDT", timeframe: "H1",
+    side: "BUY", volume: 0.01, entry: 50_000, sl: 49_000, tp: 52_000,
+    status: "open", openedAt: Date.now(), source: "BINANCE_CLIENT_ORDER_ID_TEST",
+  } as any;
+  assert(
+    await binanceCloseGateway.closeTrade(binanceCloseTrade) === true,
+    "Binance close fixture must settle",
+  );
+  assert(
+    capturedCloseIds.length === 1 && /^ta_[a-f0-9]{28}$/.test(capturedCloseIds[0]),
+    "Binance close must pass the deterministic clientOrderId",
+  );
+  binanceCloseDb.raw().close();
+
   const modifyDb = new DatabaseManager(":memory:");
   await modifyDb.initialize();
   const modifyGateway = new ExecutionGateway(baseConfig("mt5"), modifyDb);
