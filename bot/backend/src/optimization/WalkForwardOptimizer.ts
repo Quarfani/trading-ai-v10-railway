@@ -401,6 +401,7 @@ export class WalkForwardOptimizer {
       runAt: Date.now(),
       valid: false,
       validationReasons: [reason],
+      evidence: summarizeWfoEvidence([]),
     };
   }
 
