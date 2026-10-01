@@ -203,6 +203,30 @@ def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
         return False, f"Volume {volume} is not aligned to broker step {step}"
     return True, "OK"
 
+def calculate_order_estimates(mt5_module, order_type, symbol, volume, open_price, stop_price) -> tuple[float, float]:
+    """Return estimated stop-loss loss and required margin in account currency."""
+    profit = mt5_module.order_calc_profit(
+        order_type, symbol, volume, open_price, stop_price
+    )
+    if profit is None:
+        raise RuntimeError(
+            f"order_calc_profit failed: {mt5_module.last_error()}"
+        )
+
+    margin = mt5_module.order_calc_margin(
+        order_type, symbol, volume, open_price
+    )
+    if margin is None:
+        raise RuntimeError(
+            f"order_calc_margin failed: {mt5_module.last_error()}"
+        )
+
+    loss = max(0.0, -float(profit))
+    margin_value = float(margin)
+    if loss != loss or margin_value != margin_value or margin_value < 0:
+        raise RuntimeError("MT5 returned invalid risk estimates")
+    return loss, margin_value
+
 def choose_market_filling_mode(symbol_info, mt5_module):
     """Choose a filling policy permitted by the symbol execution mode."""
     execution_market = getattr(mt5_module, "SYMBOL_TRADE_EXECUTION_MARKET", None)
@@ -419,6 +443,45 @@ def trade():
             return err(f"No tick: {mt5.last_error()}")
 
         price = tick_data.ask if side == "BUY" else tick_data.bid
+
+        # Final broker-side monetary risk guard. MT5 calculates profit and
+        # margin in the current account/trading environment.
+        if sl <= 0:
+            return err("Live MT5 orders require a positive stop-loss", 422)
+        if (side == "BUY" and sl >= price) or (side == "SELL" and sl <= price):
+            return err("Stop-loss direction is invalid for the requested side", 422)
+
+        account = mt5.account_info()
+        if not account:
+            return err(f"Account info failed for risk guard: {mt5.last_error()}", 503)
+
+        try:
+            estimated_loss, estimated_margin = calculate_order_estimates(
+                mt5, order_type, symbol, volume, price, sl
+            )
+        except RuntimeError as exc:
+            return err(str(exc), 503)
+
+        equity = float(getattr(account, "equity", 0.0))
+        if not (equity > 0):
+            return err("Invalid account equity for risk guard", 503)
+
+        risk_limit = equity * 0.02
+        if estimated_loss > risk_limit + max(0.01, risk_limit * 1e-9):
+            return err(
+                f"Estimated stop-loss risk {estimated_loss:.2f} exceeds "
+                f"single-trade limit {risk_limit:.2f}",
+                422,
+            )
+
+        free_margin = float(getattr(account, "margin_free", 0.0))
+        if estimated_margin > free_margin + max(0.01, free_margin * 1e-9):
+            return err(
+                f"Estimated margin {estimated_margin:.2f} exceeds "
+                f"free margin {free_margin:.2f}",
+                422,
+            )
+
         try:
             deviation = int(os.getenv("MT5_MAX_DEVIATION_POINTS", "20"))
         except (TypeError, ValueError):
@@ -487,6 +550,10 @@ def trade():
             "volume": volume,
             "symbol": symbol,
             "retcode": result.retcode,
+            "estimated_loss": estimated_loss,
+            "risk_limit": risk_limit,
+            "estimated_margin": float(estimated_margin),
+            "free_margin": free_margin,
         })
 
 
