@@ -81,6 +81,10 @@ assert(
   registry.getMarketDefinition('EURUSD.a')?.economics.contractSize === 100000,
   'older same-source broker metadata must not overwrite newer economics',
 );
+assert(
+  registry.getMarketDefinition('EURUSD.a')?.brokerSymbol === 'EURUSD.a',
+  'broker symbol casing must be preserved exactly for MT5 lookup',
+);
 
 let chronologyRejected = false;
 try {

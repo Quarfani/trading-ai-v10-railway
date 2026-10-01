@@ -114,9 +114,9 @@ export function toMarketDefinition(
     );
   }
 
-  const brokerSymbol = definition.symbol.trim().toUpperCase();
+  const brokerSymbol = definition.symbol.trim();
   return {
-    symbol: brokerSymbol.replace(/[^A-Z0-9]/g, ''),
+    symbol: brokerSymbol.replace(/[^A-Z0-9]/g, '').toUpperCase(),
     brokerSymbol,
     baseAsset: definition.baseAsset.trim().toUpperCase(),
     quoteCurrency: definition.quoteCurrency.trim().toUpperCase(),
@@ -158,7 +158,7 @@ export class BrokerContractRegistry {
 
     this.definitions.set(normalized, {
       ...definition,
-      symbol: normalized,
+      symbol: definition.symbol.trim(),
     });
   }
 
