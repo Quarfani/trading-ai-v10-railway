@@ -15,10 +15,8 @@ export class StartupReconciler {
   constructor(private config: SystemConfig, private db: DatabaseManager, private telegram: TelegramBot) {}
 
   async run(): Promise<void> {
-    const unknown = this.db.raw().prepare(`SELECT COUNT(*) c FROM execution_ledger WHERE status IN ('PENDING','UNKNOWN')`).get() as { c: number };
-    if (unknown.c > 0) throw new Error(`[Reconciliation] ${unknown.c} unresolved execution ledger entries block startup`);
-
     if (this.config.mode === 'paper') {
+      this.assertNoUnresolvedLedger();
       this.assertInternalPaperState();
       this.record('OK', null, { mode: 'paper' }, 'Paper state is internally consistent');
       return;
@@ -28,6 +26,7 @@ export class StartupReconciler {
       let brokerSnapshot: unknown;
       if (this.config.mode === 'mt5') brokerSnapshot = await this.reconcileMT5();
       else brokerSnapshot = await this.reconcileBinance();
+      this.assertNoUnresolvedLedger();
       this.record('OK', null, brokerSnapshot, 'Startup reconciliation passed');
       this.logger.info('Startup reconciliation passed');
     } catch (e: any) {
@@ -35,6 +34,76 @@ export class StartupReconciler {
       this.record('BLOCKED', null, null, message);
       await this.telegram.sendMessage(`🚨 <b>STARTUP RECONCILIATION BLOCKED</b>\n${message}`).catch(() => {});
       throw new Error(`[Reconciliation] BLOCKED: ${message}`);
+    }
+  }
+
+  private assertNoUnresolvedLedger() {
+    const unresolved = this.db.raw().prepare(
+      `SELECT COUNT(*) c FROM execution_ledger WHERE status IN ('PENDING','UNKNOWN')`,
+    ).get() as { c: number };
+    if (unresolved.c > 0) {
+      throw new Error(
+        `[Reconciliation] ${unresolved.c} unresolved execution ledger entries block startup`,
+      );
+    }
+  }
+
+  private async resolveAuthoritativeMT5CloseLedgers(): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, action, requestJson
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action IN ('CLOSE','CLOSE_AT_MARKET')
+      ORDER BY updatedAt ASC, createdAt ASC
+    `).all() as Array<{
+      executionId: string;
+      action: string;
+      requestJson?: string | null;
+    }>;
+
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+
+      let request: any;
+      try {
+        request = JSON.parse(row.requestJson);
+      } catch {
+        continue;
+      }
+
+      const tradeId = Number(request?.tradeId);
+      if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+
+      const trade = this.db.raw().prepare(
+        `SELECT * FROM trades WHERE id=? LIMIT 1`,
+      ).get(tradeId) as any;
+      if (!trade?.ticket) continue;
+
+      const history = await this.getMT5HistoryEntry(Number(trade.ticket));
+      if (!history) continue;
+
+      if (String(trade.status) === 'open') {
+        const changed = this.db.updateTradeClose(
+          Number(trade.id),
+          history.profit,
+          Date.now(),
+          history.reason,
+        );
+        if (!changed) continue;
+      }
+
+      this.db.resolveExecutionLedger(
+        String(row.executionId),
+        {
+          broker: 'mt5',
+          ticket: Number(trade.ticket),
+          profit: history.profit,
+          closePrice: history.price,
+          reason: history.reason,
+          startupReconciliation: true,
+        },
+        Number(trade.ticket),
+      );
     }
   }
 
@@ -87,6 +156,8 @@ export class StartupReconciler {
       if (isBotPosition && !internalTickets.has(ticket))
         throw new Error(`Hidden MT5 bot position detected ticket=${ticket} without internal ledger`);
     }
+
+    await this.resolveAuthoritativeMT5CloseLedgers();
     return positions;
   }
 
