@@ -1159,6 +1159,9 @@ export class TradingEngine extends EventEmitter {
       this.consensus.isExecutionLifecycleEligible(
         adjustedSignal.source,
         this.config.mode,
+        adjustedSignal.symbol,
+        tf,
+        regime,
       );
 
     if (!lifecycleCheck.allowed) {
