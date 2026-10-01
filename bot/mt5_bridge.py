@@ -103,7 +103,7 @@ def _idempotency_load_disk():
                     and isinstance(payload, dict)
                 ):
                     _idempotency_cache[str(key)] = (float(ts), status, payload)
-        except (FileNotFoundError, OSError, ValueError, TypeError):
+        except (FileNotFoundError, OSError, ValueError, TypeError, OverflowError):
             return
 
 
