@@ -126,8 +126,29 @@ export class StartupReconciler {
         );
       }
 
-      const balances = await exec.getAllSpotBalancesForConfiguredSymbols?.();
-      return balances ?? [];
+      const balances = await exec.getAllSpotBalancesForConfiguredSymbols();
+      const byAsset = new Map(
+        (balances as any[]).map(balance => [
+          String(balance.asset).toUpperCase(),
+          Number(balance.free) + Number(balance.locked),
+        ]),
+      );
+
+      for (const symbol of this.config.symbols ?? []) {
+        const raw = String(symbol).trim().toUpperCase();
+        const quote = ['USDT', 'USDC', 'BUSD'].find(q => raw.endsWith(q));
+        if (!quote) continue;
+        const base = raw.slice(0, -quote.length);
+        const inventory = Number(byAsset.get(base) ?? 0);
+        if (Number.isFinite(inventory) && inventory > 1e-8) {
+          throw new Error(
+            `Binance Spot startup found non-zero ${base} inventory for ${raw} ` +
+            'without an attributable open bot trade; manual reconciliation is required.',
+          );
+        }
+      }
+
+      return balances;
     }
 
     const positions = await exec.getAllPositions();
