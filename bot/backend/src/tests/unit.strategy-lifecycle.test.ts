@@ -44,6 +44,18 @@ const definition: StrategyDefinition = {
 assert(canTransition('RESEARCH', 'BACKTEST'), 'RESEARCH -> BACKTEST should be allowed');
 assert(!canTransition('RESEARCH', 'PRODUCTION'), 'RESEARCH -> PRODUCTION must be blocked');
 assert(hasPromotionEvidence(definition), 'complete evidence should pass');
+assert(
+  !hasPromotionEvidence(definition, {
+    minSampleSize: 500,
+    minOutOfSampleTrades: 300,
+    minOutOfSampleProfitFactor: 2.0,
+    minWalkForwardStability: 0.9,
+    minParameterSensitivity: 0.9,
+    minRegimeCoverage: 0.9,
+    maxAgeMs: 30 * 24 * 3_600_000,
+  }),
+  'stricter evidence policy must block insufficient evidence',
+);
 
 const backtested = promoteStrategy(definition, 'BACKTEST', 'backtest contract created').definition;
 const paperspec = { ...backtested, lifecycle: 'MONTE_CARLO' as const };
@@ -58,4 +70,4 @@ try {
 }
 assert(blocked, 'promotion without evidence must fail');
 
-console.log('Result: 7 passed, 0 failed');
+console.log('Result: 8 passed, 0 failed');
