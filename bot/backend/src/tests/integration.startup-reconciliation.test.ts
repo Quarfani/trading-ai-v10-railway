@@ -122,6 +122,36 @@ async function main() {
     assert(mt5CloseDb.getOpenTrades().length === 0, 'authoritative MT5 close must close the internal trade before startup completes');
     mt5CloseDb.raw().close();
 
+    const mt5DuplicateDb = await newDb();
+    const duplicateTradeId = mt5DuplicateDb.insertTrade({
+      ticket: 78, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5DuplicateDb.createExecutionLedger({
+      executionId: 'mt5-close-unknown-a', operationKey: 'mt5-close-op-a',
+      action: 'CLOSE_AT_MARKET', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+      request: { tradeId: duplicateTradeId, exitPrice: 1.105, reason: 'MANUAL' },
+    });
+    mt5DuplicateDb.createExecutionLedger({
+      executionId: 'mt5-close-unknown-b', operationKey: 'mt5-close-op-b',
+      action: 'CLOSE', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.1,
+      request: { tradeId: duplicateTradeId },
+    });
+
+    let duplicateBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5DuplicateDb, new TelegramBot(mt5Cfg)).run();
+    } catch { duplicateBlocked = true; }
+    assert(duplicateBlocked, 'multiple unresolved MT5 close operations for one trade must remain a startup blocker');
+    assert(
+      mt5DuplicateDb.raw().prepare(
+        `SELECT COUNT(*) c FROM execution_ledger WHERE status IN ('PENDING','UNKNOWN')`,
+      ).get().c === 1,
+      'duplicate MT5 close recovery must resolve at most one operation',
+    );
+    assert(mt5DuplicateDb.getOpenTrades().length === 0, 'duplicate-close recovery may settle the internal trade once');
+    mt5DuplicateDb.raw().close();
+
     const mt5OpenDb = await newDb();
     mt5OpenDb.createExecutionLedger({
       executionId: 'mt5-open-unknown', operationKey: 'mt5-open-op',
@@ -172,7 +202,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 11 passed, 0 failed');
+  console.log('Result: 12 passed, 0 failed');
 }
 
 main().catch(error => {
