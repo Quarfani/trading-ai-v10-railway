@@ -423,7 +423,28 @@ export class DatabaseManager {
   updateExecutionLedger(executionId: string, patch: {
     status?: string; brokerOrderId?: string | number; retryCount?: number;
     result?: unknown; error?: string | null;
-  }) {
+  }): boolean {
+    const current = this.db.prepare(
+      `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
+    ).get(executionId) as { status: string } | undefined;
+    if (!current) return false;
+
+    // Execution states are intentionally one-way. Terminal records are
+    // immutable so a late callback cannot rewrite broker truth.
+    if (current.status === 'EXECUTED' || current.status === 'FAILED') {
+      return false;
+    }
+
+    const requested = patch.status;
+    if (requested !== undefined) {
+      const legal =
+        (current.status === 'PENDING' &&
+          (requested === 'UNKNOWN' || requested === 'EXECUTED' || requested === 'FAILED')) ||
+        (current.status === 'UNKNOWN' &&
+          (requested === 'UNKNOWN' || requested === 'EXECUTED' || requested === 'FAILED'));
+      if (!legal) return false;
+    }
+
     const fields: string[] = ['updatedAt=?'];
     const values: unknown[] = [Date.now()];
     if (patch.status !== undefined) { fields.push('status=?'); values.push(patch.status); }
@@ -432,7 +453,10 @@ export class DatabaseManager {
     if (patch.result !== undefined) { fields.push('resultJson=?'); values.push(JSON.stringify(patch.result)); }
     if (patch.error !== undefined) { fields.push('error=?'); values.push(patch.error); }
     values.push(executionId);
-    this.db.prepare(`UPDATE execution_ledger SET ${fields.join(', ')} WHERE executionId=?`).run(...values);
+    const changed = this.db.prepare(
+      `UPDATE execution_ledger SET ${fields.join(', ')} WHERE executionId=? AND status IN ('PENDING','UNKNOWN')`,
+    ).run(...values).changes;
+    return changed === 1;
   }
 
   saveExecutionEvent(entry: {
