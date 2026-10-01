@@ -861,7 +861,19 @@ export class BinanceExecutor {
   async getPosition(symbol: string): Promise<{ positionAmt: number; entryPrice: number; unrealizedProfit: number } | null> {
     if (this.isFutures) {
       const res = await this.signedGet('/fapi/v2/positionRisk', { symbol });
-      const pos = Array.isArray(res) ? res.find((p: any) => p.symbol === symbol) : res;
+      const matches = Array.isArray(res)
+        ? res.filter((p: any) => p && p.symbol === symbol)
+        : res ? [res] : [];
+      const liveMatches = matches.filter(
+        (p: any) => Number.isFinite(Number(p.positionAmt)) &&
+          Math.abs(Number(p.positionAmt)) > 1e-12,
+      );
+      if (liveMatches.length > 1) {
+        throw new Error(
+          `Binance returned multiple live position sides for ${symbol}; reconciliation is unsafe`,
+        );
+      }
+      const pos = liveMatches[0] ?? matches[0];
       if (!pos) return null;
       const positionAmt = Number(pos.positionAmt);
       const entryPrice = Number(pos.entryPrice);
