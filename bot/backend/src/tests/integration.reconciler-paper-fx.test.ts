@@ -55,7 +55,9 @@ async function main() {
   assert(callbacks.length === 1, "reconciler must emit one close callback");
   assert(callbacks[0].profit === closed.profit, "callback PnL must match persisted PnL");
 
-  const replayCount = db.raw().prepare("SELECT COUNT(*) c FROM execution_ledger WHERE action=\"CLOSE_AT_MARKET\" AND symbol=\"EURUSD\"").get() as any;
+  const replayCount = db.raw()
+    .prepare("SELECT COUNT(*) c FROM execution_ledger WHERE action='CLOSE_AT_MARKET' AND symbol='EURUSD'")
+    .get() as any;
   assert(replayCount.c === 1, "paper reconciliation close must create one authoritative execution record");
 
   // A non-authoritative close result must be rejected instead of inferring PnL from price delta.
