@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current commit: cae00d90f9394d0e4ba8ed1185fbfc72745966ee
-Current message: fix: keep Monte Carlo policy backward compatible for existing callers
+Current commit: 9db43bc8dcf64486a14f013b966eaf4e2d999b22
+Current message: test: cover Monte Carlo capital promotion gate
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -36,7 +36,7 @@ Unified market/contract/timeframe model with explicit cost, FX, OOS/WFO and prom
 Latest CI on main is green after c37ad360f5a9415482f9cdd494ad53765abbc47d.
 
 ## CURRENT RISKS / GAPS
-1. StrategyLifecycle promotion does not yet require an exact matching EvidenceSnapshot by strategyId/symbol/timeframe.
+1. Exact strategyId/symbol/timeframe EvidenceSnapshot is now required for SMALL_CAPITAL/PRODUCTION; Monte Carlo is additionally required when EVIDENCE_REQUIRE_MONTE_CARLO=true.
 2. ScheduledWFO evidence is persisted, but strategy-level lifecycle and WFO calibration evidence remain separate domains.
 3. Oil/energy activation requires real MT5 broker symbol metadata at runtime.
 4. Full non-USD live broker E2E remains outstanding.
@@ -44,7 +44,7 @@ Latest CI on main is green after c37ad360f5a9415482f9cdd494ad53765abbc47d.
 6. Long paper/testnet/cloud E2E evidence remains outstanding.
 
 ## NEXT TASK
-Wire Monte Carlo Stress metrics into typed StrategyEvidence/promotion policy, then harden non-USD live broker E2E and long paper/testnet/cloud E2E.
+Harden non-USD live broker E2E for EUR/GBP/JPY accounts and Forex/Metals, including fail-closed conversion and broker-confirmed contract economics; then extend long paper/testnet/cloud E2E.
 
 ## STOP PROTOCOL
 Verify main SHA and CI; record blockers; update this file; keep the local AI_DEVELOPMENT_HANDOFF_CURRENT.md checkpoint; define one concrete NEXT TASK.
