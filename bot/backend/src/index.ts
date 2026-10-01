@@ -81,17 +81,6 @@ async function main() {
   const tgCommands = new TelegramCommands(config, engine);
   (engine as any).tgCommands = tgCommands;
 
-  // Scheduled monthly WFO
-  const scheduledWFO = new ScheduledWFO(
-    config,
-    db,
-    engine['scanner'] as any,
-    telegram,
-    () => engine.isActive(),
-  );
-  scheduledWFO.start();
-  (engine as any).scheduledWFO = scheduledWFO;
-
   // Binance WebSocket feed (Binance mode only)
   let wsFeed: BinanceWebSocketFeed | null = null;
   if (config.mode === 'binance' && config.symbols?.length) {
@@ -128,6 +117,17 @@ async function main() {
   log.info(`API listening on port ${port}`);
 
   await engine.start();
+
+  // Start automatic WFO only after the execution engine is fully ready.
+  const scheduledWFO = new ScheduledWFO(
+    config,
+    db,
+    engine['scanner'] as any,
+    telegram,
+    () => engine.isActive(),
+  );
+  scheduledWFO.start();
+  (engine as any).scheduledWFO = scheduledWFO;
 
   GracefulShutdown.register(
     {
