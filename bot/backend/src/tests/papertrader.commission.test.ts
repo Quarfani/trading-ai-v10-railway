@@ -40,6 +40,7 @@ trader.restoreState([{
   realizedProfit: 0,
 }], []);
 
+console.log('DEBUG open trades', trader.getOpenTrades());
 const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL');
 assert(Boolean(partial), 'partial close should return a trade');
 const expectedPartial =
