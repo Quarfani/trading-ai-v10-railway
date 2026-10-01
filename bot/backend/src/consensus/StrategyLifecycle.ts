@@ -47,6 +47,40 @@ export function hasPromotionEvidence(
 ): boolean {
   return evaluateEvidenceForPromotion(definition.evidence, policy).passed;
 }
+
+function promotionPolicyForTarget(
+  to: StrategyLifecycleState,
+  base: EvidencePromotionPolicy,
+): EvidencePromotionPolicy {
+  if (to === 'SMALL_CAPITAL') {
+    return {
+      ...base,
+      minSampleSize: Math.max(base.minSampleSize, 300),
+      minOutOfSampleTrades: Math.max(base.minOutOfSampleTrades, 200),
+      minOutOfSampleProfitFactor: Math.max(base.minOutOfSampleProfitFactor, 1.5),
+      minWalkForwardStability: Math.max(base.minWalkForwardStability, 0.60),
+      minParameterSensitivity: Math.max(base.minParameterSensitivity, 0.60),
+      minRegimeCoverage: Math.max(base.minRegimeCoverage, 0.60),
+      requireMonteCarlo: true,
+    };
+  }
+
+  if (to === 'PRODUCTION') {
+    return {
+      ...base,
+      minSampleSize: Math.max(base.minSampleSize, 300),
+      minOutOfSampleTrades: Math.max(base.minOutOfSampleTrades, 300),
+      minOutOfSampleProfitFactor: Math.max(base.minOutOfSampleProfitFactor, 1.5),
+      minWalkForwardStability: Math.max(base.minWalkForwardStability, 0.65),
+      minParameterSensitivity: Math.max(base.minParameterSensitivity, 0.65),
+      minRegimeCoverage: Math.max(base.minRegimeCoverage, 0.65),
+      requireMonteCarlo: true,
+    };
+  }
+
+  return base;
+}
+
 export function promoteStrategy(
   definition: StrategyDefinition,
   to: StrategyLifecycleState,
@@ -62,9 +96,11 @@ export function promoteStrategy(
     );
   }
 
+  const targetPolicy = promotionPolicyForTarget(to, policy);
+
   if (
     ['PAPER', 'TESTNET', 'SHADOW', 'SMALL_CAPITAL', 'PRODUCTION'].includes(to) &&
-    !hasPromotionEvidence(current, policy)
+    !hasPromotionEvidence(current, targetPolicy)
   ) {
     throw new Error(
       `[StrategyLifecycle] incomplete evidence for promotion to ${to}`,
