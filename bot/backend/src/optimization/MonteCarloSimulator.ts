@@ -17,6 +17,16 @@
  */
 import { Logger } from '../utils/Logger';
 
+function xorshift32(seed: number): () => number {
+  let state = (seed >>> 0) || 0x9e3779b9;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+}
+
 export interface MonteCarloResult {
   runs:              number;
   tradeCount:        number;
@@ -37,8 +47,8 @@ export interface MonteCarloResult {
   probRuin:          number;   // probability of 50%+ drawdown (ruin)
   // Recommended position size multiplier
   safePositionPct:   number;   // recommended % risk per trade given DD95
-  // Expected values
-  expectedReturn:    number;   // expected % return after N trades
+  // Distribution summaries
+  expectedReturn:    number;   // mean % return after N trades
   sharpeEstimate:    number;   // estimated Sharpe from simulations
   kellyFraction:     number;   // Kelly Criterion recommendation
   // Path data (sampled)
@@ -53,6 +63,7 @@ export class MonteCarloSimulator {
     startBalance  = 10_000,
     simulations   = 10_000,
     futureTrades  = 100,
+    seed          = 0x13579bdf,
   ): MonteCarloResult {
     if (trades.length < 10) {
       this.logger.warn('Monte Carlo: insufficient trade history (< 10 trades)');
@@ -65,10 +76,11 @@ export class MonteCarloSimulator {
     const finalBalances: number[] = [];
     const maxDrawdowns: number[]  = [];
     const samplePaths: number[][] = [];
+    const rng = xorshift32(seed);
 
     for (let sim = 0; sim < simulations; sim++) {
       const { finalBalance, maxDD, path } = this.simulatePath(
-        profits, startBalance, futureTrades
+        profits, startBalance, futureTrades, rng
       );
       finalBalances.push(finalBalance);
       maxDrawdowns.push(maxDD);
@@ -125,7 +137,7 @@ export class MonteCarloSimulator {
       probDD20pct:     probDD20,
       probRuin,
       safePositionPct: Math.max(0.005, Math.round(safePositionPct * 1000) / 1000),
-      expectedReturn:  (p50Balance - startBalance) / startBalance * 100,
+      expectedReturn:  meanReturn * 100,
       sharpeEstimate:  +sharpe.toFixed(3),
       kellyFraction:   +Math.max(0, Math.min(0.25, kelly)).toFixed(4),
       samplePaths,
@@ -133,7 +145,10 @@ export class MonteCarloSimulator {
   }
 
   private simulatePath(
-    profits: number[], startBalance: number, steps: number
+    profits: number[],
+    startBalance: number,
+    steps: number,
+    rng: () => number,
   ): { finalBalance: number; maxDD: number; path: number[] } {
     let balance = startBalance;
     let peak    = startBalance;
@@ -142,8 +157,8 @@ export class MonteCarloSimulator {
     const n     = profits.length;
 
     for (let i = 0; i < steps; i++) {
-      // Bootstrap: random sample from historical profits
-      const randomProfit = profits[Math.floor(Math.random() * n)];
+      // Bootstrap: reproducible pseudo-random sample from historical profits.
+      const randomProfit = profits[Math.floor(rng() * n)];
       balance += randomProfit;
       balance  = Math.max(0, balance); // can't go below 0
       if (balance > peak) peak = balance;
