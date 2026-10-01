@@ -539,7 +539,7 @@ export class TradingEngine extends EventEmitter {
     if (this.config.mode !== 'mt5') return true;
 
     return this.validSymbols.every(symbol => {
-      const market = getMarketDefinition(symbol);
+      const market = getBrokerMarketDefinition(symbol, this.config.timeframes[0] ?? 'H1');
       if (!market) return false;
       if (
         market.supportedTimeframes &&
@@ -729,7 +729,9 @@ export class TradingEngine extends EventEmitter {
     symbol: string,
     tf: Timeframe,
   ) {
-    const market = getMarketDefinition(symbol, tf);
+    const market = this.config.mode === 'mt5'
+      ? getBrokerMarketDefinition(symbol, tf)
+      : getMarketDefinition(symbol, tf);
     if (!market) {
       this.logger.info(
         `[PIPELINE_BLOCK] ${symbol}/${tf} stage=MARKET_DEFINITION`,
