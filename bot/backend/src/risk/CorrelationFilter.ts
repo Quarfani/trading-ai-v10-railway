@@ -42,8 +42,11 @@ export class CorrelationFilter {
     openTrades: Trade[],
     candleMap?: Record<string, Candle[]>, // live candles for Pearson
   ): { blocked: boolean; with?: string; correlation?: number } {
+    const canonicalSymbol = canonicalCorrelationSymbol(symbol);
+
     for (const t of openTrades) {
-      if (t.symbol === symbol) continue;
+      const canonicalExisting = canonicalCorrelationSymbol(t.symbol);
+      if (canonicalExisting === canonicalSymbol) continue;
 
       // Try live Pearson first. Correlation becomes portfolio-PnL
       // correlation only after accounting for trade directions:
@@ -68,8 +71,8 @@ export class CorrelationFilter {
       // Static map only represents known positive correlations, so it is
       // applicable when both trades point in the same direction.
       if (t.side !== side) continue;
-      const peers = STATIC_PAIRS[symbol] ?? [];
-      if (peers.includes(t.symbol)) {
+      const peers = STATIC_PAIRS[canonicalSymbol] ?? [];
+      if (peers.includes(canonicalExisting)) {
         return { blocked: true, with: t.symbol };
       }
     }
@@ -128,6 +131,11 @@ export class CorrelationFilter {
   }
 
   private pairKey(a: string, b: string): string {
-    return [a, b].sort().join('_');
+    return [canonicalCorrelationSymbol(a), canonicalCorrelationSymbol(b)].sort().join('_');
   }
+}
+
+function canonicalCorrelationSymbol(symbol: string): string {
+  const raw = symbol.trim().toUpperCase();
+  return raw.split(/[._:-]/, 1)[0].replace(/[^A-Z0-9]/g, '');
 }
