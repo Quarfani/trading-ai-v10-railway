@@ -50,7 +50,7 @@ export class StartupReconciler {
 
   private async resolveAuthoritativeMT5CloseLedgers(): Promise<void> {
     const rows = this.db.raw().prepare(`
-      SELECT executionId, action, requestJson
+      SELECT executionId, action, requestJson, createdAt
       FROM execution_ledger
       WHERE status IN ('PENDING','UNKNOWN')
         AND action IN ('CLOSE','CLOSE_AT_MARKET')
@@ -59,6 +59,7 @@ export class StartupReconciler {
       executionId: string;
       action: string;
       requestJson?: string | null;
+      createdAt: number;
     }>;
 
     const selectedByTrade = new Set<number>();
@@ -93,6 +94,15 @@ export class StartupReconciler {
 
       const history = await this.getMT5HistoryEntry(Number(trade.ticket));
       if (!history) continue;
+
+      const skewMs = 5 * 60_000;
+      if (history.closeTimeMsc > 0 && Number(row.createdAt) > 0 &&
+          history.closeTimeMsc + skewMs < Number(row.createdAt)) {
+        this.logger.warn(
+          `[MT5] Close history predates execution operation=${row.executionId}; leaving operation unresolved`,
+        );
+        continue;
+      }
 
       if (String(trade.status) === 'open') {
         const changed = this.db.updateTradeClose(
@@ -137,12 +147,12 @@ export class StartupReconciler {
 
   private async resolveAuthoritativeMT5PartialLedgers(positions: any[]): Promise<void> {
     const rows = this.db.raw().prepare(`
-      SELECT executionId, requestJson
+      SELECT executionId, requestJson, createdAt
       FROM execution_ledger
       WHERE status IN ('PENDING','UNKNOWN')
         AND action='PARTIAL_CLOSE'
       ORDER BY updatedAt ASC, createdAt ASC
-    `).all() as Array<{ executionId: string; requestJson?: string | null }>;
+    `).all() as Array<{ executionId: string; requestJson?: string | null; createdAt: number }>;
 
     const byTicket = new Map<number, any>(
       positions.map(position => [Number(position.ticket), position]),
@@ -172,6 +182,15 @@ export class StartupReconciler {
       const history = await this.getMT5HistorySnapshot(Number(trade.ticket));
       if (!history || history.closed || !(history.remainingVolume > 0) ||
           history.remainingVolume >= Number(trade.volume)) continue;
+
+      const skewMs = 5 * 60_000;
+      if (history.closeTimeMsc > 0 && Number(row.createdAt) > 0 &&
+          history.closeTimeMsc + skewMs < Number(row.createdAt)) {
+        this.logger.warn(
+          `[MT5] Partial-close history predates execution operation=${row.executionId}; leaving operation unresolved`,
+        );
+        continue;
+      }
 
       const positionTolerance = Math.max(
         1e-8,
@@ -280,7 +299,7 @@ export class StartupReconciler {
 
   private async getMT5HistorySnapshot(ticket: number): Promise<{
     price: number; netProfit: number; remainingVolume: number; closed: boolean;
-    reason: string; closeDealTicket?: number;
+    reason: string; closeDealTicket?: number; closeTimeMsc: number;
   } | null> {
     const r = await axios.get(`${this.config.mt5.bridgeUrl}/history`, {
       params: { position: ticket }, timeout: 5_000,
@@ -297,17 +316,24 @@ export class StartupReconciler {
 
     const reason = String(r.data?.close_reason ?? 'manual').toLowerCase();
     const closeDealTicket = Number(r.data?.close_deal_ticket);
+    const closeTimeMsc = Number(r.data?.close_time_msc ?? 0);
+    if (!Number.isFinite(closeTimeMsc) || closeTimeMsc < 0) return null;
     return {
-      price, netProfit, remainingVolume, closed,
+      price, netProfit, remainingVolume, closed, closeTimeMsc,
       reason: reason.includes('sl') ? 'SL' : reason.includes('tp') ? 'TP' : 'offline_close',
       ...(Number.isInteger(closeDealTicket) && closeDealTicket > 0 ? { closeDealTicket } : {}),
     };
   }
 
-  private async getMT5HistoryEntry(ticket: number): Promise<{ price: number; profit: number; reason: string } | null> {
+  private async getMT5HistoryEntry(ticket: number): Promise<{ price: number; profit: number; reason: string; closeTimeMsc: number } | null> {
     const history = await this.getMT5HistorySnapshot(ticket);
     if (!history || !history.closed) return null;
-    return { price: history.price, profit: history.netProfit, reason: history.reason };
+    return {
+      price: history.price,
+      profit: history.netProfit,
+      reason: history.reason,
+      closeTimeMsc: history.closeTimeMsc,
+    };
   }
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
