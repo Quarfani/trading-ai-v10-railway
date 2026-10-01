@@ -300,21 +300,46 @@ export class BinanceExecutor {
       return true;
     }catch(e:any){this.logger.warn(`modifyPosition failed: ${e?.message??e}`);return false;}}
 
-  async closePartialPosition(ticket:number,symbol:string,volume:number):Promise<boolean>{
-    if(!this.isFutures || !(volume>0)) return false;
-    try{
+  async closePartialPosition(
+    ticket:number,
+    symbol:string,
+    volume:number,
+  ):Promise<{ok:boolean; remainingVolume:number}>{
+    if(!this.isFutures || !(volume>0)) {
+      return { ok:false, remainingVolume:0 };
+    }
+    try {
       const pos=await this.getPosition(symbol);
-      if(!pos || pos.positionAmt===0) return false;
+      if(!pos || pos.positionAmt===0) return { ok:false, remainingVolume:0 };
+
       const available=Math.abs(pos.positionAmt);
       const qty=Math.min(volume,available);
-      if(!(qty>0)) return false;
+      if(!(qty>0)) return { ok:false, remainingVolume:available };
+
       const closeSide=pos.positionAmt>0?'SELL':'BUY';
-      await this.signedPost('/fapi/v1/order',{symbol,side:closeSide,type:'MARKET',quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),reduceOnly:'true'});
+      await this.signedPost('/fapi/v1/order',{
+        symbol,
+        side:closeSide,
+        type:'MARKET',
+        quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
+        reduceOnly:'true',
+      });
+
+      // Re-read the broker position so local state reflects the amount that
+      // actually remains after a potentially partial fill.
+      const after=await this.getPosition(symbol);
+      const remainingVolume=Math.max(0, Math.abs(after?.positionAmt ?? 0));
       const ids=this.orderMap.get(ticket);
-      if(ids) ids.quantity=Math.max(0,(ids.quantity??available)-qty);
-      this.logger.info(`[Binance] Partial close ${symbol} ${qty}`);
-      return true;
-    }catch(e:any){this.logger.error(`closePartialPosition failed: ${e?.message??e}`);return false;}
+      if(ids) ids.quantity=remainingVolume;
+
+      this.logger.info(
+        `[Binance] Partial close ${symbol} requested=${qty} remaining=${remainingVolume}`,
+      );
+      return { ok:true, remainingVolume };
+    }catch(e:any){
+      this.logger.error(`closePartialPosition failed: ${e?.message??e}`);
+      return { ok:false, remainingVolume:0 };
+    }
   }
 
   // ─── Close position ───────────────────────────────────────────────────
