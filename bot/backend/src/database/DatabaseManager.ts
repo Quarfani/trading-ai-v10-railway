@@ -200,12 +200,13 @@ export class DatabaseManager {
     executionId: string; operationKey: string; action: string; status: string;
     symbol?: string; side?: string; volume?: number; signalId?: string; strategyId?: string;
     request?: Record<string, unknown>;
-  }) {
+  }): boolean {
     const now = Date.now();
-    this.db.prepare(`
+    const result = this.db.prepare(`
       INSERT INTO execution_ledger
         (executionId,operationKey,action,status,symbol,side,volume,signalId,strategyId,requestJson,createdAt,updatedAt)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(operationKey) DO NOTHING
     `).run(
       entry.executionId, entry.operationKey, entry.action, entry.status,
       entry.symbol ?? null, entry.side ?? null, entry.volume ?? null,
@@ -213,6 +214,7 @@ export class DatabaseManager {
       entry.request ? JSON.stringify(entry.request) : null,
       now, now,
     );
+    return result.changes === 1;
   }
 
   getExecutionByOperationKey(operationKey: string): any | null {
