@@ -377,9 +377,20 @@ export class Reconciler {
           Number(unresolvedClose.createdAt),
         );
         const executedQty = Number(recovered.executedQty);
-        if (!Number.isFinite(executedQty) || executedQty <= 0) {
+        const expectedQty = Math.abs(Number(t.volume));
+        const qtyTolerance = Math.max(
+          1e-12,
+          expectedQty * 0.02,
+        );
+        if (
+          !Number.isFinite(executedQty) ||
+          executedQty <= 0 ||
+          !Number.isFinite(expectedQty) ||
+          expectedQty <= 0 ||
+          Math.abs(executedQty - expectedQty) > qtyTolerance
+        ) {
           throw new Error(
-            `Binance full-close recovery returned invalid executed quantity for ${t.symbol}`,
+            `Binance full-close recovery quantity mismatch for ${t.symbol}: recovered=${executedQty} expected=${expectedQty}`,
           );
         }
 
