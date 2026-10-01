@@ -39,7 +39,7 @@ export class StrategyDefinitionStore {
   constructor(
     private readonly db: DatabaseManager,
     private readonly evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
-  private readonly evidenceSnapshots = new EvidenceSnapshotStore(db),
+    private readonly evidenceSnapshots = new EvidenceSnapshotStore(db),
   ) {}
 
   save(definition: StrategyDefinition): void {
@@ -181,6 +181,51 @@ export class StrategyDefinitionStore {
             '[StrategyDefinitionStore] evidence snapshot is not promoted for ' +
             definition.strategyId + '/' + symbol + '/' + timeframe,
           );
+        }
+
+        // Capital promotion must honor the same Monte Carlo policy used by
+        // lifecycle evidence evaluation. This remains opt-in so legacy
+        // strategies can migrate their snapshots before the gate is enabled.
+        if (this.evidencePolicy.requireMonteCarlo) {
+          const evidence = snapshot.evidence as {
+            monteCarloStress?: {
+              maxDDP95: number;
+              probabilityRuin: number;
+              unrecoveredRate: number;
+            };
+          } | undefined;
+          const mc = evidence?.monteCarloStress;
+
+          if (!mc) {
+            throw new Error(
+              '[StrategyDefinitionStore] missing Monte Carlo stress evidence for ' +
+              definition.strategyId + '/' + symbol + '/' + timeframe,
+            );
+          }
+
+          const maxDD95 = this.evidencePolicy.maxMonteCarloDD95 ?? 0.30;
+          const maxRuin = this.evidencePolicy.maxMonteCarloRuinProbability ?? 0.05;
+          const maxUnrecovered =
+            this.evidencePolicy.maxMonteCarloUnrecoveredRate ?? 0.25;
+
+          if (!(mc.maxDDP95 <= maxDD95)) {
+            throw new Error(
+              '[StrategyDefinitionStore] Monte Carlo P95 drawdown above policy for ' +
+              definition.strategyId + '/' + symbol + '/' + timeframe,
+            );
+          }
+          if (!(mc.probabilityRuin <= maxRuin)) {
+            throw new Error(
+              '[StrategyDefinitionStore] Monte Carlo ruin probability above policy for ' +
+              definition.strategyId + '/' + symbol + '/' + timeframe,
+            );
+          }
+          if (!(mc.unrecoveredRate <= maxUnrecovered)) {
+            throw new Error(
+              '[StrategyDefinitionStore] Monte Carlo unrecovered rate above policy for ' +
+              definition.strategyId + '/' + symbol + '/' + timeframe,
+            );
+          }
         }
 
         if (
