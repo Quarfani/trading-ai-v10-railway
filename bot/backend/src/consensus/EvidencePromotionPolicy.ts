@@ -12,12 +12,12 @@ export interface EvidencePromotionPolicy {
 }
 
 export const DEFAULT_EVIDENCE_PROMOTION_POLICY: EvidencePromotionPolicy = {
-  minSampleSize: 1,
-  minOutOfSampleTrades: 1,
-  minOutOfSampleProfitFactor: 1,
-  minWalkForwardStability: 0,
-  minParameterSensitivity: 0,
-  minRegimeCoverage: 0,
+  minSampleSize: 100,
+  minOutOfSampleTrades: 30,
+  minOutOfSampleProfitFactor: 1.05,
+  minWalkForwardStability: 0.5,
+  minParameterSensitivity: 0.5,
+  minRegimeCoverage: 0.5,
   maxAgeMs: 30 * 24 * 3_600_000,
 };
 
