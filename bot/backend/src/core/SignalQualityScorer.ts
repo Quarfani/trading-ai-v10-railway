@@ -176,29 +176,71 @@ export class SignalQualityScorer {
   }
 
   private scoreRegimeFit(source: string, regime: MarketRegime, reasons: string[]): number {
-    const engines  = source.toUpperCase().split('+');
-    const hasTrend = engines.some(e => e.includes('TREND'));
-    const hasRSI   = engines.some(e => e.includes('RSI'));
-    const hasBO    = engines.some(e => e.includes('BREAKOUT'));
+    const engines = source
+      .toUpperCase()
+      .split('+')
+      .map(engine => engine.trim());
+
+    const hasTrend = engines.some(
+      engine => engine.includes('TREND') || engine.includes('ICHIMOKU'),
+    );
+    const hasRSI = engines.some(
+      engine =>
+        engine.includes('RSI') ||
+        engine.includes('STOCH') ||
+        engine.includes('VWAP'),
+    );
+    const hasBO = engines.some(engine => engine.includes('BREAKOUT'));
+    const hasMacd = engines.some(engine => engine.includes('MACD'));
 
     switch (regime) {
       case 'TRENDING':
-        if (hasTrend) { reasons.push('✓ TREND engine fits TRENDING market (+20)'); return 20; }
-        if (hasBO)    { reasons.push('✓ BREAKOUT engine fits TRENDING market (+15)'); return 15; }
-        if (hasRSI)   { reasons.push('⚠ RSI in TRENDING market (risky) (+6)'); return 6; }
-        reasons.push('⚠ Unknown engine in TRENDING (+10)'); return 10;
+        if (hasTrend) {
+          reasons.push('✓ Trend/Ichimoku fits TRENDING (+20)');
+          return 20;
+        }
+        if (hasBO) {
+          reasons.push('✓ BREAKOUT fits TRENDING (+15)');
+          return 15;
+        }
+        if (hasMacd) {
+          reasons.push('✓ MACD_DIV in TRENDING (+13)');
+          return 13;
+        }
+        if (hasRSI) {
+          reasons.push('⚠ RSI/VWAP in TRENDING (+6)');
+          return 6;
+        }
+        reasons.push('⚠ Unknown engine in TRENDING (+10)');
+        return 10;
 
       case 'RANGING':
-        if (hasRSI)   { reasons.push('✓ RSI engine fits RANGING market (+20)'); return 20; }
-        if (hasTrend) { reasons.push('✗ TREND engine in RANGING market (poor fit) (+4)'); return 4; }
-        if (hasBO)    { reasons.push('⚠ BREAKOUT in RANGING (false break risk) (+6)'); return 6; }
-        reasons.push('⚠ Unknown engine in RANGING (+10)'); return 10;
+        if (hasRSI) {
+          reasons.push('✓ RSI/VWAP/StochRSI fits RANGING (+20)');
+          return 20;
+        }
+        if (hasMacd) {
+          reasons.push('✓ MACD_DIV in RANGING (+14)');
+          return 14;
+        }
+        if (hasTrend) {
+          reasons.push('✗ Trend engine in RANGING (+4)');
+          return 4;
+        }
+        if (hasBO) {
+          reasons.push('⚠ BREAKOUT in RANGING (+6)');
+          return 6;
+        }
+        reasons.push('⚠ Unknown engine in RANGING (+10)');
+        return 10;
 
       case 'VOLATILE':
-        reasons.push('✗ VOLATILE market — all strategies penalized (+3)'); return 3;
+        reasons.push('✗ VOLATILE market (+3)');
+        return 3;
 
       default:
-        reasons.push('⚠ Unknown regime — neutral (+10)'); return 10;
+        reasons.push('⚠ Unknown regime (+10)');
+        return 10;
     }
   }
 
@@ -253,38 +295,3 @@ export class SignalQualityScorer {
 
 function pct(v: number): string { return `${(v * 100).toFixed(1)}%`; }
 
-// ── V7 patch: update regimeFit to recognise new engine names ──────────────
-// The method is overridden in-place via monkey-patch at module init time.
-// This avoids breaking the class boundary while adding MACD_DIV, ICHIMOKU etc.
-const _origRegimeFit = (SignalQualityScorer.prototype as any)['scoreRegimeFit'].bind;
-(SignalQualityScorer.prototype as any)['_scoreRegimeFitBase'] =
-  (SignalQualityScorer.prototype as any)['scoreRegimeFit'];
-
-(SignalQualityScorer.prototype as any)['scoreRegimeFit'] = function(
-  source: string, regime: string, reasons: string[]
-): number {
-  const engines  = source.toUpperCase().split('+');
-  const hasTrend = engines.some(e => e.includes('TREND') || e.includes('ICHIMOKU'));
-  const hasRSI   = engines.some(e => e.includes('RSI')   || e.includes('STOCH')   || e.includes('VWAP'));
-  const hasBO    = engines.some(e => e.includes('BREAKOUT'));
-  const hasMacd  = engines.some(e => e.includes('MACD'));
-
-  switch (regime) {
-    case 'TRENDING':
-      if (hasTrend) { reasons.push('✓ Trend/Ichimoku fits TRENDING (+20)'); return 20; }
-      if (hasBO)    { reasons.push('✓ BREAKOUT fits TRENDING (+15)');       return 15; }
-      if (hasMacd)  { reasons.push('✓ MACD_DIV in TRENDING (+13)');        return 13; }
-      if (hasRSI)   { reasons.push('⚠ RSI/VWAP in TRENDING (+6)');         return 6;  }
-      return 10;
-    case 'RANGING':
-      if (hasRSI)   { reasons.push('✓ RSI/VWAP/StochRSI fits RANGING (+20)'); return 20; }
-      if (hasMacd)  { reasons.push('✓ MACD_DIV in RANGING (+14)');            return 14; }
-      if (hasTrend) { reasons.push('✗ Trend engine in RANGING (+4)');          return 4;  }
-      if (hasBO)    { reasons.push('⚠ BREAKOUT in RANGING (+6)');              return 6;  }
-      return 10;
-    case 'VOLATILE':
-      reasons.push('✗ VOLATILE market (+3)'); return 3;
-    default:
-      reasons.push('⚠ Unknown regime (+10)'); return 10;
-  }
-};
