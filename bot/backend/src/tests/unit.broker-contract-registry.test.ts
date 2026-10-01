@@ -48,11 +48,13 @@ assert(
 registry.clear();
 assert(!registry.hasVerified('USOIL'), 'cleared registry must not retain contract');
 
-registry.register({ ...verified, symbol:'EXPIREDOIL', expiresAt:Date.now() - 1 });
-assert(
-  registry.get('EXPIREDOIL') === null,
-  'expired broker contract must fail closed on read',
-);
+let expiryRejected = false;
+try {
+  registry.register({ ...verified, symbol:'EXPIREDOIL', expiresAt:Date.now() - 1 });
+} catch {
+  expiryRejected = true;
+}
+assert(expiryRejected, 'expired broker contract must be rejected at registration');
 
 registry.register({ ...verified, symbol:'TEMP_OIL', expiresAt:Date.now() + 10 });
 await new Promise(resolve => setTimeout(resolve, 25));
