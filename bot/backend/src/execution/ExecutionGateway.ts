@@ -611,6 +611,7 @@ export class ExecutionGateway {
     return realizedProfit;
   }
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
+    let brokerOrderId: number | undefined;
     if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
 
     // A replay of the same operation is safe and must return the persisted
@@ -687,7 +688,7 @@ export class ExecutionGateway {
           makeBinanceClientOrderId(key),
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
-        this.binancePartialOrderIdForResult = result.orderId;
+        brokerOrderId = result.orderId;
         remaining = result.remainingVolume;
         realizedProfit = await this.convertBrokerProfitToAccount(
           result.realizedProfit,
@@ -705,9 +706,6 @@ export class ExecutionGateway {
         throw new Error('Paper partial close reached an invalid live-settlement path');
       }
 
-      const brokerOrderId = this.config.mode === 'binance'
-        ? (this.binancePartialOrderIdForResult ?? undefined)
-        : undefined;
       const returnedProfit = this.settleLivePartialClose(
         t,
         op.executionId,
