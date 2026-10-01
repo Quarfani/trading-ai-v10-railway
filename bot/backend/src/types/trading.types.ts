@@ -116,6 +116,10 @@ export interface SystemConfig {
     minParameterSensitivity: number;
     minRegimeCoverage: number;
     maxAgeMs: number;
+    requireMonteCarlo: boolean;
+    maxMonteCarloDD95: number;
+    maxMonteCarloRuinProbability: number;
+    maxMonteCarloUnrecoveredRate: number;
   };
   mode: Mode;
   accountBalance: number;
