@@ -417,6 +417,10 @@ export class TradingEngine extends EventEmitter {
 
     this.posTracker.syncFromDB();
 
+    // Do not report readiness until every persisted open trade has been
+    // reconciled against the authoritative execution venue/state.
+    await this.reconciler.reconcileNow();
+
     this.isRunning = true;
     this.ready = true;
 
