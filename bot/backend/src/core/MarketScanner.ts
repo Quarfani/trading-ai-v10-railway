@@ -89,7 +89,7 @@ export class MarketScanner {
       timeout: 10_000,
       headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
     });
-    return this.normalizeCandles(r.data?.candles ?? [], 'mt5');
+    return this.normalizeCandles(r.data?.candles ?? [], 'mt5', tf);
   }
 
   private async fromBinance(symbol:string,tf:Timeframe,count:number):Promise<Candle[]>{
@@ -132,7 +132,11 @@ export class MarketScanner {
     const dedup=new Map<number,Candle>();for(const c of all){c.source='binance';dedup.set(c.time,c);}return Array.from(dedup.values()).sort((a,b)=>a.time-b.time).slice(-target);
   }
 
-  private normalizeCandles(input:any[], source: 'mt5'|'binance' = 'mt5'): Candle[] {
+  private normalizeCandles(
+    input:any[],
+    source: 'mt5'|'binance' = 'mt5',
+    tf: Timeframe = 'M1',
+  ): Candle[] {
     const out=input.map((c:any)=>({
       time:Number(c.time ?? c.timestamp ?? c.t),
       open:Number(c.open ?? c.o), high:Number(c.high ?? c.h),
@@ -140,7 +144,18 @@ export class MarketScanner {
       volume:Number(c.volume ?? c.v ?? 0),
       source, quality:'good' as const, is_imputed:false, is_synthetic:false, sequence_valid:true,
       latency: Number.isFinite(Number(c.time ?? c.timestamp ?? c.t)) ? Date.now() - Number(c.time ?? c.timestamp ?? c.t) : Infinity,
-    })).filter((c:Candle)=>Number.isFinite(c.time)&&Number.isFinite(c.open)&&Number.isFinite(c.high)&&Number.isFinite(c.low)&&Number.isFinite(c.close));
+    })).filter((c:Candle)=>
+      Number.isFinite(c.time) &&
+      Number.isFinite(c.open) &&
+      Number.isFinite(c.high) &&
+      Number.isFinite(c.low) &&
+      Number.isFinite(c.close) &&
+      c.high >= Math.max(c.open, c.close) &&
+      c.low <= Math.min(c.open, c.close) &&
+      c.high >= c.low &&
+      c.volume >= 0 &&
+      c.time + TIMEFRAME_MS[tf] <= Date.now()
+    );
     const dedup=new Map<number,Candle>(); for(const c of out) dedup.set(c.time,c);
     return Array.from(dedup.values()).sort((a,b)=>a.time-b.time);
   }
