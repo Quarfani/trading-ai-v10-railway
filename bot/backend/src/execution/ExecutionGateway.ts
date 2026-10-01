@@ -339,9 +339,9 @@ export class ExecutionGateway {
         { timeout: 8_000, headers: this.mt5Headers() },
       );
 
-      if (response.data?.ok === false) {
+      if (response.data?.ok !== true) {
         throw new Error(
-          `MT5 close rejected: ${response.data?.error ?? 'unknown error'}`,
+          `MT5 close returned a non-success response: ${response.data?.error ?? JSON.stringify(response.data)}`,
         );
       }
 
@@ -591,6 +591,11 @@ export class ExecutionGateway {
           { ticket: t.ticket, fraction, idempotency_key: key },
           { timeout: 8_000, headers: this.mt5Headers() },
         );
+        if (r.data?.ok !== true) {
+          throw new Error(
+            `MT5 partial close returned a non-success response: ${r.data?.error ?? JSON.stringify(r.data)}`,
+          );
+        }
         const brokerRemaining = Number(r.data?.remaining_volume);
         const brokerProfit = Number(r.data?.profit ?? 0);
         if (!Number.isFinite(brokerRemaining) || brokerRemaining < 0 || brokerRemaining > t.volume) {
