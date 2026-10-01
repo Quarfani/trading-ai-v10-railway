@@ -57,6 +57,7 @@ export class StartupReconciler {
       ORDER BY updatedAt ASC, createdAt ASC, executionId ASC
     `).all() as Array<{
       executionId: string;
+      operationKey: string;
       action: string;
       requestJson?: string | null;
       createdAt: number;
@@ -373,7 +374,7 @@ export class StartupReconciler {
     if (!this.config.binance.futures) return;
 
     const rows = this.db.raw().prepare(`
-      SELECT executionId, action, requestJson
+      SELECT executionId, operationKey, action, requestJson
       FROM execution_ledger
       WHERE status IN ('PENDING','UNKNOWN')
         AND action IN ('CLOSE','CLOSE_AT_MARKET')
@@ -407,7 +408,7 @@ export class StartupReconciler {
         ['CLOSE', 'CLOSE_AT_MARKET'],
       )) continue;
 
-      const clientOrderId = makeBinanceClientOrderId(String(row.executionId));
+      const clientOrderId = makeBinanceClientOrderId(String(row.operationKey));
       const order = await exec.reconcileFuturesCloseByClientOrderId(
         String(trade.symbol),
         clientOrderId,
