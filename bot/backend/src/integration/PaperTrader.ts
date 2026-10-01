@@ -184,7 +184,7 @@ export class PaperTrader {
       if(!hitSL&&!hitTP&&!timeout) continue;
       const reason=hitSL?'SL':hitTP?'TP':'TIMEOUT';
       const price=reason==='SL'?t.sl:reason==='TP'?t.tp:candle.close;
-      this.closeTrade(t.ticket,price,reason,candle.time);
+      this.closeTrade(t.ticket,price,reason,candle.time,quoteToAccount);
     }
   }
 
