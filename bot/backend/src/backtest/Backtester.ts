@@ -259,6 +259,73 @@ export class Backtester {
       size: number; openedAt: number; openBar: number; source: string; entryQuoteToAccount: number;
     } | null = null;
 
+    const recordEquity = (at: number, equity: number) => {
+      if (!Number.isFinite(equity)) return;
+      equityCurve.push({ t: at, equity });
+      if (peak > 0) {
+        if (equity > peak) peak = equity;
+        const ddUsd = Math.max(0, peak - equity);
+        const ddPct = ddUsd / peak;
+        maxDDPct = Math.max(maxDDPct, ddPct);
+        maxDDUsd = Math.max(maxDDUsd, ddUsd);
+      }
+    };
+
+    const settlePosition = (
+      exitPrice: number,
+      exitReason: 'TP' | 'SL' | 'TIMEOUT',
+      at: number,
+      exitQuoteToAccount: number,
+    ) => {
+      if (!openPos) return;
+
+      const rawPnl = calculateGrossPnlAccount({
+        entryPrice: openPos.entry,
+        exitPrice,
+        volume: openPos.size,
+        contractSize: economics!.contractSize,
+        quoteToAccount: exitQuoteToAccount,
+        side: openPos.side,
+      });
+
+      const costs = estimateCosts({
+        entryPrice: openPos.entry,
+        exitPrice,
+        volume: openPos.size,
+        contractSize: economics!.contractSize,
+        quoteToAccount: exitQuoteToAccount,
+        entryQuoteToAccount: openPos.entryQuoteToAccount,
+        exitQuoteToAccount,
+        holdingDays: Math.max(0, (at - openPos.openedAt) / (24 * 3_600_000)),
+      }, costProfile);
+
+      const pnl = rawPnl - costs.total;
+
+      balance += pnl;
+      totalComm += costs.commission;
+      totalSpread += costs.spread;
+      totalCost += costs.total;
+
+      trades.push({
+        symbol, source: openPos.source,
+        side: openPos.side, entry: openPos.entry, exit: exitPrice,
+        sl: openPos.sl, tp: openPos.tp, size: openPos.size,
+        pnl, pnlPct: (pnl / startBalance) * 100,
+        openedAt: openPos.openedAt, closedAt: at, exitReason,
+      });
+
+      const monthKey = new Date(at).toISOString().slice(0, 7);
+      const mo = monthlyMap.get(monthKey) ??
+        { month: monthKey, trades: 0, wins: 0, pnl: 0, winRate: 0 };
+      mo.trades++;
+      mo.pnl += pnl;
+      if (pnl > 0) mo.wins++;
+      mo.winRate = mo.wins / mo.trades;
+      monthlyMap.set(monthKey, mo);
+
+      openPos = null;
+    };
+
     equityCurve.push({ t: candles[0]?.time ?? 0, equity: balance });
 
     for (let i = WARMUP; i < candles.length; i++) {
@@ -278,59 +345,11 @@ export class Backtester {
           const exitQuoteToAccount = conversionAt(cur.time);
           if (exitQuoteToAccount == null) {
             valid = false;
-            blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+            blockedReason = \`Missing historical \${quoteCurrency}->\${accountCurrency} conversion at \${cur.time}\`;
             break;
           }
 
-          const rawPnl = calculateGrossPnlAccount({
-            entryPrice: openPos.entry,
-            exitPrice,
-            volume: openPos.size,
-            contractSize: economics!.contractSize,
-            quoteToAccount: exitQuoteToAccount,
-            side: openPos.side,
-          });
-
-          const costs = estimateCosts({
-            entryPrice: openPos.entry,
-            exitPrice,
-            volume: openPos.size,
-            contractSize: economics!.contractSize,
-            quoteToAccount: exitQuoteToAccount,
-            entryQuoteToAccount: openPos.entryQuoteToAccount,
-            exitQuoteToAccount,
-          }, costProfile);
-
-          const pnl = rawPnl - costs.total;
-
-          balance += pnl;
-          totalComm += costs.commission;
-          totalSpread += costs.spread;
-          totalCost += costs.total;
-          peak         = Math.max(peak, balance);
-          const dd     = (peak - balance) / peak;
-          maxDDPct     = Math.max(maxDDPct, dd);
-          maxDDUsd     = Math.max(maxDDUsd, peak - balance);
-
-          trades.push({
-            symbol, source: openPos.source,
-            side: openPos.side, entry: openPos.entry, exit: exitPrice,
-            sl: openPos.sl, tp: openPos.tp, size: openPos.size,
-            pnl, pnlPct: (pnl / startBalance) * 100,
-            openedAt: openPos.openedAt, closedAt: cur.time, exitReason,
-          });
-
-          const monthKey = new Date(cur.time).toISOString().slice(0, 7);
-          const mo = monthlyMap.get(monthKey) ??
-            { month: monthKey, trades: 0, wins: 0, pnl: 0, winRate: 0 };
-          mo.trades++;
-          mo.pnl += pnl;
-          if (pnl > 0) mo.wins++;
-          mo.winRate = mo.wins / mo.trades;
-          monthlyMap.set(monthKey, mo);
-
-          equityCurve.push({ t: cur.time, equity: balance });
-          openPos = null;
+          settlePosition(exitPrice, exitReason, cur.time, exitQuoteToAccount);
         }
       }
 
@@ -397,6 +416,59 @@ export class Backtester {
           this.logger.error(`[Backtest] Signal generation failed at ${symbol}/${cur.time}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
+
+      // Mark open positions to market on every historical bar. This keeps
+      // intra-trade adverse excursions in max drawdown instead of only
+      // measuring realized PnL after a trade closes.
+      if (valid && openPos) {
+        const markRate = conversionAt(cur.time);
+        if (markRate == null) {
+          valid = false;
+          blockedReason = \`Missing historical \${quoteCurrency}->\${accountCurrency} conversion at \${cur.time}\`;
+          break;
+        }
+
+        const markGross = calculateGrossPnlAccount({
+          entryPrice: openPos.entry,
+          exitPrice: cur.close,
+          volume: openPos.size,
+          contractSize: economics!.contractSize,
+          quoteToAccount: markRate,
+          side: openPos.side,
+        });
+        const markCosts = estimateCosts({
+          entryPrice: openPos.entry,
+          exitPrice: cur.close,
+          volume: openPos.size,
+          contractSize: economics!.contractSize,
+          quoteToAccount: markRate,
+          entryQuoteToAccount: openPos.entryQuoteToAccount,
+          exitQuoteToAccount: markRate,
+          holdingDays: Math.max(0, (cur.time - openPos.openedAt) / (24 * 3_600_000)),
+        }, costProfile);
+        recordEquity(cur.time, balance + markGross - markCosts.total);
+      } else {
+        recordEquity(cur.time, balance);
+      }
+    }
+
+    // Settle a position still open when the historical dataset ends rather
+    // than silently dropping it from performance and cost accounting.
+    if (valid && openPos) {
+      const last = candles[candles.length - 1];
+      const exitQuoteToAccount = conversionAt(last.time);
+      if (exitQuoteToAccount == null) {
+        valid = false;
+        blockedReason = \`Missing historical \${quoteCurrency}->\${accountCurrency} conversion at \${last.time}\`;
+      } else {
+        settlePosition(last.close, 'TIMEOUT', last.time, exitQuoteToAccount);
+        recordEquity(last.time, balance);
+      }
+    }
+
+    if (simulationErrors > 0 && valid) {
+      valid = false;
+      blockedReason = \`Backtest encountered \${simulationErrors} simulation error(s)\`;
     }
 
     try { fs.unlinkSync(tmpDb); } catch { /* pass */ }
