@@ -1027,6 +1027,8 @@ def close():
 
     if BRIDGE_MODE == 'simulation':
         result = sim_close(ticket, 1.0)
+        if result.get("ok"):
+            _idempotency_record(idempotency_key, "SUCCESS", result)
         return jsonify(result)
 
     with _lock:
