@@ -26,6 +26,19 @@ export interface StrategyRiskProfile {
   maximumCorrelatedExposure?: number;
 }
 
+export interface MonteCarloStressEvidence {
+  simulations: number;
+  futureTrades: number;
+  p5FinalBalance: number;
+  p50FinalBalance: number;
+  maxDDP95: number;
+  probabilityLoss: number;
+  probabilityDD20: number;
+  probabilityRuin: number;
+  unrecoveredRate: number;
+  recoveryTradesP95: number | null;
+}
+
 export interface StrategyEvidence {
   datasetVersion: string;
   costModelVersion: string;
@@ -35,6 +48,7 @@ export interface StrategyEvidence {
   walkForwardStability: number;
   parameterSensitivity: number;
   regimeCoverage: number;
+  monteCarloStress?: MonteCarloStressEvidence;
   passed: boolean;
   evaluatedAt: number;
 }
