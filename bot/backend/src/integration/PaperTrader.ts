@@ -51,7 +51,11 @@ export class PaperTrader {
       const economics=this.resolveEconomics(row.symbol, row.timeframe ?? 'H1');
       const profile=getCostProfile(row.symbol);
       const restoredEntryRate = Number(row.entryQuoteToAccount);
-      const entryRate = restoredEntryRate > 0 && Number.isFinite(restoredEntryRate) ? restoredEntryRate : 1;
+      const entryRate = this.resolveQuoteToAccount(
+        row.symbol,
+        row.timeframe ?? 'H1',
+        restoredEntryRate,
+      );
       const entryCosts=estimateEntryCosts({price:row.entry,volume:row.volume,contractSize:economics.contractSize,quoteToAccount:entryRate},profile);
       this.balance-=entryCosts;
     }
@@ -70,7 +74,11 @@ export class PaperTrader {
       const economics=this.resolveEconomics(row.symbol, row.timeframe ?? 'H1');
       const profile=getCostProfile(row.symbol);
       const restoredEntryRate = Number(row.entryQuoteToAccount);
-      const entryRate = restoredEntryRate > 0 && Number.isFinite(restoredEntryRate) ? restoredEntryRate : 1;
+      const entryRate = this.resolveQuoteToAccount(
+        row.symbol,
+        row.timeframe ?? 'H1',
+        restoredEntryRate,
+      );
       const restoredEntryCost=estimateEntryCosts({
         price:row.entry,
         volume:row.volume,
