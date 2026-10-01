@@ -793,6 +793,7 @@ export class TradingEngine extends EventEmitter {
     this.adaptiveATR.getParams(
       symbol,
       candles,
+      tf,
     );
 
     // ── Consensus ──────────────────────────────────────────────────────
