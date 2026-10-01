@@ -1404,11 +1404,18 @@ export class TradingEngine extends EventEmitter {
 
     // ── Execution slippage guard ─────────────────────────────────────────
     const maxSlippagePips = this.config.maxSlippagePips ?? 3;
-    const priceIncrement = marketDefinition.economics.priceIncrement;
+    const explicitSlippagePct = this.config.maxSlippagePct;
+    const pipSize =
+      marketDefinition.economics.pipSize ??
+      marketDefinition.economics.priceIncrement;
     const maxSlippagePct =
-      adjustedSignal.price > 0 && priceIncrement > 0
-        ? (maxSlippagePips * priceIncrement) / adjustedSignal.price
-        : Number.POSITIVE_INFINITY;
+      explicitSlippagePct != null
+        ? explicitSlippagePct
+        : marketDefinition.assetClass === 'FOREX' &&
+          adjustedSignal.price > 0 &&
+          pipSize > 0
+          ? (maxSlippagePips * pipSize) / adjustedSignal.price
+          : undefined;
     const slippage = this.slippageGuard.check(
       adjustedSignal,
       result.trade,
