@@ -32,7 +32,8 @@ import { Logger } from '../utils/Logger';
 import { HistoricalRateSeries } from '../market/HistoricalCurrencySeries';
 import { TIMEFRAME_MS } from '../market/market.types';
 import { buildPurgedWalkForwardFolds } from '../research/PurgedWalkForward';
-import { summarizeWfoEvidence, BacktestWfoMetrics } from '../research/WfoEvidenceAdapter';
+import { evidenceInputFromWfo, summarizeWfoEvidence, BacktestWfoMetrics } from '../research/WfoEvidenceAdapter';
+import { calculateEvidenceScore } from '../research/EvidenceScore';
 import { MarketRegimeDetector } from '../core/MarketRegimeDetector';
 import { runMonteCarloStress, MonteCarloStressResult } from './MonteCarloStress';
 
@@ -77,6 +78,7 @@ export interface WalkForwardResult {
   valid:           boolean;
   validationReasons: string[];
   evidence: ReturnType<typeof summarizeWfoEvidence>;
+  evidenceScore: ReturnType<typeof calculateEvidenceScore>;
   monteCarloStress?: MonteCarloStressResult;
 }
 
@@ -176,7 +178,9 @@ export class WalkForwardOptimizer {
         testMetrics.valid &&
         leakagePassed &&
         testMetrics.winRate >= 0.45 &&
-        testMetrics.sharpe >= 0.3;
+        testMetrics.sharpe >= 0.3 &&
+        testMetrics.profitFactor > 1 &&
+        testMetrics.totalTrades > 0;
 
       windows.push({
         trainStart: fold.train[0].startTime,
@@ -294,9 +298,11 @@ export class WalkForwardOptimizer {
       process.env[envAtrKey] = String(params.atrMult);
       process.env[envTpKey] = String(params.tpRatio);
 
+      const accountCurrency = String(process.env.ACCOUNT_CURRENCY ?? 'USD').toUpperCase();
+
       const bt = new Backtester({
         mode: 'paper',
-        accountCurrency: 'USD',
+        accountCurrency,
         accountBalance: 10_000,
         minConfidence: params.minConfidence,
       } as any);
@@ -453,6 +459,8 @@ export class WalkForwardOptimizer {
       leakagePassed: w.leakagePassed,
     }));
     const evidence = summarizeWfoEvidence(evidenceMetrics);
+    const evidenceInput = evidenceInputFromWfo(evidenceMetrics);
+    const evidenceScore = calculateEvidenceScore(evidenceInput);
     const oosTradePnls = windows.flatMap(w => w.testMetrics.tradePnls);
     const monteCarloStress = oosTradePnls.length >= 10
       ? runMonteCarloStress(
@@ -475,12 +483,28 @@ export class WalkForwardOptimizer {
     let recommendation: WalkForwardResult['recommendation'];
     let reason: string;
 
-    if (valid && allFoldsValid && oos_winRate >= 0.52 && oos_sharpe >= 0.5 && validPct >= 0.6) {
+    if (
+      valid &&
+      allFoldsValid &&
+      evidenceScore.passed &&
+      oos_winRate >= 0.52 &&
+      oos_sharpe >= 0.5 &&
+      validPct >= 0.6
+    ) {
       recommendation = 'TRADE';
-      reason = `OOS Win Rate ${(oos_winRate*100).toFixed(1)}%, Sharpe ${oos_sharpe.toFixed(2)}, ${(validPct*100).toFixed(0)}% valid windows`;
-    } else if (valid && allFoldsValid && oos_winRate >= 0.47 && validPct >= 0.4) {
+      reason =
+        `OOS evidence gate passed: ${evidenceScore.sufficientSample ? 'sufficient sample' : 'insufficient sample'}, ` +
+        `WR ${(oos_winRate*100).toFixed(1)}%, Sharpe ${oos_sharpe.toFixed(2)}, ` +
+        `${(validPct*100).toFixed(0)}% valid windows`;
+    } else if (
+      valid &&
+      allFoldsValid &&
+      oos_winRate >= 0.47 &&
+      validPct >= 0.4 &&
+      evidenceScore.score >= 0.45
+    ) {
       recommendation = 'CAUTION';
-      reason = `Marginal OOS results — start with minimum lot size`;
+      reason = evidenceScore.reasons.join('; ');
     } else {
       recommendation = 'DO_NOT_TRADE';
       reason = !valid || !allFoldsValid
@@ -490,7 +514,26 @@ export class WalkForwardOptimizer {
 
     this.logger.info(`WFO ${symbol}: ${recommendation} | OOS WR=${(oos_winRate*100).toFixed(1)}% Sharpe=${oos_sharpe.toFixed(2)}`);
 
-    return { symbol, windows, finalParams, oos_winRate, oos_sharpe, oos_profit, recommendation, reason, runAt: Date.now(), valid: valid && evidence.passed, monteCarloStress, validationReasons: [...(validationReason ? [validationReason] : []), ...evidence.reasons], evidence };
+    return {
+      symbol,
+      windows,
+      finalParams,
+      oos_winRate,
+      oos_sharpe,
+      oos_profit,
+      recommendation,
+      reason,
+      runAt: Date.now(),
+      valid: valid && evidence.passed,
+      monteCarloStress,
+      validationReasons: [
+        ...(validationReason ? [validationReason] : []),
+        ...evidence.reasons,
+        ...evidenceScore.reasons,
+      ],
+      evidence,
+      evidenceScore,
+    };
   }
 
   private insufficient(symbol: string, reason = 'Insufficient candle data for walk-forward optimization'): WalkForwardResult {
@@ -504,6 +547,7 @@ export class WalkForwardOptimizer {
       valid: false,
       validationReasons: [reason],
       evidence: summarizeWfoEvidence([]),
+      evidenceScore: calculateEvidenceScore(evidenceInputFromWfo([])),
     };
   }
 
