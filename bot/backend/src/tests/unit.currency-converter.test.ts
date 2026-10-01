@@ -10,5 +10,15 @@ assert(Math.abs((resolveQuoteToAccount("GBP", "EUR", { GBPUSD: 1.25, EURUSD: 1.2
 assert(resolveQuoteToAccount("GBP", "EUR", { GBPUSD: 1.25 }) === null, "missing account leg must fail closed");
 assert(resolveQuoteToAccount("USDT", "USD", {}) === 1, "USD stablecoin identity for USD account");
 assert(resolveQuoteToAccount("GBP", "GBP", {}) === 1, "same currency identity");
+assert(Math.abs((resolveQuoteToAccount("EUR", "JPY", {
+  EURUSD: 1.10,
+  USDJPY: 150,
+}) ?? 0) - 165) < 1e-12, "USD bridge EUR->JPY");
+assert(Math.abs((resolveQuoteToAccount("EUR", "GBP", {
+  EURGBP: 0.86,
+  EURUSD: 1.10,
+  GBPUSD: 1.25,
+}) ?? 0) - 0.86) < 1e-12, "direct cross has priority over USD bridge");
+assert(resolveQuoteToAccount("EUR", "USD", { EURUSD: 0 }) === null, "zero quote must fail closed");
 
-console.log("Result: 6 passed, 0 failed");
+console.log("Result: 9 passed, 0 failed");
