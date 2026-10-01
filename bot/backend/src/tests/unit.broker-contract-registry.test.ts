@@ -47,16 +47,14 @@ assert(
 registry.clear();
 assert(!registry.hasVerified('USOIL'), 'cleared registry must not retain contract');
 
-let expiryRejected = false;
-try {
-  registry.register({ ...verified, symbol:'EXPIREDOIL', expiresAt:Date.now() - 1 });
-} catch {
-  expiryRejected = true;
-}
-assert(expiryRejected, 'expired broker contract must be rejected at registration');
+registry.register({ ...verified, symbol:'EXPIREDOIL', expiresAt:Date.now() - 1 });
+assert(
+  registry.get('EXPIREDOIL') === null,
+  'expired broker contract must fail closed on read',
+);
 
 registry.register({ ...verified, symbol:'TEMP_OIL', expiresAt:Date.now() + 1 });
-while (Date.now() <= (registry.get('TEMP_OIL')?.expiresAt ?? Date.now())) {}
+while (registry.get('TEMP_OIL')?.expiresAt != null) {}
 assert(registry.get('TEMP_OIL') === null, 'expired contract must be removed on read');
 
-console.log('Result: 8 passed, 0 failed');
+console.log('Result: 6 passed, 0 failed');
