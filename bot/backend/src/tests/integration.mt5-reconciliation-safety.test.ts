@@ -316,7 +316,78 @@ async function main() {
       unresolvedOpenDb.raw().close();
     }
 
-    console.log("Result: 11 passed, 0 failed");
+    const ambiguousDb = new DatabaseManager(":memory:");
+    await ambiguousDb.initialize();
+    const ambiguousTradeId = ambiguousDb.insertTrade({
+      ticket: 773,
+      symbol: "EURUSD",
+      timeframe: "H1",
+      side: "BUY",
+      volume: 0.01,
+      entry: 1.1000,
+      sl: 1.0900,
+      tp: 1.1200,
+      status: "open",
+      openedAt: Date.now(),
+      source: "RUNTIME_AMBIGUOUS",
+    } as any);
+
+    ambiguousDb.createExecutionLedger({
+      executionId: "ambiguous-close-a",
+      operationKey: "ambiguous-close-op-a",
+      action: "CLOSE_AT_MARKET",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId: ambiguousTradeId, exitPrice: 1.11, reason: "MANUAL" },
+    });
+    ambiguousDb.createExecutionLedger({
+      executionId: "ambiguous-close-b",
+      operationKey: "ambiguous-close-op-b",
+      action: "CLOSE",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId: ambiguousTradeId },
+    });
+
+    const ambiguousExec = {
+      getMT5Position: async () => "NETTING_OR_EXCHANGE",
+    } as any;
+    const ambiguousReconciler = new Reconciler(
+      config(), ambiguousDb, ambiguousExec,
+      { sendMessage: async () => {} } as any,
+      { recordClose: () => {} } as any,
+      {} as any,
+      { activate: async () => {} } as any,
+      () => {},
+    );
+    let ambiguityBlocked = false;
+    try {
+      await (ambiguousReconciler as any).reconcileOne(
+        ambiguousDb.getOpenTrades()[0],
+      );
+    } catch {
+      ambiguityBlocked = true;
+    }
+    assert(
+      ambiguityBlocked,
+      "multiple unresolved destructive executions must block automatic reconciliation",
+    );
+    assert(
+      ambiguousDb.getOpenTrades()[0].status === "open",
+      "ambiguous reconciliation must not mutate the trade",
+    );
+    assert(
+      ambiguousDb.getExecutionByOperationKey("ambiguous-close-op-a").status === "UNKNOWN" &&
+      ambiguousDb.getExecutionByOperationKey("ambiguous-close-op-b").status === "UNKNOWN",
+      "ambiguous reconciliation must preserve both UNKNOWN ledgers",
+    );
+    ambiguousDb.raw().close();
+
+    console.log("Result: 12 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
