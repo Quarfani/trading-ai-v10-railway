@@ -358,6 +358,53 @@ async function main() {
   );
   atomicDb.raw().close();
 
+  const atomicFullDb = new DatabaseManager(":memory:");
+  await atomicFullDb.initialize();
+  const atomicFullTradeId = atomicFullDb.insertTrade({
+    ticket: 991, symbol: "EURUSD.a", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(), source: "ATOMIC_FULL_TEST",
+  } as any);
+  atomicFullDb.createExecutionLedger({
+    executionId: "atomic-full-fail",
+    operationKey: "atomic-full-fail-op",
+    action: "CLOSE_AT_MARKET",
+    status: "UNKNOWN",
+    symbol: "EURUSD.a",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId: atomicFullTradeId },
+  });
+  atomicFullDb.raw().exec(`
+    CREATE TRIGGER fail_atomic_full_ledger
+    BEFORE UPDATE OF status ON execution_ledger
+    WHEN NEW.executionId='atomic-full-fail' AND NEW.status='EXECUTED'
+    BEGIN SELECT RAISE(ABORT, 'forced full ledger failure'); END;
+  `);
+  let atomicFullFailed = false;
+  try {
+    atomicFullDb.resolveReconciledFullClose(
+      atomicFullTradeId,
+      "atomic-full-fail",
+      12.5,
+      Date.now(),
+      "MANUAL",
+      { broker: "mt5", ticket: 991, profit: 12.5 },
+      456,
+    );
+  } catch {
+    atomicFullFailed = true;
+  }
+  assert(atomicFullFailed, "forced full ledger failure must abort the atomic close transaction");
+  assert(
+    atomicFullDb.getOpenTrades()[0].status === "open",
+    "atomic full-close failure must roll back trade status",
+  );
+  assert(
+    atomicFullDb.getExecutionByOperationKey("atomic-full-fail-op").status === "UNKNOWN",
+    "atomic full-close failure must preserve UNKNOWN ledger state",
+  );
+  atomicFullDb.raw().close();
+
   const corruptDb = new DatabaseManager(":memory:");
   await corruptDb.initialize();
 
