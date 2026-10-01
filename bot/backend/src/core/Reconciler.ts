@@ -115,7 +115,10 @@ export class Reconciler {
     if (!t.ticket) return;
       const r = await axios.get(
         `${this.config.mt5.bridgeUrl}/positions`,
-        { timeout: 5_000 },
+        {
+          timeout: 5_000,
+          headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
+        },
       );
       const positions: any[] = r.data?.positions ?? [];
       const live = positions.find((p: any) => p.ticket === t.ticket);
@@ -145,16 +148,24 @@ export class Reconciler {
     try {
       const r = await axios.get(
         `${this.config.mt5.bridgeUrl}/history`,
-        { timeout: 5_000 },
+        {
+          params: { position: ticket },
+          timeout: 5_000,
+          headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
+        },
       );
-      const deals: any[] = r.data?.deals ?? [];
-      const deal = deals.find((d: any) => d.order === ticket);
-      if (!deal) return null;
+      if (r.data?.ok === false) return null;
+
+      const netProfit = Number(r.data?.net_profit);
+      const price = Number(r.data?.close_price);
+      if (!Number.isFinite(netProfit) || !Number.isFinite(price)) return null;
+
+      const reason = String(r.data?.close_reason ?? 'manual').toLowerCase();
       return {
-        price:  deal.price,
-        profit: deal.profit,
-        reason: deal.comment?.includes('sl') ? 'SL'
-              : deal.comment?.includes('tp') ? 'TP'
+        price,
+        profit: netProfit,
+        reason: reason.includes('sl') ? 'SL'
+              : reason.includes('tp') ? 'TP'
               : 'manual',
       };
     } catch (e) {

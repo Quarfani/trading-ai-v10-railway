@@ -21,7 +21,7 @@ export class MT5Bridge {
     this.http = axios.create({
       baseURL: config.mt5.bridgeUrl,
       headers: {
-        'X-Api-Key': process.env.MT5_BRIDGE_API_KEY ?? '',
+        'X-Api-Key': config.mt5.bridgeApiKey ?? '',
         'Content-Type': 'application/json',
       },
     });

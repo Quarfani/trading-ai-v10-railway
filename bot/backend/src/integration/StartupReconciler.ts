@@ -92,20 +92,23 @@ export class StartupReconciler {
 
   private async getMT5HistoryEntry(ticket: number): Promise<{ price: number; profit: number; reason: string } | null> {
     const r = await axios.get(`${this.config.mt5.bridgeUrl}/history`, {
-      timeout: 5_000, headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
+      params: { position: ticket },
+      timeout: 5_000,
+      headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
     });
-    const deals: any[] = r.data?.deals ?? [];
-    const deal = deals.find(d => Number(d.order) === ticket);
-    if (!deal) return null;
-    const price = Number(deal.price), profit = Number(deal.profit);
+    if (r.data?.ok === false || r.data?.closed !== true) return null;
+
+    const price = Number(r.data?.close_price);
+    const profit = Number(r.data?.net_profit);
     if (!Number.isFinite(price) || !Number.isFinite(profit)) return null;
-    const comment = String(deal.comment ?? '').toLowerCase();
+
+    const reason = String(r.data?.close_reason ?? 'manual').toLowerCase();
     return {
-      price, profit,
-      reason: comment.includes('sl') ? 'SL' : comment.includes('tp') ? 'TP' : 'offline_close',
+      price,
+      profit,
+      reason: reason.includes('sl') ? 'SL' : reason.includes('tp') ? 'TP' : 'offline_close',
     };
   }
-
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');

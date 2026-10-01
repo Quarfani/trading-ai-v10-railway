@@ -666,25 +666,95 @@ def positions():
         return jsonify({"positions": result, "count": len(result)})
 
 
+def summarize_position_deals(deals):
+    """Build authoritative close data from all deals belonging to one position."""
+    if not deals:
+        return None
+
+    def value(deal, name, default=0):
+        try:
+            return float(getattr(deal, name, default) or default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def int_value(deal, name, default=0):
+        try:
+            return int(getattr(deal, name, default) or default)
+        except (TypeError, ValueError):
+            return int(default)
+
+    ordered = sorted(
+        deals,
+        key=lambda d: (
+            int_value(d, "time_msc", int_value(d, "time", 0) * 1000),
+            int_value(d, "ticket", 0),
+        ),
+    )
+    closing = [d for d in ordered if int_value(d, "entry", 0) in (1, 2, 3)]
+    if not closing:
+        return None
+
+    latest = closing[-1]
+    net_profit = sum(
+        value(d, "profit") + value(d, "commission") +
+        value(d, "swap") + value(d, "fee")
+        for d in ordered
+    )
+    comments = [str(getattr(d, "comment", "") or "").lower() for d in reversed(closing)]
+    matched_comment = next((c for c in comments if "sl" in c or "tp" in c), "")
+    close_reason = "SL" if "sl" in matched_comment else "TP" if "tp" in matched_comment else "manual"
+
+    return {
+        "close_price": value(latest, "price"),
+        "net_profit": round(net_profit, 8),
+        "close_reason": close_reason,
+        "position_id": int_value(latest, "position_id"),
+        "close_deal_ticket": int_value(latest, "ticket"),
+    }
+
+
 @app.route("/history", methods=["GET"])
 def history():
     if not auth_check():
         return err("Unauthorized", 401)
     if BRIDGE_MODE == 'simulation':
-        return jsonify({"deals": [], "count": 0})
+        return jsonify({"deals": [], "count": 0, "closed": False})
 
     with _lock:
         if not ensure_connected():
             return err("MT5 not connected", 503)
         from datetime import timedelta
+        position_raw = request.args.get("position", "").strip()
+        if position_raw:
+            try:
+                position_id = int(position_raw)
+            except ValueError:
+                return err("position must be an integer", 400)
+            if position_id <= 0:
+                return err("position must be positive", 400)
+            deals = mt5.history_deals_get(position=position_id)
+            if deals is None:
+                return jsonify({"deals": [], "count": 0, "closed": False})
+            summary = summarize_position_deals(deals)
+            if not summary:
+                return jsonify({"deals": [], "count": len(deals), "closed": False})
+            return jsonify({"deals": [], "count": len(deals), "closed": True, **summary})
+
         utcnow = datetime.now(timezone.utc)
-        deals  = mt5.history_deals_get(utcnow - timedelta(days=30), utcnow)
+        deals = mt5.history_deals_get(utcnow - timedelta(days=30), utcnow)
         if deals is None:
             return jsonify({"deals": [], "count": 0})
         result = [
-            {"ticket": d.ticket, "order": d.order, "symbol": d.symbol,
-             "type": d.type, "volume": d.volume, "price": d.price,
-             "profit": d.profit, "time": d.time, "comment": d.comment}
+            {
+                "ticket": d.ticket, "order": d.order,
+                "position_id": getattr(d, "position_id", 0),
+                "entry": getattr(d, "entry", None), "symbol": d.symbol,
+                "type": d.type, "volume": d.volume, "price": d.price,
+                "profit": d.profit, "commission": getattr(d, "commission", 0),
+                "swap": getattr(d, "swap", 0), "fee": getattr(d, "fee", 0),
+                "time": d.time, "time_msc": getattr(d, "time_msc", 0),
+                "comment": d.comment,
+            }
             for d in deals
         ]
         return jsonify({"deals": result[-50:], "count": len(deals)})
