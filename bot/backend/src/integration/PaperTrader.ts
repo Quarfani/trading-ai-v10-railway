@@ -66,8 +66,23 @@ export class PaperTrader {
       if(!row.ticket||this.openTrades.has(row.ticket)) continue;
       const economics=this.resolveEconomics(row.symbol, row.timeframe ?? 'H1');
       const profile=getCostProfile(row.symbol);
-      const restoredEntryCost=estimateEntryCosts({price:row.entry,volume:row.volume,contractSize:economics.contractSize,quoteToAccount:entryRate},profile);
-      this.openTrades.set(row.ticket,{ticket:row.ticket,symbol:row.symbol,side:row.side,volume:row.volume,entry:row.entry,sl:row.sl,tp:row.tp,openedAt:row.openedAt,status:'open',source:row.source,timeframe:row.timeframe,realizedProfit:Number(row.realizedProfit??0),remainingEntryCost:restoredEntryCost,entryQuoteToAccount:entryRate,exitQuoteToAccount:Number(row.exitQuoteToAccount) || undefined});
+      const restoredEntryRate = Number(row.entryQuoteToAccount);
+      const entryRate = restoredEntryRate > 0 && Number.isFinite(restoredEntryRate) ? restoredEntryRate : 1;
+      const restoredEntryCost=estimateEntryCosts({
+        price:row.entry,
+        volume:row.volume,
+        contractSize:economics.contractSize,
+        quoteToAccount:entryRate,
+      },profile);
+      this.openTrades.set(row.ticket,{
+        ticket:row.ticket,symbol:row.symbol,side:row.side,volume:row.volume,
+        entry:row.entry,sl:row.sl,tp:row.tp,openedAt:row.openedAt,status:'open',
+        source:row.source,timeframe:row.timeframe,
+        realizedProfit:Number(row.realizedProfit??0),
+        remainingEntryCost:restoredEntryCost,
+        entryQuoteToAccount:entryRate,
+        exitQuoteToAccount:Number(row.exitQuoteToAccount) || undefined,
+      });
       this.trades.push({...row});
       this.nextTicket=Math.max(this.nextTicket,row.ticket+1);
     }
@@ -87,7 +102,7 @@ export class PaperTrader {
     const closedVolume=Math.min(volume,t.volume);
     const profile=getCostProfile(t.symbol);
     const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount,side:t.side});
-    const exitCosts=estimateExitCosts({price:exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount:1},profile);
+    const exitCosts=estimateExitCosts({price:exitPrice,volume:closedVolume,contractSize:economics.contractSize,quoteToAccount},profile);
     const entryCostShare=t.volume>0 ? (t.remainingEntryCost??0)*(closedVolume/t.volume) : 0;
     const profit=raw-exitCosts-entryCostShare;
     t.remainingEntryCost=Math.max(0,(t.remainingEntryCost??0)-entryCostShare);
@@ -109,9 +124,9 @@ export class PaperTrader {
     let fill=exitPrice;
     if(reason==='SL'){const slip=Math.random()*0.5;fill+=t.side==='BUY'?-slip*economics.priceIncrement:slip*economics.priceIncrement;}
     const holdingDays=Math.max(0,(at-t.openedAt)/(24*3_600_000));
-    const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount:1,side:t.side});
+    const raw=calculateGrossPnlAccount({entryPrice:t.entry,exitPrice:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount,side:t.side});
     const profile=getCostProfile(t.symbol);
-    const exitCosts=estimateExitCosts({price:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount:1},profile);
+    const exitCosts=estimateExitCosts({price:fill,volume:t.volume,contractSize:economics.contractSize,quoteToAccount},profile);
     const finalProfit=raw-exitCosts-(t.remainingEntryCost??0);
     this.balance += raw-exitCosts;
     const profit=(t.realizedProfit??0)+finalProfit; t.status='closed';t.closedAt=at;t.profit=profit;t.exitReason=reason;
