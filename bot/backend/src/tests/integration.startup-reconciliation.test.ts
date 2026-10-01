@@ -301,9 +301,20 @@ async function main() {
       request: { tradeId: duplicateTradeId },
     });
 
+    const duplicateReconciler = new StartupReconciler(
+      mt5Cfg,
+      mt5DuplicateDb,
+      new TelegramBot(mt5Cfg),
+    );
+    const duplicateHistory = await (duplicateReconciler as any).getMT5HistoryEntry(78);
+    assert(
+      duplicateHistory?.profit === 12.5 && duplicateHistory?.closed === undefined,
+      'MT5 history fixture must be accepted as an authoritative close entry',
+    );
+
     let duplicateBlocked = false;
     try {
-      await new StartupReconciler(mt5Cfg, mt5DuplicateDb, new TelegramBot(mt5Cfg)).run();
+      await duplicateReconciler.run();
     } catch { duplicateBlocked = true; }
     assert(duplicateBlocked, 'multiple unresolved MT5 close operations for one trade must remain a startup blocker');
     const duplicateUnresolved = mt5DuplicateDb.raw().prepare(
