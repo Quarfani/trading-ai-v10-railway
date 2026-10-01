@@ -410,11 +410,12 @@ export class ExecutionGateway {
       throw new Error('Cumulative broker realized PnL is not finite');
     }
 
+    const closedAt = Date.now();
     const settled = this.db.resolveReconciledFullClose(
       t.id,
       executionId,
       cumulativeProfit,
-      Date.now(),
+      closedAt,
       reason,
       brokerResult,
       t.ticket,
@@ -427,7 +428,7 @@ export class ExecutionGateway {
 
     t.status = 'closed';
     t.profit = cumulativeProfit;
-    t.closedAt = Date.now();
+    t.closedAt = closedAt;
     t.exitReason = reason;
     t.realizedProfit = cumulativeProfit;
     return cumulativeProfit;
