@@ -357,6 +357,34 @@ async function main() {
   );
   binanceCloseDb.raw().close();
 
+  const spotUnknownDb = new DatabaseManager(":memory:");
+  await spotUnknownDb.initialize();
+  const spotUnknownCfg = {
+    ...baseConfig('paper'),
+    mode: 'binance',
+    dataSource: 'binance',
+    accountCurrency: 'USD',
+    binance: { ...baseConfig('paper').binance, futures: false },
+  } as SystemConfig;
+  const spotUnknownGateway = new ExecutionGateway(spotUnknownCfg, spotUnknownDb);
+  const spotUnknownTradeId = spotUnknownDb.insertTrade({
+    ticket: 1301, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_SPOT_PNL_UNKNOWN',
+  } as any);
+  (spotUnknownGateway as any).binance.closePosition = async () => ({
+    ok: true, realizedProfit: null, realizedProfitCurrency: null,
+  });
+  const spotUnknownResult = await spotUnknownGateway.closeTrade({
+    id: spotUnknownTradeId, ticket: 1301, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.01,
+    entry: 50000, sl: 49000, tp: 52000, status: 'open', openedAt: Date.now(), source: 'BINANCE_SPOT_PNL_UNKNOWN',
+  } as any);
+  assert(spotUnknownResult === false, 'Binance Spot close without authoritative PnL must fail closed');
+  assert(spotUnknownDb.getOpenTrades().length === 1, 'Binance Spot unknown close must not close the internal trade');
+  const spotLedger = spotUnknownDb.raw().prepare(
+    "SELECT status FROM execution_ledger WHERE operationKey LIKE ? LIMIT 1",
+  ).get('%') as any;
+  assert(spotLedger.status === 'UNKNOWN', 'Binance Spot unknown close must remain UNKNOWN');
+  spotUnknownDb.raw().close();
   const modifyDb = new DatabaseManager(":memory:");
   await modifyDb.initialize();
   const modifyGateway = new ExecutionGateway(baseConfig("mt5"), modifyDb);
