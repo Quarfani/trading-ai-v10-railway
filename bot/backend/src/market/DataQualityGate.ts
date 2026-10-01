@@ -18,6 +18,8 @@ export interface DataQualityResult {
   syntheticCount: number;
   imputedCount: number;
   staleCount: number;
+  futureTimestampCount: number;
+  invalidSequenceCount: number;
   hardFailures: string[];
   warnings: string[];
 }
@@ -71,6 +73,8 @@ export function evaluateMarketDataQuality(
   let syntheticCount = 0;
   let imputedCount = 0;
   let staleCount = 0;
+  let futureTimestampCount = 0;
+  let invalidSequenceCount = 0;
 
   let previousTime = -Infinity;
 
@@ -135,6 +139,14 @@ export function evaluateMarketDataQuality(
       imputedCount++;
     }
 
+    if (candle.time > Date.now() + 5_000) {
+      futureTimestampCount++;
+    }
+
+    if (candle.sequence_valid === false) {
+      invalidSequenceCount++;
+    }
+
     if (
       candle.latency != null &&
       Number.isFinite(candle.latency) &&
@@ -161,6 +173,12 @@ export function evaluateMarketDataQuality(
   }
   if (invalidOhlcCount > 0) {
     hardFailures.push(`Invalid OHLC candles: ${invalidOhlcCount}`);
+  }
+  if (futureTimestampCount > 0) {
+    hardFailures.push(`Future candle timestamps: ${futureTimestampCount}`);
+  }
+  if (invalidSequenceCount > 0) {
+    hardFailures.push(`Invalid candle sequence markers: ${invalidSequenceCount}`);
   }
   if (gapBars > maxGapBars && missingRatio > maxMissingRatio) {
     hardFailures.push(
@@ -210,6 +228,8 @@ export function evaluateMarketDataQuality(
     syntheticCount,
     imputedCount,
     staleCount,
+    futureTimestampCount,
+    invalidSequenceCount,
     hardFailures,
     warnings,
   };
