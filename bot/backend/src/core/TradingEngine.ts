@@ -92,6 +92,8 @@ import { SentimentEngine } from '../sentiment/SentimentEngine';
 import { AITradeJournal } from '../journal/AITradeJournal';
 
 import { getSymbolSpec } from '../config/symbolConfig';
+import { getMarketDefinition } from '../market/MarketCatalog';
+import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 
 type Broadcaster = (event: string, data: unknown) => void;
 
@@ -136,6 +138,7 @@ export class TradingEngine extends EventEmitter {
   public candleMap: Record<string, Candle[]> = {};
 
   private readonly scanner: MarketScanner;
+  private readonly currencyRates: CurrencyConversionProvider;
   private readonly consensus: ConsensusOrchestrator;
   private readonly risk: RiskManager;
   private readonly exec: ExecutionGateway;
@@ -188,6 +191,10 @@ export class TradingEngine extends EventEmitter {
 
     this.mlEnhancer = new MLEnhancer(config, db);
     this.scanner = new MarketScanner(config);
+    this.currencyRates = new CurrencyConversionProvider(
+      this.scanner,
+      config.accountCurrency ?? 'USD',
+    );
     this.exec = new ExecutionGateway(config, db);
 
     this.tracker = new PerformanceTracker(db, config);
@@ -1082,12 +1089,30 @@ export class TradingEngine extends EventEmitter {
     const openTrades =
       this.db.getOpenTrades();
 
-    const livePrices = ticker
+    const livePrices: Record<string, number> = ticker
       ? {
-          [symbol]:
-            (ticker.bid + ticker.ask) / 2,
+          [symbol]: (ticker.bid + ticker.ask) / 2,
         }
       : {};
+
+    const marketDefinition =
+      getMarketDefinition(symbol);
+
+    if (marketDefinition) {
+      const conversionRates =
+        await this.currencyRates
+          .getRates(
+            marketDefinition.quoteCurrency,
+          )
+          .catch(() => null);
+
+      if (conversionRates) {
+        Object.assign(
+          livePrices,
+          conversionRates,
+        );
+      }
+    }
 
     const risk =
       await this.risk.check(
