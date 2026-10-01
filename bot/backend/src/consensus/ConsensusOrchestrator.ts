@@ -12,6 +12,7 @@ import { createAllAdapters }        from './StrategyAdapters';
 import { ConsensusConfig, ConsensusResult, StrategyContext } from './types';
 import { ConsensusLogger } from './ConsensusLogger';
 import { Candle, Timeframe, Mode } from '../types/trading.types';
+import { EvidencePromotionPolicy, DEFAULT_EVIDENCE_PROMOTION_POLICY } from './EvidencePromotionPolicy';
 
 export interface LogEntry extends ConsensusResult {
   symbol: string;
@@ -28,8 +29,9 @@ export class ConsensusOrchestrator {
   constructor(
     private readonly db:  DatabaseManager,
     cfg: Partial<ConsensusConfig> = {},
+    evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
   ) {
-    this.registry = new StrategyRegistry(db, cfg);
+    this.registry = new StrategyRegistry(db, cfg, evidencePolicy);
 
     // [FIX] Register all 8 strategies
     for (const adapter of createAllAdapters()) {
