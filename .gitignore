@@ -40,3 +40,6 @@ pipeline/logs/
 Thumbs.db
 
 bot/backend/test-output.txt
+
+# Local AI development checkpoint
+AI_DEVELOPMENT_HANDOFF_CURRENT.md
