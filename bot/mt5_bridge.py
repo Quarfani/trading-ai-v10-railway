@@ -1538,12 +1538,18 @@ def summarize_position_deals(deals):
         closed_volume >= opened_volume - max(1e-10, opened_volume * 1e-8)
     )
 
+    close_time_msc = int_value(
+        latest,
+        "time_msc",
+        int_value(latest, "time", 0) * 1000,
+    )
     return {
         "close_price": value(latest, "price"),
         "net_profit": round(net_profit, 8),
         "close_reason": close_reason,
         "position_id": int_value(latest, "position_id"),
         "close_deal_ticket": int_value(latest, "ticket"),
+        "close_time_msc": close_time_msc,
         "opened_volume": round(opened_volume, 8),
         "closed_volume": round(closed_volume, 8),
         "remaining_volume": round(remaining_volume, 8),
