@@ -200,10 +200,10 @@ export class StrategyRegistry {
       : 0;
 
     // Sharpe ratio (daily returns approximation)
-    const sharpe  = this.computeSharpe(profits);
+    const sharpe = this.computeSharpe(trades);
 
-    // Max drawdown from equity curve
-    const maxDD   = this.computeMaxDrawdown(profits);
+    // Max drawdown from equity curve anchored at initial equity.
+    const maxDD = this.computeMaxDrawdown(trades);
 
     return {
       win_rate:            winRate,
