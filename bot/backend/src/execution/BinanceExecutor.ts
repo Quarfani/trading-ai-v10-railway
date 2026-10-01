@@ -135,13 +135,19 @@ export class BinanceExecutor {
   private async findHistoricalOrderByClientId(
     symbol: string,
     clientOrderId: string,
+    createdAt?: number,
   ): Promise<any | null> {
     if (!this.isFutures) return null;
     try {
+      const now = Date.now();
+      const startTime = Number.isFinite(Number(createdAt)) && Number(createdAt) > 0
+        ? Math.max(0, Number(createdAt) - 5 * 60_000)
+        : Math.max(0, now - 24 * 60 * 60_000);
       const result = await this.signedGet('/fapi/v1/allOrders', {
         symbol,
-        origClientOrderId: clientOrderId,
-        limit: 10,
+        startTime,
+        endTime: now,
+        limit: 1000,
       });
       if (!Array.isArray(result)) return result ?? null;
       return result.find(
@@ -156,6 +162,7 @@ export class BinanceExecutor {
   async reconcileFullCloseByClientOrderId(
     symbol: string,
     clientOrderId: string,
+    createdAt?: number,
   ): Promise<{
     ok: boolean;
     orderId: number;
@@ -173,7 +180,7 @@ export class BinanceExecutor {
       };
     }
 
-    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId);
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId, createdAt);
     if (!order) {
       return {
         ok: false,
@@ -244,6 +251,7 @@ export class BinanceExecutor {
   async reconcilePartialCloseByClientOrderId(
     symbol: string,
     clientOrderId: string,
+    createdAt?: number,
   ): Promise<{
     ok: boolean;
     orderId: number;
@@ -256,7 +264,7 @@ export class BinanceExecutor {
       return { ok: false, orderId: 0, executedQty: 0, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
     }
 
-    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId);
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId, createdAt);
     if (!order) {
       return { ok: false, orderId: 0, executedQty: 0, remainingVolume: 0, realizedProfit: 0, realizedProfitCurrency: null };
     }
