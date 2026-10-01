@@ -43,6 +43,9 @@ async function main() {
   console.log(`OOS Sharpe:     ${result.oos_sharpe.toFixed(2)}`);
   console.log(`OOS Total P/L:  ${result.oos_profit.toFixed(2)}%`);
   console.log(`Recommendation: ${result.recommendation}`);
+  console.log(`Valid:          ${result.valid}`);
+  console.log(`Evidence folds: ${result.evidence.folds}`);
+  console.log(`OOS trades:     ${result.evidence.oosTrades}`);
   console.log(`Reason:         ${result.reason}`);
   console.log('\nOptimized Params:');
   console.log(`  atrMult:       ${result.finalParams.atrMult}`);
@@ -51,7 +54,7 @@ async function main() {
   console.log('');
 
   // Save params if recommended
-  if (result.recommendation === 'TRADE') {
+  if (result.valid && result.recommendation === 'TRADE') {
     wfo.saveParams(db, symbol, result.finalParams, timeframe as any);
     console.log('✅ Params saved to DB — will be used on next bot startup');
   }
