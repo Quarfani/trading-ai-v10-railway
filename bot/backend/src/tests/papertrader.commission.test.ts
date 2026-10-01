@@ -10,7 +10,7 @@ function assertClose(actual: number, expected: number, tolerance = 1e-9, label =
   assert(Math.abs(actual - expected) <= tolerance, `${label}: expected ${expected}, got ${actual}`);
 }
 
-const trader = new PaperTrader(10_000);
+const trader = new PaperTrader(10_000, 'USDT');
 const spec = getSymbolSpec('SOLUSDT');
 const profile = getCostProfile('SOLUSDT');
 const entry = 100;
@@ -38,9 +38,10 @@ trader.restoreState([{
   source: 'TEST',
   timeframe: 'H1',
   realizedProfit: 0,
+  entryQuoteToAccount: 1,
 }], []);
 
-const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL');
+const partial = trader.partialClose(1, 1, partialExit, 'PARTIAL', 1);
 assert(Boolean(partial), 'partial close should return a trade');
 const expectedPartial =
   (partialExit - entry) * 1
@@ -53,7 +54,7 @@ const expectedPartial =
   - entryCost / 2;
 assertClose(partial!.profit ?? 0, expectedPartial, 1e-9, 'partial');
 
-const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1);
+const closed = trader.closeTrade(1, finalExit, 'MANUAL', openedAt + 1, 1);
 assert(Boolean(closed), 'final close should return a trade');
 const expectedRemaining =
   (finalExit - entry) * 1
@@ -86,7 +87,7 @@ assertClose(
   'total-cumulative',
 );
 
-const nonCrypto = new PaperTrader(10_000);
+const nonCrypto = new PaperTrader(10_000, 'USD');
 nonCrypto.restoreState([{
   ticket: 2,
   symbol: 'EURUSD',
@@ -100,6 +101,7 @@ nonCrypto.restoreState([{
   source: 'TEST',
   timeframe: 'H1',
   realizedProfit: 0,
+  entryQuoteToAccount: 1,
 }], []);
 
 const fxProfile = getCostProfile('EURUSD');
@@ -117,7 +119,7 @@ const fxExitCost = estimateExitCosts({
   quoteToAccount: 1,
 }, fxProfile);
 
-const fxClosed = nonCrypto.closeTrade(2, 1.01, 'MANUAL', openedAt + 1);
+const fxClosed = nonCrypto.closeTrade(2, 1.01, 'MANUAL', openedAt + 1, 1);
 assert(Boolean(fxClosed), 'FX close should return a trade');
 assertClose(
   fxClosed!.profit ?? 0,
