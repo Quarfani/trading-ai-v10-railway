@@ -43,7 +43,25 @@ async function main() {
   assert(closeRequest?.params?.side === "SELL", "BUY trade must close with SELL");
   assert(Number(closeRequest?.params?.quantity) === 0.5, "Spot restart close must use persisted trade volume");
 
-  console.log("Result: 7 passed, 0 failed");
+  (executor as any).signedGet = async (path: string) => {
+    assert(path === "/api/v3/account", "Spot equity must query the Spot account endpoint");
+    return {
+      balances: [
+        { asset: "BTC", free: "0.5", locked: "0" },
+        { asset: "USDT", free: "1000", locked: "0" },
+      ],
+    };
+  };
+  (executor as any).http.get = async (path: string, options: any) => {
+    assert(path === "/api/v3/ticker/price", "Spot equity must mark non-stable assets using market prices");
+    assert(options?.params?.symbol === "BTCUSDT", "BTC must be marked through BTCUSDT");
+    return { data: { price: "20000" } };
+  };
+
+  const equity = await executor.accountEquity();
+  assert(equity === 11000, "Spot equity must include marked BTC inventory plus USDT");
+
+  console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
