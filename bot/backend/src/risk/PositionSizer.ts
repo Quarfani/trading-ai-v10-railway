@@ -20,7 +20,7 @@
  *   إذا quality < 40 → حجم × 0.5 (عقوبة صارمة للإشارات الضعيفة)
  * ══════════════════════════════════════════════════════════════════════════
  */
-import { SystemConfig, Side }   from '../types/trading.types';
+import { SystemConfig, Side, Timeframe } from '../types/trading.types';
 import { DatabaseManager }      from '../database/DatabaseManager';
 import { getSymbolSpec }        from '../config/symbolConfig';
 import { getMarketDefinition }  from '../market/MarketCatalog';
@@ -47,10 +47,11 @@ export class PositionSizer {
     sl:             number,
     qualityScore  = 50,
     currentEquity?: number,
-    tp?:            number,   // [FIX-2] For R:R multiplier
+    tp?:            number,
     livePrices:     Record<string, number> = {},
+    timeframe:      Timeframe = 'H1',
   ): number {
-    const spec   = getSymbolSpec(symbol);
+    const spec   = getSymbolSpec(symbol, timeframe);
     const equity = currentEquity ?? this.config.accountBalance;
 
     const market = getMarketDefinition(symbol);
@@ -182,9 +183,10 @@ export class PositionSizer {
     volume: number,
     equity: number,
     livePrices: Record<string, number> = {},
+    timeframe: Timeframe = 'H1',
   ): number {
     if (!(equity > 0) || !(volume > 0) || !Number.isFinite(volume)) return 0;
-    const spec = getSymbolSpec(symbol);
+    const spec = getSymbolSpec(symbol, timeframe);
     const market = getMarketDefinition(symbol);
     if (!market) return 0;
     const quoteToAccount = resolveQuoteToAccount(
