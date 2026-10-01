@@ -1,6 +1,7 @@
 import {
   clearBrokerContracts,
   getMarketDefinition,
+  getBrokerMarketDefinition,
   registerBrokerContract,
 } from '../market/MarketCatalog';
 
@@ -39,4 +40,30 @@ clearBrokerContracts();
 assert(getMarketDefinition('USOIL') === null, 'clearing broker registry must remove the override');
 
 
-console.log('Result: 10 passed, 0 failed');
+registerBrokerContract({
+  symbol: 'EURUSD',
+  baseAsset: 'EUR',
+  quoteCurrency: 'USD',
+  assetClass: 'FOREX',
+  contractType: 'CFD',
+  venue: 'MT5',
+  contractSize: 100000,
+  priceIncrement: 0.00001,
+  minVolume: 0.01,
+  maxVolume: 100,
+  volumeStep: 0.01,
+  marginModel: 'BROKER_DEFINED',
+  source: 'expiry-fixture',
+  observedAt: Date.now(),
+  expiresAt: Date.now() + 25,
+  verified: true,
+});
+
+assert(getBrokerMarketDefinition('EURUSD')?.brokerSymbol === 'EURUSD', 'broker-only lookup must expose active contract');
+
+setTimeout(() => {
+  assert(getBrokerMarketDefinition('EURUSD') === null, 'expired broker contract must fail closed in broker-only lookup');
+  assert(getMarketDefinition('EURUSD')?.symbol === 'EURUSD', 'generic catalog may retain static fallback for non-broker contexts');
+  clearBrokerContracts();
+  console.log('Result: 12 passed, 0 failed');
+}, 35).unref();

@@ -166,6 +166,24 @@ export function getMarketDefinition(symbol: string, timeframe: Timeframe = 'H1')
   };
 }
 
+export function getBrokerMarketDefinition(
+  symbol: string,
+  timeframe: Timeframe = 'H1',
+): MarketDefinition | null {
+  const raw = symbol.trim().toUpperCase();
+  const brokerDefinition = BROKER_CONTRACTS.getMarketDefinition(raw);
+  if (!brokerDefinition) return null;
+
+  if (
+    brokerDefinition.supportedTimeframes &&
+    !brokerDefinition.supportedTimeframes.includes(timeframe)
+  ) {
+    return null;
+  }
+
+  return brokerDefinition;
+}
+
 export function requireMarketDefinition(symbol: string, timeframe: Timeframe = 'H1'): MarketDefinition {
   const market = getMarketDefinition(symbol, timeframe);
   if (!market) {
