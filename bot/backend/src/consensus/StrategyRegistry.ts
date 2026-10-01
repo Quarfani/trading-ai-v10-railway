@@ -38,6 +38,7 @@ export class StrategyRegistry {
     private readonly db: DatabaseManager,
     cfg: Partial<ConsensusConfig> = {},
     evidencePolicy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
+    private readonly initialEquity = 10_000,
   ) {
     this.cfg = { ...DEFAULT_CONSENSUS_CONFIG, ...cfg, gate: { ...DEFAULT_CONSENSUS_CONFIG.gate, ...(cfg.gate ?? {}) } };
     this.definitionStore = new StrategyDefinitionStore(db, evidencePolicy);
@@ -216,26 +217,65 @@ export class StrategyRegistry {
     };
   }
 
-  private computeSharpe(profits: number[]): number {
-    if (profits.length < 5) return 0;
-    const mean = profits.reduce((s, p) => s + p, 0) / profits.length;
-    const variance = profits.reduce((s, p) => s + Math.pow(p - mean, 2), 0) / profits.length;
+  private computeSharpe(trades: TradeRecord[]): number {
+    if (trades.length < 5) return 0;
+
+    // Build one PnL observation per UTC day. Sharpe on raw trade-by-trade
+    // outcomes is not a time-series Sharpe and overstates statistical quality
+    // when many trades occur on the same day.
+    const byDay = new Map<string, number>();
+    for (const trade of trades) {
+      if (!Number.isFinite(trade.timestamp) || !Number.isFinite(trade.profit)) continue;
+      const day = new Date(trade.timestamp).toISOString().slice(0, 10);
+      byDay.set(day, (byDay.get(day) ?? 0) + trade.profit);
+    }
+
+    const daily = Array.from(byDay.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, pnl]) => pnl);
+
+    if (daily.length < 3) return 0;
+
+    const mean = daily.reduce((sum, pnl) => sum + pnl, 0) / daily.length;
+    const variance =
+      daily.reduce((sum, pnl) => sum + Math.pow(pnl - mean, 2), 0) /
+      daily.length;
     const std = Math.sqrt(variance);
-    if (std === 0) return mean > 0 ? 3 : 0; // all same result
-    // Annualise assuming ~252 trades/year typical frequency
+
+    if (!(std > 0) || !Number.isFinite(std)) {
+      return mean > 0 ? 0 : 0;
+    }
+
     return (mean / std) * Math.sqrt(252);
   }
 
-  private computeMaxDrawdown(profits: number[]): number {
-    let equity = 0, peak = 0, maxDD = 0;
-    for (const p of profits) {
-      equity += p;
-      if (equity > peak) peak = equity;
-      const dd = peak > 0 ? (peak - equity) / peak : 0;
-      if (dd > maxDD) maxDD = dd;
+  private computeMaxDrawdown(trades: TradeRecord[]): number {
+    if (!trades.length) return 0;
+
+    const ordered = [...trades]
+      .filter(
+        trade =>
+          Number.isFinite(trade.timestamp) &&
+          Number.isFinite(trade.profit),
+      )
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    let equity = this.initialEquity;
+    let peak = this.initialEquity;
+    let maxDD = 0;
+
+    for (const trade of ordered) {
+      equity += trade.profit;
+      peak = Math.max(peak, equity);
+      if (!(peak > 0)) continue;
+
+      const dd = Math.max(0, (peak - equity) / peak);
+      maxDD = Math.max(maxDD, dd);
     }
+
     return maxDD;
   }
+
 
   // ─── Persistence ──────────────────────────────────────────────────────────
 
