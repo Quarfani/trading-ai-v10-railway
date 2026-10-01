@@ -25,7 +25,7 @@ async function main() {
     walkForwardStability:0.75, parameterSensitivity:0.72, regimeCoverage:0.76,
     monteCarloStress:{
       simulations:2000, futureTrades:200, p5FinalBalance:8500,
-      p50FinalBalance:11200, maxDDP95:0.24, probabilityLoss:0.25,
+      p50FinalBalance:11200, maxDDP95:0.18, probabilityLoss:0.25,
       probabilityDD20:0.40, probabilityRuin:0.01, unrecoveredRate:0.10,
       recoveryTradesP95:35,
     },
@@ -164,6 +164,35 @@ async function main() {
   try { mcStore.promote("mc.missing","PRODUCTION","missing mc"); } catch { mcMissingBlocked = true; }
   assert(mcMissingBlocked,"Monte Carlo policy must block snapshots without MC evidence");
 
+  const mcRiskTooTight: StrategyDefinition = {
+    ...mcBase,
+    strategyId: "mc.risk-too-tight",
+    name: "MC Risk Too Tight",
+    riskProfile: {
+      ...mcBase.riskProfile,
+      maximumDrawdown: 0.10,
+    },
+  };
+  mcStore.save(mcRiskTooTight);
+  snapshots.save({
+    scopeKey:"mc.risk-too-tight:EURUSD:H1",
+    strategyId:"mc.risk-too-tight",
+    strategyVersion:"1.0.0",
+    symbol:"EURUSD", timeframe:"H1", source:"strategy-evidence",
+    evidence:mcRiskTooTight.evidence, promoted:true,
+    promotionReason:"MC exceeds risk profile", createdAt:Date.now(),
+  });
+  let riskProfileBlocked = false;
+  try {
+    mcStore.promote("mc.risk-too-tight","PRODUCTION","risk profile");
+  } catch {
+    riskProfileBlocked = true;
+  }
+  assert(
+    riskProfileBlocked,
+    "production must reject Monte Carlo drawdown above the strategy risk-profile maximum",
+  );
+
   const mcBad: StrategyDefinition = {
     ...mcBase,
     strategyId: "mc.bad",
@@ -186,7 +215,7 @@ async function main() {
   try { mcStore.promote("mc.bad","PRODUCTION","bad mc"); } catch { mcBadBlocked = true; }
   assert(mcBadBlocked,"Monte Carlo policy must block excessive P95 drawdown");
 
-  console.log("Result: 12 passed, 0 failed");
+  console.log("Result: 13 passed, 0 failed");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });
