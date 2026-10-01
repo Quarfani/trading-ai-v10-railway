@@ -45,7 +45,9 @@ export class PaperTrader {
     this.balance=this.initialBal+realized+openPartialRealized;
     for(const row of openRows){
       const spec=getSymbolSpec(row.symbol);
-      this.balance-=spec.pip*spec.contractSize*row.volume*spec.spreadMaxPips*0.5;
+      const profile=getCostProfile(row.symbol);
+      const entryCosts=estimateEntryCosts({price:row.entry,volume:row.volume,contractSize:spec.contractSize,quoteToAccount:1},profile);
+      this.balance-=entryCosts;
     }
     this.equityCurve=[{time:Date.now(),equity:this.balance}];
     for(const row of closedRows.slice().reverse()){
@@ -84,7 +86,7 @@ export class PaperTrader {
     t.realizedProfit=(t.realizedProfit??0)+profit;
     this.balance+=profit;
     const rec=this.trades.find(x=>x.ticket===ticket&&x.status==='open');
-    if(rec){rec.volume=t.volume;rec.realizedProfit=t.realizedProfit;rec.commission=(rec.commission??0)+0;}
+    if(rec){rec.volume=t.volume;rec.realizedProfit=t.realizedProfit;}
     this.equityCurve.push({time:Date.now(),equity:this.balance});
     this.logger.info(`[PAPER] Partial close ${t.symbol} ${closedVolume} @ ${exitPrice} profit=${profit.toFixed(2)} remaining=${t.volume}`);
     return {ok:true,profit,remainingVolume:t.volume};

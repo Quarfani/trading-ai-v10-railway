@@ -4,7 +4,7 @@
  * يحسب حجم الصفقة باستخدام Fractional Kelly Criterion:
  *
  *   Kelly% = (W × AvgWin - L × AvgLoss) / AvgWin
- *   FractionalKelly = Kelly% × 0.5  (نصف Kelly للتحكم في التذبذب)
+ *   FractionalKelly = Kelly% × 0.25  (ربع Kelly كما يحدده الـMaster Prompt)
  *
  * مع قيود السلامة:
  *   - لا يتجاوز RISK_PER_TRADE الأصلي بأكثر من 2×
@@ -27,7 +27,7 @@ export interface KellyStats {
   avgWin:   number;
   avgLoss:  number;
   kelly:    number;      // raw Kelly%
-  fraction: number;      // 0.5 × Kelly (capped)
+  fraction: number;      // 0.25 × Kelly (capped)
   source:   'kelly' | 'fixed'; // which method was used
 }
 
@@ -109,12 +109,12 @@ export class KellyPositionSizer {
 
     // Negative Kelly = expected negative edge = don't trade
     if (kelly <= 0) {
-      this.logger.warn(`Negative Kelly (${(kelly * 100).toFixed(1)}%) on ${trades} trades — using min risk`);
-      return { trades, winRate, avgWin, avgLoss, kelly, fraction: defaultRisk * 0.5, source: 'kelly' };
+      this.logger.warn(`Negative Kelly (${(kelly * 100).toFixed(1)}%) on ${trades} trades — NO TRADE`);
+      return { trades, winRate, avgWin, avgLoss, kelly, fraction: 0, source: 'kelly' };
     }
 
-    // Fractional Kelly = 0.5 × Kelly (reduces ruin risk significantly)
-    const fraction = Math.min(kelly * 0.5, defaultRisk * 2);
+    // Fractional Kelly = 0.25 × Kelly (quarter Kelly hard cap).
+    const fraction = Math.min(kelly * 0.25, defaultRisk * 2);
 
     return { trades, winRate, avgWin, avgLoss, kelly, fraction, source: 'kelly' };
   }

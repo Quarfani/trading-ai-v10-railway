@@ -23,6 +23,8 @@
 import { SystemConfig, Side }   from '../types/trading.types';
 import { DatabaseManager }      from '../database/DatabaseManager';
 import { getSymbolSpec }        from '../config/symbolConfig';
+import { getMarketDefinition }  from '../market/MarketCatalog';
+import { resolveQuoteToAccount } from '../market/CurrencyConverter';
 import { KellyPositionSizer, SymbolTradeStats } from './KellyPositionSizer';
 import { DrawdownScaler }       from './DrawdownScaler';
 import { Logger }               from '../utils/Logger';
@@ -46,9 +48,25 @@ export class PositionSizer {
     qualityScore  = 50,
     currentEquity?: number,
     tp?:            number,   // [FIX-2] For R:R multiplier
+    livePrices:     Record<string, number> = {},
   ): number {
     const spec   = getSymbolSpec(symbol);
     const equity = currentEquity ?? this.config.accountBalance;
+
+    const market = getMarketDefinition(symbol);
+    if (!market) {
+      this.logger.warn(`[${symbol}] No canonical market definition — sizing blocked`);
+      return 0;
+    }
+    const quoteToAccount = resolveQuoteToAccount(
+      market.quoteCurrency,
+      this.config.accountCurrency ?? 'USD',
+      livePrices,
+    );
+    if (quoteToAccount == null) {
+      this.logger.warn(`[${symbol}] Cannot convert ${market.quoteCurrency} to ${this.config.accountCurrency ?? 'USD'} — sizing blocked`);
+      return 0;
+    }
 
     // ── 1. Drawdown check ─────────────────────────────────────────────
     const ddStatus = this.ddScaler.getStatus(equity);
@@ -86,7 +104,7 @@ export class PositionSizer {
     // The previous implementation multiplied by pipValue and then divided
     // by lotSize, which could make the 2% cap orders of magnitude too large.
     const slDistance = Math.abs(entry - sl);
-    const riskPerUnit = slDistance * spec.contractSize;
+    const riskPerUnit = slDistance * spec.contractSize * quoteToAccount;
     const maxVolByRisk = riskPerUnit > 0
       ? (equity * MAX_RISK_PER_TRADE) / riskPerUnit
       : 0;
@@ -160,7 +178,15 @@ export class PositionSizer {
   capToAbsoluteRisk(symbol: string, entry: number, sl: number, volume: number, equity: number): number {
     if (!(equity > 0) || !(volume > 0) || !Number.isFinite(volume)) return 0;
     const spec = getSymbolSpec(symbol);
-    const riskPerUnit = Math.abs(entry - sl) * spec.contractSize;
+    const market = getMarketDefinition(symbol);
+    if (!market) return 0;
+    const quoteToAccount = resolveQuoteToAccount(
+      market.quoteCurrency,
+      this.config.accountCurrency ?? 'USD',
+      {},
+    );
+    if (quoteToAccount == null) return 0;
+    const riskPerUnit = Math.abs(entry - sl) * spec.contractSize * quoteToAccount;
     if (!(riskPerUnit > 0)) return 0;
     const maxVolume = (equity * MAX_RISK_PER_TRADE) / riskPerUnit;
     const capped = Math.min(volume, maxVolume, spec.maxVolume);
