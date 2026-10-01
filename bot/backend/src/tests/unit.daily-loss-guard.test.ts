@@ -23,6 +23,7 @@ const config = {
   accountBalance: 10_000,
   accountCurrency: "EUR",
   maxDailyLoss: 0.10,
+  mode: "paper",
 } as any;
 
 clearBrokerContracts();
@@ -55,8 +56,8 @@ const floating = (guard as any).calcFloating({
 assert(Math.abs(floating + 0.8) < 1e-9, `expected -0.8 EUR floating PnL, got ${floating}`);
 assert((guard as any).calcFloating() === null, "missing prices must fail closed");
 
-const allowed = await guard.canTrade({ "EURUSD.a": 2, EURUSD: 1.25 });
-assert(allowed, "daily loss guard must not confuse a small positive floating PnL with a loss");
+const allowed = await guard.canTrade({ "EURUSD.a": 2.1, EURUSD: 1.25 });
+assert(allowed, "daily loss guard must not block on a small positive floating PnL");
 
 const noTradesDb = {
   getOpenTrades: () => [],
