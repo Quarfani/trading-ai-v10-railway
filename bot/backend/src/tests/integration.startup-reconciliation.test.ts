@@ -233,6 +233,63 @@ async function main() {
     assert(mt5DuplicateDb.getOpenTrades().length === 0, 'duplicate-close recovery may settle the internal trade once');
     mt5DuplicateDb.raw().close();
 
+    const mt5PartialDuplicateDb = await newDb();
+    const duplicatePartialTradeId = mt5PartialDuplicateDb.insertTrade({
+      ticket: 81, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 1.0,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    mt5PartialDuplicateDb.createExecutionLedger({
+      executionId: 'mt5-partial-a', operationKey: 'mt5-partial-a-op',
+      action: 'PARTIAL_CLOSE', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.4,
+      request: { tradeId: duplicatePartialTradeId, volume: 0.4 },
+    });
+    mt5PartialDuplicateDb.createExecutionLedger({
+      executionId: 'mt5-partial-b', operationKey: 'mt5-partial-b-op',
+      action: 'PARTIAL_CLOSE', status: 'UNKNOWN', symbol: 'EURUSD', side: 'BUY', volume: 0.4,
+      request: { tradeId: duplicatePartialTradeId, volume: 0.4 },
+    });
+
+    (axios.get as any) = async (url: string) => {
+      if (url.endsWith('/positions')) {
+        return { data: { ok: true, positions: [{
+          ticket: 81, symbol: 'EURUSD', type: 'BUY', volume: 0.6, sl: 1.09, tp: 1.12,
+        }] } };
+      }
+      if (url.endsWith('/history')) {
+        return { data: {
+          closed: false, remaining_volume: 0.6, close_price: 1.105,
+          net_profit: 4.25, close_reason: 'manual', close_deal_ticket: 12347,
+        } };
+      }
+      throw new Error('unexpected URL');
+    };
+
+    let firstDuplicateBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5PartialDuplicateDb, new TelegramBot(mt5Cfg)).run();
+    } catch { firstDuplicateBlocked = true; }
+    assert(firstDuplicateBlocked, 'duplicate MT5 partial operations must block after resolving only one');
+    assert(
+      mt5PartialDuplicateDb.getExecutionByOperationKey('mt5-partial-a-op').status === 'EXECUTED',
+      'first MT5 partial operation should resolve',
+    );
+    assert(
+      mt5PartialDuplicateDb.getExecutionByOperationKey('mt5-partial-b-op').status === 'UNKNOWN',
+      'second MT5 partial operation should remain UNKNOWN',
+    );
+    assert(mt5PartialDuplicateDb.getOpenTrades()[0].volume === 0.6, 'first partial recovery should persist broker remaining volume');
+
+    let secondDuplicateBlocked = false;
+    try {
+      await new StartupReconciler(mt5Cfg, mt5PartialDuplicateDb, new TelegramBot(mt5Cfg)).run();
+    } catch { secondDuplicateBlocked = true; }
+    assert(secondDuplicateBlocked, 'duplicate MT5 partial must remain blocked across restart');
+    assert(
+      mt5PartialDuplicateDb.getExecutionByOperationKey('mt5-partial-b-op').status === 'UNKNOWN',
+      'duplicate MT5 partial must not auto-resolve on a later restart',
+    );
+    mt5PartialDuplicateDb.raw().close();
+
     const mt5OpenDb = await newDb();
     mt5OpenDb.createExecutionLedger({
       executionId: 'mt5-open-unknown', operationKey: 'mt5-open-op',
@@ -283,7 +340,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 19 passed, 0 failed');
+  console.log('Result: 24 passed, 0 failed');
 }
 
 main().catch(error => {
