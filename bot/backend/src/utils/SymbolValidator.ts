@@ -16,6 +16,7 @@ export interface MT5ContractPayload {
   currency_profit?: string;
   trade_contract_size?: number;
   point?: number;
+  digits?: number;
   volume_min?: number;
   volume_max?: number;
   volume_step?: number;
@@ -112,6 +113,10 @@ export function buildMT5BrokerContractDefinition(
     minVolume: Number(data?.volume_min),
     maxVolume: Number(data?.volume_max),
     volumeStep: Number(data?.volume_step),
+    pipSize: assetClass === 'FOREX'
+      ? Number(data?.point) *
+        ([3, 5].includes(Number(data?.digits)) ? 10 : 1)
+      : undefined,
     marginModel: 'BROKER_DEFINED',
     source: 'MT5:symbol_info',
     observedAt,
