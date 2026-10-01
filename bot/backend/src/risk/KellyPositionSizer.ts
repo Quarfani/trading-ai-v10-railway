@@ -19,6 +19,7 @@
  */
 import { SystemConfig, Side, Timeframe } from '../types/trading.types';
 import { MarketEconomics } from '../market/market.types';
+import { getSymbolSpec } from '../config/symbolConfig';
 import { Logger }             from '../utils/Logger';
 
 export interface KellyStats {
@@ -53,12 +54,25 @@ export class KellyPositionSizer {
     timeframe: Timeframe = 'H1',
     economics?: MarketEconomics,
   ): { volume: number; stats: KellyStats } {
+    // Direct legacy callers may omit resolvedEconomics. Preserve their historical
+    // symbolConfig behavior while the live PositionSizer always supplies
+    // broker-authoritative MarketEconomics.
+    const staticSpec = getSymbolSpec(symbol, timeframe);
+    const resolvedEconomics: MarketEconomics = economics ?? {
+      contractType: 'CFD',
+      contractSize: staticSpec.contractSize,
+      priceIncrement: staticSpec.pip,
+      minVolume: staticSpec.minVolume,
+      maxVolume: staticSpec.maxVolume,
+      volumeStep: staticSpec.volumeStep,
+      marginModel: 'NOTIONAL_LEVERAGE',
+    };
+
     if (
-      !economics ||
-      !Number.isFinite(economics.contractSize) || economics.contractSize <= 0 ||
-      !Number.isFinite(economics.minVolume) || economics.minVolume <= 0 ||
-      !Number.isFinite(economics.maxVolume) || economics.maxVolume < economics.minVolume ||
-      !Number.isFinite(economics.volumeStep) || economics.volumeStep <= 0
+      !Number.isFinite(resolvedEconomics.contractSize) || resolvedEconomics.contractSize <= 0 ||
+      !Number.isFinite(resolvedEconomics.minVolume) || resolvedEconomics.minVolume <= 0 ||
+      !Number.isFinite(resolvedEconomics.maxVolume) || resolvedEconomics.maxVolume < resolvedEconomics.minVolume ||
+      !Number.isFinite(resolvedEconomics.volumeStep) || resolvedEconomics.volumeStep <= 0
     ) {
       this.logger.warn(`[${symbol}] Missing/invalid market economics — sizing blocked`);
       return { volume: 0, stats: this.fixedStats(config.riskPerTrade) };
@@ -69,7 +83,7 @@ export class KellyPositionSizer {
 
     const slDist = Math.abs(entry - sl);
     if (slDist === 0) {
-      return { volume: economics.minVolume, stats: this.fixedStats(config.riskPerTrade) };
+      return { volume: resolvedEconomics.minVolume, stats: this.fixedStats(config.riskPerTrade) };
     }
 
     // ── Kelly computation ────────────────────────────────────────────────
@@ -86,17 +100,21 @@ export class KellyPositionSizer {
       return { volume: 0, stats: { ...stats, source: 'fixed' } };
     }
 
-    let raw             = riskUsd / (slDist * economics.contractSize * quoteToAccount);
+    let raw             = riskUsd / (slDist * resolvedEconomics.contractSize * quoteToAccount);
 
     // ── Safety clamps ────────────────────────────────────────────────────
     // Never exceed 2× the configured max risk per trade
-    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * economics.contractSize * quoteToAccount);
-    raw = Math.min(raw, maxVolume, economics.maxVolume);
+    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * resolvedEconomics.contractSize * quoteToAccount);
+    raw = Math.min(raw, maxVolume, resolvedEconomics.maxVolume);
 
     // Round to volume step
-    const steps  = Math.floor(raw / economics.volumeStep + 1e-12);
-    const volume = +(steps * economics.volumeStep).toFixed(8);
-    if (volume < economics.minVolume) return { volume: 0, stats };
+    raw = Math.max(raw, resolvedEconomics.minVolume);
+
+    const steps  = Math.floor(raw / resolvedEconomics.volumeStep + 1e-12);
+    const volume = Math.max(
+      resolvedEconomics.minVolume,
+      +(steps * resolvedEconomics.volumeStep).toFixed(8),
+    );
 
     this.logger.debug(
       `[${symbol}] Kelly=${(stats.kelly * 100).toFixed(1)}% ` +
