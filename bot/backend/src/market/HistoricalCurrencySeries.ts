@@ -123,5 +123,27 @@ export function resolveHistoricalQuoteToAccount(
   if (direct != null) return direct;
 
   const inverse = rateAt(series[normalizeSymbol(account + quote)], timestamp, maxAgeMs);
-  return inverse != null ? 1 / inverse : null;
+  if (inverse != null) return 1 / inverse;
+
+  const quoteToUsd = quote === 'USD'
+    ? 1
+    : rateAt(series[normalizeSymbol(quote + 'USD')], timestamp, maxAgeMs) ??
+      (() => {
+        const usdQuote = rateAt(series[normalizeSymbol('USD' + quote)], timestamp, maxAgeMs);
+        return usdQuote != null ? 1 / usdQuote : null;
+      })();
+
+  const accountToUsd = account === 'USD'
+    ? 1
+    : rateAt(series[normalizeSymbol(account + 'USD')], timestamp, maxAgeMs) ??
+      (() => {
+        const usdAccount = rateAt(series[normalizeSymbol('USD' + account)], timestamp, maxAgeMs);
+        return usdAccount != null ? 1 / usdAccount : null;
+      })();
+
+  if (quoteToUsd != null && accountToUsd != null && accountToUsd > 0) {
+    return quoteToUsd / accountToUsd;
+  }
+
+  return null;
 }
