@@ -222,6 +222,10 @@ export class Reconciler {
       );
       if (r.data?.ok === false) return null;
 
+      const closed = r.data?.closed === true ||
+        Number(r.data?.remaining_volume ?? 0) <= 1e-10;
+      if (!closed) return null;
+
       const netProfit = Number(r.data?.net_profit);
       const price = Number(r.data?.close_price);
       if (!Number.isFinite(netProfit) || !Number.isFinite(price)) return null;

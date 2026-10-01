@@ -452,3 +452,45 @@ def test_simulation_modify_replays_success(monkeypatch):
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.get_json() == second.get_json()
+
+def test_idempotency_persistence_roundtrip(tmp_path, monkeypatch):
+    bridge._idempotency_cache.clear()
+    monkeypatch.setattr(
+        bridge,
+        "_IDEMPOTENCY_STATE_PATH",
+        str(tmp_path / "idempotency.json"),
+    )
+    payload = {"ok": False, "error": "uncertain broker state"}
+    bridge._idempotency_record("persist-1", "UNKNOWN", payload)
+    bridge._idempotency_cache.clear()
+    bridge._idempotency_load_disk()
+    cached = bridge._idempotency_lookup("persist-1")
+    assert cached is not None
+    assert cached[1] == "UNKNOWN"
+    assert cached[2] == payload
+
+
+def test_idempotency_loader_rejects_future_timestamps(tmp_path, monkeypatch):
+    bridge._idempotency_cache.clear()
+    state = tmp_path / "idempotency.json"
+    state.write_text(
+        '{"future":[99999999999,"SUCCESS",{"ok":true}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bridge, "_IDEMPOTENCY_STATE_PATH", str(state))
+    bridge._idempotency_load_disk()
+    assert bridge._idempotency_lookup("future") is None
+
+
+def test_idempotency_loader_rejects_infinite_timestamps(tmp_path, monkeypatch):
+    bridge._idempotency_cache.clear()
+    state = tmp_path / "idempotency.json"
+    state.write_text(
+        '{"infinite":[Infinity,"SUCCESS",{"ok":true}]}',
+        encoding="utf-8",
+    )
+    # JSON rejects bare Infinity in strict parsers, so this verifies malformed
+    # state remains fail-closed through the loader's exception path.
+    monkeypatch.setattr(bridge, "_IDEMPOTENCY_STATE_PATH", str(state))
+    bridge._idempotency_load_disk()
+    assert bridge._idempotency_lookup("infinite") is None

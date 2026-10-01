@@ -79,7 +79,7 @@ _IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
 _idempotency_cache: dict[str, tuple[float, str, dict]] = {}
 _IDEMPOTENCY_STATE_PATH = os.getenv(
     "MT5_IDEMPOTENCY_STATE_PATH",
-    os.path.join(os.getcwd(), "data", "mt5_idempotency.json"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "mt5_idempotency.json"),
 )
 
 def _idempotency_load_disk():
@@ -95,7 +95,8 @@ def _idempotency_load_disk():
             ts, status, payload = value
             if (
                 isinstance(ts, (int, float))
-                and now - ts <= _IDEMPOTENCY_TTL_SEC
+                and math.isfinite(float(ts))
+                and 0 <= now - float(ts) <= _IDEMPOTENCY_TTL_SEC
                 and status in ("SUCCESS", "UNKNOWN")
                 and isinstance(payload, dict)
             ):
@@ -1065,9 +1066,18 @@ def modify():
                 422,
             )
 
-        result = mt5.order_send(request_data)
-        if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
-            return err(f"Modify failed: {result.retcode if result else mt5.last_error()}")
+        try:
+            result = mt5.order_send(request_data)
+        except Exception as exc:
+            payload = {"ok": False, "error": f"Modify order_send exception: {exc}"}
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+        if result is None:
+            payload = {"ok": False, "error": f"Modify result unavailable: {mt5.last_error()}"}
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+        if int(getattr(result, "retcode", -1)) != int(getattr(mt5, "TRADE_RETCODE_DONE", -2)):
+            return err(f"Modify failed: {getattr(result, 'retcode', mt5.last_error())}")
 
         response_payload = {
             "ok": True,
