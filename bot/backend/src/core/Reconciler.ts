@@ -100,6 +100,25 @@ export class Reconciler {
   }
 
   private async reconcileOne(t: Trade): Promise<void> {
+    const unresolved = t.id != null
+      ? this.db.getUnresolvedExecutionsForTrade(
+          t.id,
+          ['OPEN', 'CLOSE', 'CLOSE_AT_MARKET', 'PARTIAL_CLOSE'],
+        )
+      : [];
+
+    if (unresolved.length > 1) {
+      throw new Error(
+        `Trade ${t.id} has multiple unresolved destructive executions; automatic reconciliation is unsafe`,
+      );
+    }
+
+    if (unresolved.length === 1 && String(unresolved[0].action) === 'OPEN') {
+      throw new Error(
+        `Trade ${t.id} has an unresolved OPEN execution; automatic reconciliation is unsafe`,
+      );
+    }
+
     const mode = this.config.mode;
 
     if      (mode === 'paper')   await this.reconcilePaper(t);
