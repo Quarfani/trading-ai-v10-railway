@@ -122,6 +122,9 @@ export function toMarketDefinition(
     quoteCurrency: definition.quoteCurrency.trim().toUpperCase(),
     assetClass: definition.assetClass,
     supportedVenues: [definition.venue],
+    supportedTimeframes: definition.supportedTimeframes
+      ? [...definition.supportedTimeframes]
+      : undefined,
     economics: {
       contractType: definition.contractType,
       contractSize: definition.contractSize,

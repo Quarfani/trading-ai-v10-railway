@@ -57,6 +57,15 @@ export class PositionSizer {
       this.logger.warn(`[${symbol}] No canonical market definition — sizing blocked`);
       return 0;
     }
+    if (
+      market.supportedTimeframes &&
+      !market.supportedTimeframes.includes(timeframe)
+    ) {
+      this.logger.warn(
+        `[${symbol}/${timeframe}] Broker market does not support this timeframe — sizing blocked`,
+      );
+      return 0;
+    }
     const quoteToAccount = resolveQuoteToAccount(
       market.quoteCurrency,
       this.config.accountCurrency ?? 'USD',
@@ -194,6 +203,10 @@ export class PositionSizer {
     if (!(equity > 0) || !(volume > 0) || !Number.isFinite(volume)) return 0;
     const market = getMarketDefinition(symbol);
     if (!market) return 0;
+    if (
+      market.supportedTimeframes &&
+      !market.supportedTimeframes.includes(timeframe)
+    ) return 0;
     const quoteToAccount = resolveQuoteToAccount(
       market.quoteCurrency,
       this.config.accountCurrency ?? 'USD',

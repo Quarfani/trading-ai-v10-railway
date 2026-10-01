@@ -67,6 +67,8 @@ export interface MarketDefinition {
   quoteCurrency: string;
   assetClass: AssetClass;
   supportedVenues: readonly MarketVenue[];
+  /** Broker-declared timeframe support; omitted means not explicitly constrained. */
+  supportedTimeframes?: readonly Timeframe[];
   economics: MarketEconomics;
 }
 

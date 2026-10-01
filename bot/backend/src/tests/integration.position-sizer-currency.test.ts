@@ -127,7 +127,36 @@ async function main() {
     "unknown suffixed MT5 symbol must fail closed instead of inheriting static economics",
   );
 
-  console.log("Result: 7 passed, 0 failed");
+  registerBrokerContract({
+    symbol: "EURUSD",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "mt5-symbol-info:test-timeframe",
+    observedAt: Date.now(),
+    verified: true,
+    supportedTimeframes: ["H1"],
+  });
+
+  const unsupportedTf = sizer.size(
+    "EURUSD", "BUY", 1.1000, 1.0950, 70, 10_000, 1.1100,
+    { EURUSD: 1.1000 }, "M5",
+  );
+  assert(
+    unsupportedTf === 0,
+    "PositionSizer must fail closed for broker-declared unsupported timeframe",
+  );
+
+  clearBrokerContracts();
+  console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
