@@ -371,16 +371,24 @@ export class BinanceExecutor {
   async accountEquity(): Promise<number> {
     if (this.isFutures) {
       const r = await this.signedGet('/fapi/v2/account', {});
-      const equity = Number(r.totalWalletBalance);
-      if (!(equity > 0) || !Number.isFinite(equity)) throw new Error('Binance futures equity unavailable or invalid');
+      // totalMarginBalance includes current unrealized PnL and is the proper
+      // current-equity basis for drawdown and exposure controls.
+      const equity = Number(r.totalMarginBalance);
+      if (!(equity > 0) || !Number.isFinite(equity)) {
+        throw new Error('Binance futures margin equity unavailable or invalid');
+      }
       return equity;
     }
+
     const r = await this.signedGet('/api/v3/account', {});
     const usdt = (r.balances as any[]).find((b: any) => b.asset === 'USDT');
     const equity = usdt ? Number(usdt.free) + Number(usdt.locked) : NaN;
-    if (!(equity > 0) || !Number.isFinite(equity)) throw new Error('Binance USDT equity unavailable or invalid');
+    if (!(equity > 0) || !Number.isFinite(equity)) {
+      throw new Error('Binance spot USDT equity unavailable or invalid');
+    }
     return equity;
   }
+
 
   async getAllPositions(): Promise<Array<{ symbol: string; positionAmt: number; entryPrice: number; unrealizedProfit: number }>> {
     if (!this.isFutures) return [];
