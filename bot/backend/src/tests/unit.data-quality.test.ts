@@ -49,4 +49,11 @@ const stale = evaluateMarketDataQuality(
 );
 assert(stale.warnings.length > 0, 'stale candles should be visible');
 
-console.log('Result: 10 passed, 0 failed');
+const forexWeekend = evaluateMarketDataQuality(
+  [candle(0), candle(48 * 60 * 60_000)],
+  'M1',
+  { maxGapBars: 1, maxMissingRatio: 0.01, allowScheduledSessionGaps: true },
+);
+assert(forexWeekend.passed, 'scheduled Forex session gap should not hard-block');
+
+console.log('Result: 11 passed, 0 failed');
