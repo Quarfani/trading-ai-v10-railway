@@ -522,13 +522,31 @@ export class BinanceExecutor {
     try {
       const ids = this.orderMap.get(ticket);
       if (ids) {
-        for (const orderId of [ids.slOrderId, ids.tpOrderId]) {
-          if (orderId) {
-            await this.signedDelete(
-              this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
-              { symbol, orderId },
+        const oldOrderIds = [ids.slOrderId, ids.tpOrderId].filter(
+          (id): id is number => Number.isFinite(id),
+        );
+
+        for (const orderId of oldOrderIds) {
+          await this.signedDelete(
+            this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
+            { symbol, orderId },
+          );
+        }
+
+        if (oldOrderIds.length) {
+          const openOrders = await this.getOpenOrders(symbol);
+          const staleProtectiveOrders = openOrders.filter((order: any) =>
+            oldOrderIds.includes(Number(order.orderId)),
+          );
+          if (staleProtectiveOrders.length > 0) {
+            throw new Error(
+              `Binance protective order cancellation could not be verified for ${symbol}`,
             );
           }
+        }
+
+        this.orderMap.delete(ticket);
+      }
         }
         this.orderMap.delete(ticket);
       }
