@@ -152,11 +152,14 @@ export class Backtester {
       blockedReason =
         `Missing historical ${quoteCurrency}->${accountCurrency} conversion series`;
     } else if (requiresConversion) {
-      const probe = conversionAt(candles[WARMUP]?.time ?? candles[0]?.time ?? Date.now());
-      if (probe == null) {
-        valid = false;
-        blockedReason =
-          `Missing historical ${quoteCurrency}->${accountCurrency} conversion coverage`;
+      const startIndex = Math.min(WARMUP, Math.max(0, candles.length - 1));
+      for (let index = startIndex; index < candles.length; index++) {
+        if (conversionAt(candles[index].time) == null) {
+          valid = false;
+          blockedReason =
+            `Missing historical ${quoteCurrency}->${accountCurrency} conversion coverage at ${candles[index].time}`;
+          break;
+        }
       }
     }
 
