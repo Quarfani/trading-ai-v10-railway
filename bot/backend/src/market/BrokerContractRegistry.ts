@@ -24,6 +24,7 @@ export interface BrokerContractDefinition {
   venue: MarketVenue;
   contractSize: number;
   priceIncrement: number;
+  pipSize?: number;
   minVolume: number;
   maxVolume: number;
   volumeStep: number;
@@ -105,6 +106,7 @@ export function validateBrokerContract(
   }
 
   const optionalPositive: Array<[string, number | undefined]> = [
+    ['pipSize', definition.pipSize],
     ['tickSize', definition.tickSize],
     ['tickValue', definition.tickValue],
     ['tickValueLoss', definition.tickValueLoss],
@@ -164,6 +166,7 @@ export function toMarketDefinition(
       contractType: definition.contractType,
       contractSize: definition.contractSize,
       priceIncrement: definition.priceIncrement,
+      pipSize: definition.pipSize,
       minVolume: definition.minVolume,
       maxVolume: definition.maxVolume,
       volumeStep: definition.volumeStep,
