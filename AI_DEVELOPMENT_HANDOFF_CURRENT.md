@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 1bbd817dcc1fa702e96dff0fe0634ebefafa930d
-Current message: test: isolate broker timeframe and trade-mode fixtures
+Current head: verify refs/heads/main before resuming
+Current validated checkpoint: CI #523 passed for commit 1879743a73ea051e8608096f58d298d5fda9f4fb
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -28,9 +28,10 @@ Unified market/contract/timeframe model with explicit broker economics, currency
 - Startup reconciliation and execution-ledger safety remain in force.
 
 ## VERIFIED
-- CI run 36865834042 for commit fbe5ef405d1bc23c06d85e6eebe06a9cfbd7adb3: all backend/frontend/python jobs succeeded.
-- Earlier CI run 36866050430 for f8a5232ed3a75eaf36b07f7a0152c2e1689302a1: backend/frontend/python jobs succeeded.
-- Current head 1bbd817dcc1fa702e96dff0fe0634ebefafa930d is awaiting its own CI run; do not claim it green until run completes.
+- CI #523 for commit 1879743a73ea051e8608096f58d298d5fda9f4fb passed backend/frontend/python.
+- CI #524 for commit 110e973d45383faf226bca128d4f203aa0780747 passed backend/frontend but exposed a Python simulation-path regression; it is fixed in the reconciliation hardening line.
+- Reconciliation hardening includes authoritative MT5 close-state gating, stable idempotency persistence, simulation replay protection, and atomic execution-ledger operation claims.
+- The current main/branch SHA must be checked before claiming any later CI run is green.
 
 ## IMPORTANT ARCHITECTURE
 Market identity flow:
@@ -40,19 +41,18 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 
 ## CURRENT RISKS / GAPS
 1. Full non-USD live broker E2E still needs real broker credentials/network evidence.
-2. Paper and backtest cost engines are still separate; economic equivalence is not proven.
-3. Tick metadata is captured but not yet used as the primary sizing formula; current sizing remains contract-size + explicit FX conversion.
-4. MT5 order_calc_profit/order_calc_margin pre-trade risk estimation is not yet wired into the Node risk pipeline.
-5. Long paper/testnet/cloud soak evidence is still outstanding.
-6. Strategy lifecycle evidence, WFO calibration evidence, and Monte Carlo evidence remain separate domains.
-7. Deployment docs/reference profiles need another consistency pass after the current broker-contract hardening.
+2. Paper and backtest cost engines remain separate; economic equivalence is not proven across all asset classes.
+3. Tick metadata is captured, but sizing remains primarily contract-size + explicit FX conversion.
+4. Long paper/testnet/cloud soak evidence is still outstanding.
+5. Strategy lifecycle evidence, WFO calibration evidence, and Monte Carlo evidence remain separate domains.
+6. Deployment docs/reference profiles need another consistency pass after broker-contract hardening.
+7. Real-runtime broker-contract refresh/expiry behavior still needs soak evidence.
+8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure and duplicate operation claims.
 
 ## NEXT TASK
-After current CI is green:
-A. Add a Node/bridge MT5 pre-trade risk estimator using MT5 order_calc_profit in account currency and order_calc_margin as a final execution-side guard.
-B. Add soak tests for paper mode and execution-ledger/reconciliation recovery.
-C. Add real-runtime contract refresh/expiry observability to health/ready endpoints.
-D. Then perform the long paper -> testnet -> cloud E2E evidence pass.
+After the current main validation run is green:
+A. Validate the atomic execution-ledger claim/reconciliation hardening through CI.
+B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E evidence, without automatically resolving UNKNOWN states.
 
 ## STOP/RESUME
 1. Read this file and verify current main SHA.
