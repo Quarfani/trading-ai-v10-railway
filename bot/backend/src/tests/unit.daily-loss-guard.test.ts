@@ -5,6 +5,7 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+async function main() {
 const trade = {
   symbol: "EURUSD.a", side: "BUY", volume: 1, entry: 2, sl: 1.9, tp: 2.2,
   openedAt: Date.now(), status: "open", timeframe: "H1",
@@ -56,3 +57,9 @@ assert(allowed, "daily loss guard must not confuse a small positive floating PnL
 
 clearBrokerContracts();
 console.log("Result: 3 passed, 0 failed");
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
