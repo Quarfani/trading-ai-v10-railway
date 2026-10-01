@@ -605,6 +605,7 @@ def test_live_close_partial_fill_persists_unknown_and_blocks_replay(monkeypatch)
         ORDER_FILLING_IOC=1,
         TRADE_RETCODE_DONE=10009,
         POSITION_TYPE_BUY=0,
+        initialize=lambda **kwargs: True,
     )
     position = types.SimpleNamespace(ticket=501, symbol="EURUSD", type=0, volume=1.0)
     sym = info(trade_exemode=2, filling_mode=2, visible=True, point=0.00001)
