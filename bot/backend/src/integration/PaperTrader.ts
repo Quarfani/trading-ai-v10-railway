@@ -177,14 +177,19 @@ export class PaperTrader {
   }
 
   updateTrades(candle:Candle, quoteToAccount=Number.NaN){
+    const observedAt =
+      Number.isFinite(candle.time) && candle.time > 0
+        ? candle.time
+        : Date.now();
+
     for(const t of Array.from(this.openTrades.values())){
       const hitSL=t.side==='BUY'?candle.low<=t.sl:candle.high>=t.sl;
       const hitTP=t.side==='BUY'?candle.high>=t.tp:candle.low<=t.tp;
-      const timeout=Date.now()-t.openedAt>MAX_TRADE_AGE_MS;
+      const timeout=observedAt-t.openedAt>MAX_TRADE_AGE_MS;
       if(!hitSL&&!hitTP&&!timeout) continue;
       const reason=hitSL?'SL':hitTP?'TP':'TIMEOUT';
       const price=reason==='SL'?t.sl:reason==='TP'?t.tp:candle.close;
-      this.closeTrade(t.ticket,price,reason,candle.time,quoteToAccount);
+      this.closeTrade(t.ticket,price,reason,observedAt,quoteToAccount);
     }
   }
 
