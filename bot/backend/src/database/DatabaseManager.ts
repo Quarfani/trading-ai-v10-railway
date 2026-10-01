@@ -224,6 +224,33 @@ export class DatabaseManager {
     return this.db.prepare(`SELECT * FROM execution_ledger WHERE operationKey=?`).get(operationKey) ?? null;
   }
 
+  getUnresolvedExecutionsForTrade(
+    tradeId: number,
+    actions?: string[],
+  ): any[] {
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+      ORDER BY updatedAt DESC, createdAt DESC
+    `).all() as any[];
+
+    const matches: any[] = [];
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      let request: any;
+      try {
+        request = JSON.parse(row.requestJson);
+      } catch {
+        continue;
+      }
+      if (Number(request?.tradeId) !== Number(tradeId)) continue;
+      if (actions?.length && !actions.includes(String(row.action))) continue;
+      matches.push(row);
+    }
+    return matches;
+  }
+
   getLatestUnresolvedExecutionForTrade(
     tradeId: number,
     actions?: string[],
