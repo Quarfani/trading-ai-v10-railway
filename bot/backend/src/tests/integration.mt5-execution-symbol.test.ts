@@ -100,7 +100,39 @@ async function main() {
     assert(requestedSymbol === "EURUSD.a", "ExecutionGateway must preserve exact broker symbol");
     assert(result.trade?.symbol === "EURUSD.a", "returned trade must use exact broker symbol");
 
-    console.log("Result: 4 passed, 0 failed");
+    clearBrokerContracts();
+    registerBrokerContract({
+      symbol: "EURUSD.a",
+      baseAsset: "EUR",
+      quoteCurrency: "USD",
+      assetClass: "FOREX",
+      contractType: "CFD",
+      venue: "MT5",
+      contractSize: 100000,
+      priceIncrement: 0.00001,
+      minVolume: 0.01,
+      maxVolume: 100,
+      volumeStep: 0.01,
+      marginModel: "BROKER_DEFINED",
+      source: "execution-expiry-test",
+      observedAt: Date.now(),
+      expiresAt: Date.now() + 1,
+      verified: true,
+    });
+
+    let blockedPost = false;
+    (axios as any).post = async () => {
+      blockedPost = true;
+      throw new Error("expired contract must not reach broker");
+    };
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const expiredSignal = { ...signal, timestamp: Date.now() };
+    const expired = await gateway.execute(expiredSignal, 0.10, "H1");
+    assert(!expired.success, "expired broker contract must block MT5 execution");
+    assert(!blockedPost, "expired broker contract must not call /trade");
+
+    console.log("Result: 6 passed, 0 failed");
   } finally {
     (axios as any).post = originalPost;
     clearBrokerContracts();
