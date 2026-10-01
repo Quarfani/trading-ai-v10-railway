@@ -27,6 +27,8 @@ import { WalkForwardOptimizer } from '../optimization/WalkForwardOptimizer';
 import { Backtester }           from '../backtest/Backtester';
 import { TelegramBot }          from '../notifications/TelegramBot';
 import { MarketScanner }        from '../core/MarketScanner';
+import { getMarketDefinition }  from '../market/MarketCatalog';
+import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeriesLoader';
 import { Logger }               from '../utils/Logger';
 
 const WFO_HOUR_UTC   = 3;   // run at 03:00 UTC
@@ -75,6 +77,23 @@ export class ScheduledWFO {
     return process.env.AUTO_WFO_ENABLED === 'true' && process.env.LIVE_WFO_ACK === 'I_UNDERSTAND_LIVE_WFO_RISK';
   }
 
+  private async loadHistoricalRates(
+    symbol: string,
+    count: number,
+  ) {
+    const market = getMarketDefinition(symbol);
+    if (!market) return {};
+
+    return loadHistoricalCurrencySeries(
+      market.quoteCurrency,
+      (this.config.accountCurrency ?? 'USD').toUpperCase(),
+      async (pair, requestedCount) => {
+        return this.scanner.fetchCandles(pair, 'D1', requestedCount);
+      },
+      count,
+    );
+  }
+
   // ─── Internal ──────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
@@ -115,8 +134,18 @@ export class ScheduledWFO {
           continue;
         }
 
-        // Run walk-forward optimization
-        const result = await this.wfo.run(symbol, candles);
+        const historicalRates = await this.loadHistoricalRates(
+          symbol,
+          candles.length,
+        );
+
+        // Run walk-forward optimization with timestamp-aware FX economics.
+        const result = await this.wfo.run(
+          symbol,
+          candles,
+          'H1',
+          historicalRates,
+        );
 
         const p = result.finalParams;
         results.push(
