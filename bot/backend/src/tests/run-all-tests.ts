@@ -1,5 +1,5 @@
 /**
- * TEST RUNNER — All test suites
+ * TEST RUNNER â€” All test suites
  */
 import { execSync } from 'child_process';
 import * as path from 'path';
@@ -15,7 +15,7 @@ let totalFail = 0;
 const start = Date.now();
 
 console.log('='.repeat(60));
-console.log('TRADING BOT v9.0 — TEST SUITE');
+console.log('TRADING BOT v9.0 â€” TEST SUITE');
 console.log('='.repeat(60));
 
 for (const t of tests) {
@@ -73,6 +73,8 @@ for (const t of tests) {
     }
 
     console.error(`   ? FAILED: ${e.message?.slice(0, 300) ?? 'unknown error'}`);
+    const diagnostic = output.trim().split(/\r?\n/).slice(-12).join('\n');
+    if (diagnostic) console.error('   --- failure detail ---\n' + diagnostic);
   }
 }
 
