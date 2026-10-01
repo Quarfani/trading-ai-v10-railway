@@ -86,3 +86,40 @@ def test_position_history_aggregates_net_pnl_and_uses_latest_close():
 
 def test_position_history_requires_a_closing_deal():
     assert bridge.summarize_position_deals([deal(entry=0, profit=0)]) is None
+
+
+def test_position_ticket_resolution_prefers_deal_position_id():
+    mt5 = types.SimpleNamespace(
+        history_deals_get=lambda ticket: [
+            types.SimpleNamespace(position_id=777)
+        ],
+        history_orders_get=lambda ticket: [],
+    )
+    result = types.SimpleNamespace(order=123, deal=456)
+    position, deal = bridge.resolve_position_ticket(result, mt5)
+    assert position == 777
+    assert deal == 456
+
+
+def test_position_ticket_resolution_falls_back_to_order_position_id():
+    mt5 = types.SimpleNamespace(
+        history_deals_get=lambda ticket: [],
+        history_orders_get=lambda ticket: [
+            types.SimpleNamespace(position_id=888)
+        ],
+    )
+    result = types.SimpleNamespace(order=123, deal=0)
+    position, deal = bridge.resolve_position_ticket(result, mt5)
+    assert position == 888
+    assert deal == 0
+
+
+def test_position_ticket_resolution_fails_closed_without_identity():
+    mt5 = types.SimpleNamespace(
+        history_deals_get=lambda ticket: [],
+        history_orders_get=lambda ticket: [],
+    )
+    result = types.SimpleNamespace(order=123, deal=456)
+    position, deal = bridge.resolve_position_ticket(result, mt5)
+    assert position == 0
+    assert deal == 456

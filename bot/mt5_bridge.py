@@ -143,6 +143,28 @@ def sim_close(ticket: int, fraction: float = 1.0) -> dict:
             "remaining_volume": remaining, "close_price": close_price, "profit": round(pnl, 2)}
 
 
+def resolve_position_ticket(order_result, mt5_module):
+    """Resolve the MT5 position id from an executed order/deal."""
+    deal_ticket = int(getattr(order_result, "deal", 0) or 0)
+    if deal_ticket:
+        deals = mt5_module.history_deals_get(ticket=deal_ticket)
+        if deals:
+            for deal in reversed(deals):
+                position_id = int(getattr(deal, "position_id", 0) or 0)
+                if position_id > 0:
+                    return position_id, deal_ticket
+
+    order_ticket = int(getattr(order_result, "order", 0) or 0)
+    if order_ticket:
+        orders = mt5_module.history_orders_get(ticket=order_ticket)
+        if orders:
+            for order in reversed(orders):
+                position_id = int(getattr(order, "position_id", 0) or 0)
+                if position_id > 0:
+                    return position_id, deal_ticket
+
+    return 0, deal_ticket
+
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 def validate_trade_volume(volume: float, symbol_info) -> tuple[bool, str]:
@@ -355,7 +377,11 @@ def trade():
         if not sym_info:
             return err(f"Symbol {symbol} not found")
         if not sym_info.visible:
-            mt5.symbol_select(symbol, True)
+            if not mt5.symbol_select(symbol, True):
+                return err(f"Symbol {symbol} could not be selected", 503)
+            sym_info = mt5.symbol_info(symbol)
+            if not sym_info:
+                return err(f"Symbol {symbol} unavailable after selection", 503)
 
         if getattr(sym_info, "trade_mode", None) == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", object()):
             return err(f"Symbol {symbol} trading is disabled", 409)
@@ -417,17 +443,7 @@ def trade():
         # Resolve the actual position ticket from the executed deal. MT5
         # distinguishes order, deal and position identifiers; downstream
         # close/modify operations require the position ticket.
-        position_ticket = 0
-        deal_ticket = int(getattr(result, "deal", 0) or 0)
-        if deal_ticket:
-            deals = mt5.history_deals_get(ticket=deal_ticket)
-            if deals:
-                position_ticket = int(getattr(deals[-1], "position_id", 0) or 0)
-
-        if not position_ticket:
-            orders = mt5.history_orders_get(ticket=int(result.order))
-            if orders:
-                position_ticket = int(getattr(orders[-1], "position_id", 0) or 0)
+        position_ticket, deal_ticket = resolve_position_ticket(result, mt5)
 
         if not position_ticket:
             return err(
