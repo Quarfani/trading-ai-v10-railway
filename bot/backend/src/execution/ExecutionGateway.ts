@@ -132,10 +132,22 @@ export class ExecutionGateway {
       idempotency_key: operationKey,
     }, { timeout: 8_000, headers: this.mt5Headers() });
     if (!r.data?.ticket) throw new Error(`MT5 no ticket: ${JSON.stringify(r.data)}`);
+    const executedVolume = Number(r.data.volume ?? volume);
+    if (!(executedVolume > 0) || !Number.isFinite(executedVolume)) {
+      throw new Error(`MT5 invalid executed volume: ${JSON.stringify(r.data)}`);
+    }
     return {
-      ticket: Number(r.data.ticket), symbol: brokerSymbol, side: signal.side, volume,
-      entry: Number(r.data.price ?? signal.price), sl: signal.sl, tp: signal.tp,
-      status: 'open', openedAt: Date.now(), source: signal.source, timeframe: tf,
+      ticket: Number(r.data.ticket),
+      symbol: brokerSymbol,
+      side: signal.side,
+      volume: executedVolume,
+      entry: Number(r.data.price ?? signal.price),
+      sl: signal.sl,
+      tp: signal.tp,
+      status: 'open',
+      openedAt: Date.now(),
+      source: signal.source,
+      timeframe: tf,
     };
   }
 
