@@ -32,6 +32,7 @@ import { MarketDefinition }            from '../market/market.types';
 import { HistoricalRateSeries, resolveHistoricalQuoteToAccount, validateHistoricalRateSeries } from '../market/HistoricalCurrencySeries';
 import { evaluateMarketDataQuality } from '../market/DataQualityGate';
 import { Logger }                      from '../utils/Logger';
+import { normalizedConfidenceThreshold, passesMinimumSignalConfidence } from '../risk/SignalConfidenceGate';
 import * as path                       from 'path';
 import * as fs                         from 'fs';
 import * as os                         from 'os';
@@ -161,10 +162,7 @@ export class Backtester {
       0.02,
       Math.max(0.0001, Number(this.config.riskPerTrade ?? 0.01)),
     );
-    const minimumSignalConfidence = Math.min(
-      1,
-      Math.max(0, Number(this.config.minConfidence ?? 0)),
-    );
+    const minimumSignalConfidence = normalizedConfidenceThreshold(this.config.minConfidence, 0);
 
     marketRegimeDetector.invalidate(symbol);
     const market = marketOverride ?? getMarketDefinition(symbol, timeframe);
@@ -465,10 +463,7 @@ export class Backtester {
           if (result.outcome === 'NO_TRADE' || !result.signal) continue;
 
           const sig = result.signal;
-          if (
-            !Number.isFinite(Number(sig.confidence)) ||
-            Number(sig.confidence) < minimumSignalConfidence
-          ) {
+          if (!passesMinimumSignalConfidence(sig.confidence, minimumSignalConfidence)) {
             continue;
           }
 
