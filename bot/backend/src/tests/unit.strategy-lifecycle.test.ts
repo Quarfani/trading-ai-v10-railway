@@ -58,8 +58,42 @@ assert(
 );
 
 const backtested = promoteStrategy(definition, 'BACKTEST', 'backtest contract created').definition;
-const paperspec = { ...backtested, lifecycle: 'MONTE_CARLO' as const };
-const paper = promoteStrategy(paperspec, 'PAPER', 'evidence gate passed').definition;
+
+const walkForwardWithoutMc = {
+  ...backtested,
+  lifecycle: 'WALK_FORWARD' as const,
+  evidence: {
+    ...backtested.evidence!,
+    monteCarloStress: undefined,
+  },
+};
+let monteCarloBlocked = false;
+try {
+  promoteStrategy(
+    walkForwardWithoutMc,
+    'MONTE_CARLO',
+    'Monte Carlo evidence is required',
+  );
+} catch {
+  monteCarloBlocked = true;
+}
+assert(
+  monteCarloBlocked,
+  'WALK_FORWARD -> MONTE_CARLO must fail closed without Monte Carlo evidence',
+);
+
+const monteCarloReady = promoteStrategy(
+  backtested.lifecycle === 'WALK_FORWARD'
+    ? backtested
+    : { ...backtested, lifecycle: 'WALK_FORWARD' as const },
+  'MONTE_CARLO',
+  'Monte Carlo evidence present',
+).definition;
+const paper = promoteStrategy(
+  monteCarloReady,
+  'PAPER',
+  'evidence gate passed',
+).definition;
 assert(paper.lifecycle === 'PAPER', 'MONTE_CARLO -> PAPER should be allowed');
 
 let blocked = false;
@@ -78,6 +112,7 @@ const noMonteCarlo = {
     outOfSampleTrades: 220,
     outOfSampleProfitFactor: 1.6,
     walkForwardStability: 0.70,
+    monteCarloStress: undefined,
     parameterSensitivity: 0.70,
     regimeCoverage: 0.70,
   },
@@ -113,7 +148,7 @@ const productionReady = {
       futureTrades: 200,
       p5FinalBalance: 8500,
       p50FinalBalance: 11200,
-      maxDDP95: 0.24,
+      maxDDP95: 0.18,
       probabilityLoss: 0.25,
       probabilityDD20: 0.40,
       probabilityRuin: 0.01,
@@ -129,4 +164,4 @@ const production = promoteStrategy(
 ).definition;
 assert(production.lifecycle === 'PRODUCTION', 'hardened production evidence should allow promotion');
 
-console.log('Result: 10 passed, 0 failed');
+console.log('Result: 11 passed, 0 failed');
