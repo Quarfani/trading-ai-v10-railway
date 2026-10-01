@@ -153,7 +153,20 @@ export class Reconciler {
       );
 
       if (!live) {
-        // Position closed on broker side
+        const unresolvedAny = t.id != null
+          ? this.db.getLatestUnresolvedExecutionForTrade(Number(t.id))
+          : null;
+        const unresolvedClose = t.id != null
+          ? this.db.getLatestUnresolvedExecutionForTrade(
+              Number(t.id),
+              ['CLOSE', 'CLOSE_AT_MARKET'],
+            )
+          : null;
+        if (unresolvedAny && !unresolvedClose) {
+          throw new Error(
+            `MT5 position ${t.ticket} is absent while unresolved execution=${unresolvedAny.executionId} is not an attributable close`,
+          );
+        }
         const hist = await this.getMT5History(t.ticket);
         if (!hist) throw new Error(`MT5 position ${t.ticket} is absent but authoritative close history is unavailable`);
         await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
