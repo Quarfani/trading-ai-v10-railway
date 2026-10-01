@@ -47,7 +47,7 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 5. Strategy lifecycle evidence, WFO calibration evidence, and Monte Carlo evidence remain separate domains.
 6. Deployment docs/reference profiles need another consistency pass after broker-contract hardening.
 7. Real-runtime broker-contract refresh/expiry behavior still needs soak evidence.
-8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, and corrupt persisted execution results.
+8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, corrupt persisted execution results, and conflicting partial position/history state.
 
 ## NEXT TASK
 After the current main validation run is green:
