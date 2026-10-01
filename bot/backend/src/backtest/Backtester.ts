@@ -106,6 +106,21 @@ export class Backtester {
     const quoteCurrency = market?.quoteCurrency ?? 'USD';
     let valid = true;
     let blockedReason: string | undefined;
+    const WARMUP = 250;
+
+    const trades: BacktestTrade[] = [];
+    const equityCurve: Array<{ t: number; equity: number }> = [];
+    const monthlyMap = new Map<string, MonthlyBreakdown>();
+
+    let balance = startBalance;
+    let peak = startBalance;
+    let maxDDPct = 0;
+    let maxDDUsd = 0;
+    let totalComm = 0;
+    let totalSpread = 0;
+    let totalCost = 0;
+    let simulationErrors = 0;
+
     const conversionAt = (time: number): number | null =>
       resolveHistoricalQuoteToAccount(
         quoteCurrency,
@@ -166,22 +181,11 @@ export class Backtester {
       );
     }
 
-    const trades: BacktestTrade[]                    = [];
-    const equityCurve: Array<{ t: number; equity: number }> = [];
-    const monthlyMap = new Map<string, MonthlyBreakdown>();
-
-    let balance   = startBalance;
-    let peak      = startBalance;
-    let maxDDPct  = 0, maxDDUsd = 0;
-    let totalComm = 0, totalSpread = 0, totalCost = 0;
-    let simulationErrors = 0;
-
     let openPos: {
       side: Side; entry: number; sl: number; tp: number;
       size: number; openedAt: number; openBar: number; source: string; entryQuoteToAccount: number;
     } | null = null;
 
-    const WARMUP = 250;
     equityCurve.push({ t: candles[0]?.time ?? 0, equity: balance });
 
     for (let i = WARMUP; i < candles.length; i++) {
