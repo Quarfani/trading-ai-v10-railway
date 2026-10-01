@@ -45,27 +45,94 @@ export class SymbolValidator {
   private async validateMT5(symbol: string): Promise<boolean> {
     try {
       const response = await axios.get(
-        `${this.config.mt5.bridgeUrl}/tick`,
+        this.config.mt5.bridgeUrl + '/tick',
         {
           params: { symbol },
           timeout: 4000,
-          headers: {
-            'X-Api-Key': this.config.mt5.bridgeApiKey ?? '',
-          },
+          headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
         },
       );
 
-      return Number(response.data?.bid) > 0;
+      const tradable = Number(response.data?.bid) > 0;
+
+      if (tradable) {
+        await this.enrichBrokerContract(symbol).catch((error: any) => {
+          this.logger.debug(
+            '[MT5] ' + symbol + ' contract metadata unavailable: ' + (error?.message ?? 'unknown'),
+          );
+        });
+      }
+
+      return tradable;
     } catch (error: any) {
       this.logger.warn(
-        `[MT5] ${symbol} validation failed: ${
-          error?.message ?? 'unknown error'
-        }`,
+        '[MT5] ' + symbol + ' validation failed: ' + (error?.message ?? 'unknown error'),
       );
       return false;
     }
   }
 
+  private inferMT5AssetClass(symbol: string, description: string): AssetClass | null {
+    const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const text = (description ?? '').toUpperCase();
+
+    if (normalized === 'XAUUSD' || normalized === 'XAGUSD') return 'METAL';
+    if (
+      normalized.includes('OIL') || normalized.includes('WTI') ||
+      normalized.includes('BRENT') || normalized.includes('XTI') ||
+      normalized.includes('XBR') || text.includes('OIL') ||
+      text.includes('WTI') || text.includes('BRENT')
+    ) return 'ENERGY';
+
+    if (['US30','SPX500','NAS100','GER40','US500','UK100','DE40'].includes(normalized)) {
+      return 'INDEX';
+    }
+
+    const codes = new Set(['USD','EUR','GBP','JPY','AUD','NZD','CAD','CHF']);
+    if (normalized.length === 6) {
+      const base = normalized.slice(0, 3);
+      const quote = normalized.slice(3, 6);
+      if (codes.has(base) && codes.has(quote)) return 'FOREX';
+    }
+    return null;
+  }
+
+  private async enrichBrokerContract(symbol: string): Promise<void> {
+    const response = await axios.get(
+      this.config.mt5.bridgeUrl + '/contract',
+      {
+        params: { symbol },
+        timeout: 5000,
+        headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey ?? '' },
+      },
+    );
+
+    const data = response.data;
+    const assetClass = this.inferMT5AssetClass(
+      String(data?.symbol ?? symbol),
+      String(data?.description ?? ''),
+    );
+    if (!assetClass) return;
+
+    registerBrokerContract({
+      symbol: String(data?.symbol ?? symbol),
+      baseAsset: String(data?.currency_base ?? ''),
+      quoteCurrency: String(data?.currency_profit ?? ''),
+      assetClass,
+      contractType: 'CFD',
+      venue: 'MT5',
+      contractSize: Number(data?.trade_contract_size),
+      priceIncrement: Number(data?.point),
+      minVolume: Number(data?.volume_min),
+      maxVolume: Number(data?.volume_max),
+      volumeStep: Number(data?.volume_step),
+      marginModel: 'BROKER_DEFINED',
+      source: 'MT5:symbol_info',
+      observedAt: Number(data?.time) * 1000 || Date.now(),
+      expiresAt: Date.now() + 24 * 3_600_000,
+      verified: true,
+    });
+  }
   private async validateBinance(symbol: string): Promise<boolean> {
     const isFutures = this.config.binance.futures;
 
