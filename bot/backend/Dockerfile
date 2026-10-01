@@ -1,6 +1,6 @@
 # Railway-ready production image for the Trading Core.
-# Works with the current repository (no lockfile yet) and automatically switches
-# to npm ci once a package-lock.json is committed.
+# Uses the committed npm lockfile for deterministic production installs and switches
+# to npm install only as a compatibility fallback when no lockfile is present.
 FROM node:22-slim AS build
 
 WORKDIR /app
