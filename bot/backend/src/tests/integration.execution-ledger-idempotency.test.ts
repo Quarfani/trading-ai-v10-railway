@@ -80,7 +80,42 @@ async function main() {
     clearBrokerContracts();
   }
 
-  console.log("Result: 10 passed, 0 failed");
+  const partialDb = new DatabaseManager(":memory:");
+  await partialDb.initialize();
+  registerBrokerContract({
+    symbol: "EURUSD.a", baseAsset: "EUR", quoteCurrency: "USD", assetClass: "FOREX",
+    contractType: "CFD", venue: "MT5", contractSize: 100000, priceIncrement: 0.00001,
+    minVolume: 0.01, maxVolume: 100, volumeStep: 0.01, marginModel: "BROKER_DEFINED",
+    source: "mt5-partial-volume-test", observedAt: Date.now(), verified: true,
+  });
+  const partialGateway = new ExecutionGateway(
+    { ...baseConfig("mt5"), symbols: ["EURUSD.a"] },
+    partialDb,
+  );
+  const originalPostPartial = (axios as any).post;
+  (axios as any).post = async () => ({
+    data: {
+      ticket: 77,
+      price: 1.10002,
+      volume: 0.06,
+    },
+  });
+  try {
+    const partial = await partialGateway.execute(
+      signal(1_800_000_000_003, "EURUSD.a"),
+      0.10,
+      "H1",
+    );
+    assert(partial.success && partial.trade, "MT5 partial fill fixture must execute");
+    assert(partial.trade.volume === 0.06, "MT5 gateway must persist broker-confirmed executed volume");
+    const stored = partialDb.getOpenTrades()[0];
+    assert(stored.volume === 0.06, "database trade volume must match executed broker volume");
+  } finally {
+    (axios as any).post = originalPostPartial;
+    clearBrokerContracts();
+  }
+
+  console.log("Result: 13 passed, 0 failed");
 }
 
 main().catch(error => {
