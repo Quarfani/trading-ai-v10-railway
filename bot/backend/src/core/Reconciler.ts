@@ -364,10 +364,26 @@ export class Reconciler {
           );
         }
 
+        const persisted = this.db.raw().prepare(
+          'SELECT realizedProfit FROM trades WHERE id=? LIMIT 1',
+        ).get(t.id!) as { realizedProfit?: number } | undefined;
+        const priorRealized = Number(persisted?.realizedProfit ?? 0);
+        if (!Number.isFinite(priorRealized)) {
+          throw new Error(
+            `Persisted realized PnL is invalid for Binance trade ${t.id}`,
+          );
+        }
+        const cumulativeRealized = priorRealized + Number(recovered.realizedProfit);
+        if (!Number.isFinite(cumulativeRealized)) {
+          throw new Error(
+            `Cumulative Binance realized PnL is invalid for ${t.symbol}`,
+          );
+        }
+
         const resolved = this.db.resolveReconciledFullClose(
           t.id!,
           String(unresolvedClose.executionId),
-          Number(t.realizedProfit ?? 0) + Number(recovered.realizedProfit),
+          cumulativeRealized,
           Date.now(),
           'MANUAL',
           {
@@ -387,8 +403,8 @@ export class Reconciler {
         }
 
         t.status = 'closed';
-        t.profit = Number(t.realizedProfit ?? 0) + Number(recovered.realizedProfit);
-        t.realizedProfit = t.profit;
+        t.profit = cumulativeRealized;
+        t.realizedProfit = cumulativeRealized;
         this.tracker.recordClose(t.profit);
         this.onClose({ ...t, profit: t.profit });
       } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
@@ -423,7 +439,15 @@ export class Reconciler {
           );
         }
 
-        const priorRealized = Number(t.realizedProfit ?? 0);
+        const persisted = this.db.raw().prepare(
+          'SELECT realizedProfit FROM trades WHERE id=? LIMIT 1',
+        ).get(t.id!) as { realizedProfit?: number } | undefined;
+        const priorRealized = Number(persisted?.realizedProfit ?? 0);
+        if (!Number.isFinite(priorRealized)) {
+          throw new Error(
+            `Persisted realized PnL is invalid for Binance trade ${t.id}`,
+          );
+        }
         const cumulativeRealized = priorRealized + Number(recovered.realizedProfit);
         if (!Number.isFinite(cumulativeRealized)) {
           throw new Error(
