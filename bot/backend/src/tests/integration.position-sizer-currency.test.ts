@@ -35,6 +35,33 @@ async function main() {
 
   const sizer = new PositionSizer(config, db);
 
+  // Mirror real MT5 startup: every active symbol must have a verified
+  // broker-confirmed contract before live sizing is allowed.
+  clearBrokerContracts();
+  for (const [symbol, baseAsset, quoteCurrency, contractSize, pip] of [
+    ["EURUSD", "EUR", "USD", 100000, 0.00001],
+    ["USDJPY", "USD", "JPY", 100000, 0.01],
+    ["XAUUSD", "XAU", "USD", 100, 0.1],
+  ] as const) {
+    registerBrokerContract({
+      symbol,
+      baseAsset,
+      quoteCurrency,
+      assetClass: symbol === "XAUUSD" ? "METAL" : "FOREX",
+      contractType: "CFD",
+      venue: "MT5",
+      contractSize,
+      priceIncrement: pip,
+      minVolume: 0.01,
+      maxVolume: 100,
+      volumeStep: 0.01,
+      marginModel: "BROKER_DEFINED",
+      source: "mt5-symbol-info:test-base",
+      observedAt: Date.now(),
+      verified: true,
+    });
+  }
+
   const eurUsd = sizer.size(
     "EURUSD", "BUY", 1.1000, 1.0950, 70, 10_000, 1.1100,
     { EURUSD: 1.1000 }, "H1",
@@ -253,7 +280,7 @@ async function main() {
   );
 
   clearBrokerContracts();
-  console.log("Result: 12 passed, 0 failed");
+  console.log("Result: 16 passed, 0 failed");
 }
 
 main().catch(error => {
