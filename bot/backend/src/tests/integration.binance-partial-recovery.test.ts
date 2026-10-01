@@ -206,10 +206,9 @@ async function main() {
   const fullRecovered = new BinanceExecutor(config());
   (fullRecovered as any).signedGet = async (path: string, params: Record<string, unknown>) => {
     if (path === "/fapi/v1/allOrders") {
-      assert(
-        params.origClientOrderId === makeBinanceClientOrderId("full-close-operation-key"),
-        "full-close historical lookup must use durable client order id",
-      );
+      assert(Number.isFinite(Number(params.startTime)), "full-close lookup must use a bounded time window");
+      assert(Number.isFinite(Number(params.endTime)), "full-close lookup must include an end time");
+      assert(params.limit === 1000, "full-close lookup must request the full bounded order page");
       return [{
         symbol: "BTCUSDT",
         orderId: 70002,
