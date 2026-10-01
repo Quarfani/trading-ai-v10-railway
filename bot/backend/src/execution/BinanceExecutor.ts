@@ -732,6 +732,21 @@ export class BinanceExecutor {
     let realizedProfitCurrency: string | null = null;
 
     try {
+      let verifiedPosition: { positionAmt: number; entryPrice: number; unrealizedProfit: number } | null = null;
+      if (this.isFutures) {
+        verifiedPosition = await this.getPosition(symbol);
+        if (!verifiedPosition) {
+          throw new Error(
+            `Binance full close position verification unavailable for ${symbol}`,
+          );
+        }
+        if (verifiedPosition.positionAmt === 0) {
+          throw new Error(
+            `Binance full close found no open position for ${symbol}`,
+          );
+        }
+      }
+
       const ids = this.orderMap.get(ticket);
       if (ids) {
         const oldOrderIds = [ids.slOrderId, ids.tpOrderId].filter(
@@ -761,15 +776,10 @@ export class BinanceExecutor {
       }
 
       if (this.isFutures) {
-        const pos = await this.getPosition(symbol);
+        const pos = verifiedPosition;
         if (!pos) {
           throw new Error(
             `Binance full close position verification unavailable for ${symbol}`,
-          );
-        }
-        if (pos.positionAmt === 0) {
-          throw new Error(
-            `Binance full close found no open position for ${symbol}`,
           );
         }
 
