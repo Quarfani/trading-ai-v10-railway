@@ -313,17 +313,65 @@ export class BinanceExecutor {
 
   // ─── Modify SL/TP ─────────────────────────────────────────────────────
 
-  async modifyPosition(ticket:number,symbol:string,side:'BUY'|'SELL',newSl:number,newTp:number):Promise<boolean>{
+  async modifyPosition(
+    ticket:number,
+    symbol:string,
+    side:'BUY'|'SELL',
+    newSl:number,
+    newTp:number,
+  ):Promise<boolean>{
     if(!this.isFutures)return false;
     try{
       const ids=this.orderMap.get(ticket);
-      for(const orderId of [ids?.slOrderId,ids?.tpOrderId]) if(orderId) await this.signedDelete('/fapi/v1/order',{symbol,orderId}).catch(()=>{});
-      const quantity=ids?.quantity ?? Math.abs((await this.getPosition(symbol))?.positionAmt ?? 0);
+      const oldIds=[ids?.slOrderId,ids?.tpOrderId].filter(
+        (id): id is number => Number.isFinite(id),
+      );
+
+      for(const orderId of oldIds) {
+        await this.signedDelete('/fapi/v1/order',{symbol,orderId});
+      }
+
+      if (oldIds.length) {
+        const remaining = await this.getOpenOrders(symbol);
+        const stillOpen = remaining.some((order: any) =>
+          oldIds.includes(Number(order.orderId)),
+        );
+        if (stillOpen) {
+          throw new Error(
+            `protective order cancellation not verified for ${symbol}`,
+          );
+        }
+      }
+
+      const quantity=ids?.quantity ?? Math.abs(
+        (await this.getPosition(symbol))?.positionAmt ?? 0,
+      );
       if(!(quantity>0)) return false;
-      const sig={symbol,side,price:0,confidence:1,sl:newSl,tp:newTp,source:'modify',reason:'modify',timestamp:Date.now()} as Signal;
-      await this.placeSLTP(sig,quantity,ticket,getSymbolSpec(symbol));
+
+      const sig={
+        symbol,
+        side,
+        price:0,
+        confidence:1,
+        sl:newSl,
+        tp:newTp,
+        source:'modify',
+        reason:'modify',
+        timestamp:Date.now(),
+      } as Signal;
+
+      await this.placeSLTP(
+        sig,
+        quantity,
+        ticket,
+        getSymbolSpec(symbol),
+      );
       return true;
-    }catch(e:any){this.logger.warn(`modifyPosition failed: ${e?.message??e}`);return false;}}
+    }catch(e:any){
+      this.logger.warn(`modifyPosition failed: ${e?.message??e}`);
+      return false;
+    }
+  }
 
   async closePartialPosition(
     ticket:number,
