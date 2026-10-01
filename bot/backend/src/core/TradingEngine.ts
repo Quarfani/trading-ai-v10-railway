@@ -1154,6 +1154,22 @@ export class TradingEngine extends EventEmitter {
         );
     }
 
+    // ── Minimum signal-confidence gate ──────────────────────────────────
+    const minConfidence = Math.min(
+      1,
+      Math.max(0, Number(this.config.minConfidence ?? 0)),
+    );
+    if (
+      !Number.isFinite(Number(adjustedSignal.confidence)) ||
+      Number(adjustedSignal.confidence) < minConfidence
+    ) {
+      this.logger.info(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=CONFIDENCE ` +
+          `confidence=${Number(adjustedSignal.confidence)} min=${minConfidence}`,
+      );
+      return;
+    }
+
     // ── Strategy lifecycle gate ─────────────────────────────────────────
     const lifecycleCheck =
       this.consensus.isExecutionLifecycleEligible(
