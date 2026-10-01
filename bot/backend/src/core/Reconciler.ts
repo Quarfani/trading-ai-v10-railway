@@ -171,6 +171,13 @@ export class Reconciler {
         const hist = await this.getMT5History(t.ticket);
         if (!hist) throw new Error(`MT5 position ${t.ticket} is absent but authoritative close history is unavailable`);
         if (unresolvedClose) {
+          const skewMs = 5 * 60_000;
+          if (hist.closeTimeMsc > 0 && Number(unresolvedClose.createdAt) > 0 &&
+              hist.closeTimeMsc + skewMs < Number(unresolvedClose.createdAt)) {
+            throw new Error(
+              'MT5 close history predates unresolved close operation for ticket=' + String(t.ticket) + '; manual reconciliation is required',
+            );
+          }
           const closedAt = hist.closeTimeMsc > 0 ? hist.closeTimeMsc : Date.now();
           const resolved = this.db.resolveReconciledFullClose(
             t.id!,
@@ -218,6 +225,13 @@ export class Reconciler {
           );
 
           if (Number.isFinite(cumulativeRealized) && unresolvedPartial) {
+            const skewMs = 5 * 60_000;
+            if (cumulative.closeTimeMsc > 0 && Number(unresolvedPartial.createdAt) > 0 &&
+                cumulative.closeTimeMsc + skewMs < Number(unresolvedPartial.createdAt)) {
+              throw new Error(
+                'MT5 partial-close history predates unresolved operation for ticket=' + String(t.ticket) + '; manual reconciliation is required',
+              );
+            }
             const resolved = this.db.resolveReconciledPartialClose(
               t.id!,
               String(unresolvedPartial.executionId),
