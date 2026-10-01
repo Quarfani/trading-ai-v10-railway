@@ -100,9 +100,15 @@ const MAP: Record<string, Partial<SymbolSpec>> = {
   GER40:  { pip: 1, contractSize: 1, spreadMaxPips: 3, atrMult: 2.0, tpRatio: 2.5, pipValue: 1, lotSize: 1 },
 };
 
+function configSymbolKey(symbol: string): string {
+  const raw = symbol.trim().toUpperCase();
+  const brokerBase = raw.split(/[._:-]/, 1)[0];
+  return brokerBase.replace(/[^A-Z0-9]/g, '');
+}
+
 function envOverride(symbol: string, timeframe: Timeframe = 'H1'): Partial<SymbolSpec> {
   const o: Partial<SymbolSpec> = {};
-  const normalized = symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const normalized = configSymbolKey(symbol);
   const get = (k: string) => {
     const rawScoped = process.env[`SPEC_${symbol}_${timeframe}_${k}`];
     const raw = process.env[`SPEC_${symbol}_${k}`];
@@ -133,7 +139,7 @@ export function getBaseSymbolSpec(symbol: string): SymbolSpec {
 
 export function hasExplicitSpreadPolicy(symbol: string, timeframe: Timeframe = 'H1'): boolean {
   const raw = symbol.trim().toUpperCase();
-  const normalized = raw.replace(/[^A-Z0-9]/g, '');
+  const normalized = configSymbolKey(raw);
   if (isConfiguredSymbol(normalized)) return true;
 
   return (
