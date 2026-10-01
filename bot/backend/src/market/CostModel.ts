@@ -107,17 +107,20 @@ export function estimateCosts(
   input: CostInput,
   profile: CostProfile,
 ): CostBreakdown {
+  const entryRate = input.entryQuoteToAccount ?? input.quoteToAccount;
+  const exitRate = input.exitQuoteToAccount ?? input.quoteToAccount;
+
   const entryNotional = notionalAccount({
     price: input.entryPrice,
     volume: input.volume,
     contractSize: input.contractSize,
-    quoteToAccount: input.quoteToAccount,
+    quoteToAccount: entryRate,
   });
   const exitNotional = notionalAccount({
     price: input.exitPrice,
     volume: input.volume,
     contractSize: input.contractSize,
-    quoteToAccount: input.quoteToAccount,
+    quoteToAccount: exitRate,
   });
 
   const fixedHalf =
@@ -134,15 +137,13 @@ export function estimateCosts(
   const exitCommission = fixedHalf + exitNotional * rate;
   const commission = entryCommission + exitCommission;
 
+  const spreadPerSide = nonNegative(
+    'spreadPricePerSide',
+    profile.spreadPricePerSide,
+  );
   const spread =
-    nonNegative('spreadPricePerSide', profile.spreadPricePerSide) *
-    input.volume *
-    input.contractSize *
-    entryRate +
-    nonNegative('spreadPricePerSide', profile.spreadPricePerSide) *
-    input.volume *
-    input.contractSize *
-    exitRate;
+    spreadPerSide * input.volume * input.contractSize * entryRate +
+    spreadPerSide * input.volume * input.contractSize * exitRate;
 
   const impact =
     (entryNotional + exitNotional) *
