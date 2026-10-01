@@ -201,6 +201,9 @@ export class DatabaseManager {
     symbol?: string; side?: string; volume?: number; signalId?: string; strategyId?: string;
     request?: Record<string, unknown>;
   }): boolean {
+    if (!['PENDING', 'UNKNOWN', 'EXECUTED', 'FAILED'].includes(entry.status)) {
+      return false;
+    }
     const now = Date.now();
     const result = this.db.prepare(`
       INSERT INTO execution_ledger
