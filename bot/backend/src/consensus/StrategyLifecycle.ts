@@ -9,6 +9,11 @@ import {
   StrategyLifecycleState,
   validateStrategyDefinition,
 } from './strategyDefinition';
+import {
+  DEFAULT_EVIDENCE_PROMOTION_POLICY,
+  EvidencePromotionPolicy,
+  evaluateEvidenceForPromotion,
+} from './EvidencePromotionPolicy';
 
 const TRANSITIONS: Record<StrategyLifecycleState, readonly StrategyLifecycleState[]> = {
   RESEARCH: ['BACKTEST', 'REJECTED', 'PAUSED'],
@@ -36,27 +41,18 @@ export function canTransition(from: StrategyLifecycleState, to: StrategyLifecycl
   return TRANSITIONS[from].includes(to);
 }
 
-export function hasPromotionEvidence(definition: StrategyDefinition): boolean {
-  const e = definition.evidence;
-  return Boolean(
-    e &&
-    e.passed &&
-    e.datasetVersion &&
-    e.costModelVersion &&
-    e.sampleSize > 0 &&
-    e.outOfSampleTrades > 0 &&
-    e.outOfSampleProfitFactor > 1 &&
-    e.walkForwardStability >= 0 &&
-    e.parameterSensitivity >= 0 &&
-    e.regimeCoverage >= 0
-  );
+export function hasPromotionEvidence(
+  definition: StrategyDefinition,
+  policy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
+): boolean {
+  return evaluateEvidenceForPromotion(definition.evidence, policy).passed;
 }
-
 export function promoteStrategy(
   definition: StrategyDefinition,
   to: StrategyLifecycleState,
   reason: string,
   at = Date.now(),
+  policy: EvidencePromotionPolicy = DEFAULT_EVIDENCE_PROMOTION_POLICY,
 ): { definition: StrategyDefinition; transition: LifecycleTransition } {
   const current = validateStrategyDefinition(definition);
 
@@ -68,7 +64,7 @@ export function promoteStrategy(
 
   if (
     ['PAPER', 'TESTNET', 'SHADOW', 'SMALL_CAPITAL', 'PRODUCTION'].includes(to) &&
-    !hasPromotionEvidence(current)
+    !hasPromotionEvidence(current, policy)
   ) {
     throw new Error(
       `[StrategyLifecycle] incomplete evidence for promotion to ${to}`,
