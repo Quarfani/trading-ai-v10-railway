@@ -222,6 +222,16 @@ export class TradingEngine extends EventEmitter {
       config.accountBalance,
     );
 
+    const evidencePolicy = this.config.evidencePromotion ?? {
+      minSampleSize: 1,
+      minOutOfSampleTrades: 1,
+      minOutOfSampleProfitFactor: 1,
+      minWalkForwardStability: 0,
+      minParameterSensitivity: 0,
+      minRegimeCoverage: 0,
+      maxAgeMs: 30 * 24 * 3_600_000,
+    };
+
     const consensusCfg: Partial<ConsensusConfig> = {
       minimum_total_weight:
         config.consensus?.minimumTotalWeight ?? 0.25,
@@ -256,6 +266,7 @@ export class TradingEngine extends EventEmitter {
     this.consensus = new ConsensusOrchestrator(
       db,
       consensusCfg,
+      evidencePolicy,
     );
 
     this.risk = new RiskManager(
