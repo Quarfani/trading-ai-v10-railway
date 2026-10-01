@@ -403,6 +403,13 @@ const MIGRATIONS: Migration[] = [
     `
   },
 
+  {
+    version: 14, name: 'paper_trade_currency_conversion',
+    up: `
+      ALTER TABLE trades ADD COLUMN entryQuoteToAccount REAL;
+      ALTER TABLE trades ADD COLUMN exitQuoteToAccount REAL;
+    `
+  },
 
 ];
 

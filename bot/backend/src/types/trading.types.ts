@@ -89,6 +89,8 @@ export interface Trade {
   source: string;
   exitReason?: string;
   commission?: number;
+  entryQuoteToAccount?: number;
+  exitQuoteToAccount?: number;
   notes?: string;
   account?: string;
 }

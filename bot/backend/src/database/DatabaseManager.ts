@@ -30,7 +30,7 @@ export class DatabaseManager {
 
   // ─── Trades ───────────────────────────────────────────────────────────────
 
-  insertTrade(t: Trade & { account?: string; timeframe?: string; commission?: number }): number {
+  insertTrade(t: Trade & { account?: string; timeframe?: string; commission?: number; entryQuoteToAccount?: number; exitQuoteToAccount?: number }): number {
     const r = this.db.prepare(`
       INSERT INTO trades
         (ticket, symbol, timeframe, side, volume, entry, sl, tp,
@@ -45,11 +45,11 @@ export class DatabaseManager {
     return Number(r.lastInsertRowid);
   }
 
-  updateTradeClose(id: number, profit: number, closedAt: number, exitReason?: string) {
+  updateTradeClose(id: number, profit: number, closedAt: number, exitReason?: string, exitQuoteToAccount?: number) {
     const tx = this.db.transaction(() => {
       const r = this.db.prepare(
-        `UPDATE trades SET status='closed', profit=?, closedAt=?, exitReason=? WHERE id=? AND status='open'`
-      ).run(profit, closedAt, exitReason ?? null, id);
+        `UPDATE trades SET status='closed', profit=?, closedAt=?, exitReason=?, exitQuoteToAccount=? WHERE id=? AND status='open'`
+      ).run(profit, closedAt, exitReason ?? null, exitQuoteToAccount ?? null, id);
       if (r.changes !== 1) return false;
 
       const day = new Date(closedAt).toISOString().slice(0, 10);

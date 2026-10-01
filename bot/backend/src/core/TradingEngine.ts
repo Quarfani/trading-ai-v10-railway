@@ -198,7 +198,7 @@ export class TradingEngine extends EventEmitter {
       this.scanner,
       config.accountCurrency ?? 'USD',
     );
-    this.exec = new ExecutionGateway(config, db);
+    this.exec = new ExecutionGateway(config, db, this.currencyRates);
 
     this.tracker = new PerformanceTracker(db, config);
     this.validator = new SymbolValidator(config);

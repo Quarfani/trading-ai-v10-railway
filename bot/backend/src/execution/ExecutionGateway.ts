@@ -5,7 +5,8 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { BinanceExecutor } from './BinanceExecutor';
 import { PaperTrader } from '../integration/PaperTrader';
 import { Logger } from '../utils/Logger';
-import { getBrokerMarketDefinition } from '../market/MarketCatalog';
+import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
+import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 
 export interface ExecutionResult {
   success: boolean;
@@ -20,7 +21,11 @@ export class ExecutionGateway {
   private paper: PaperTrader;
   private binance: BinanceExecutor;
 
-  constructor(private config: SystemConfig, private db: DatabaseManager) {
+  constructor(
+    private config: SystemConfig,
+    private db: DatabaseManager,
+    private currencyRates?: CurrencyConversionProvider,
+  ) {
     this.paper = new PaperTrader(config.accountBalance);
     this.binance = new BinanceExecutor(config);
   }
@@ -81,7 +86,10 @@ export class ExecutionGateway {
       let trade: Trade | null = null;
       if (this.config.mode === 'mt5') trade = await this.executeMT5(signal, volume, timeframe, operationKey);
       else if (this.config.mode === 'binance') trade = await this.executeBinance(signal, volume, clientOrderId);
-      else trade = this.paper.placeOrder(signal, volume, timeframe);
+      else {
+        const quoteToAccount = await this.resolvePaperQuoteToAccount(signal.symbol, timeframe);
+        trade = this.paper.placeOrder(signal, volume, timeframe, quoteToAccount);
+      }
       if (!trade) throw new Error('No trade returned');
 
       const id = this.db.insertTrade({ ...trade, timeframe, account: this.config.accountName ?? 'default' });
@@ -226,9 +234,10 @@ export class ExecutionGateway {
     if (op.existing) return { ok: op.existing.status === 'EXECUTED', profit: undefined };
     try {
       if (this.config.mode === 'paper') {
-        const result = this.settlePaperTrade(t, exitPrice, reason);
+        const quoteToAccount = await this.resolvePaperQuoteToAccount(t.symbol, t.timeframe ?? 'H1');
+        const result = this.settlePaperTrade(t, exitPrice, reason, quoteToAccount);
         if (!result.ok) throw new Error('Paper settlement rejected');
-        if (t.id) this.db.updateTradeClose(t.id, result.profit, Date.now(), reason);
+        if (t.id) this.db.updateTradeClose(t.id, result.profit, Date.now(), reason, quoteToAccount);
         this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result });
         return { ok: true, profit: result.profit };
       }
@@ -258,7 +267,8 @@ export class ExecutionGateway {
     try {
       if (this.config.mode === 'paper') {
         if (!t.ticket) throw new Error('Paper trade has no ticket');
-        const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason);
+        const quoteToAccount = await this.resolvePaperQuoteToAccount(t.symbol, t.timeframe ?? 'H1');
+        const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason, quoteToAccount);
         if (!result.ok) throw new Error('Paper partial close rejected');
         if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=COALESCE(realizedProfit,0)+?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(result.remainingVolume, result.profit, `\npartial_pnl=${result.profit.toFixed(8)}`, t.id);
         this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result });
@@ -305,9 +315,25 @@ export class ExecutionGateway {
     }
   }
 
-  settlePaperTrade(t: Trade, exitPrice: number, reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL') {
+  settlePaperTrade(t: Trade, exitPrice: number, reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL', quoteToAccount=1) {
     if (this.config.mode !== 'paper' || !t.ticket) return { ok: false, profit: 0 };
-    return this.paper.closeTrade(t.ticket, exitPrice, reason);
+    return this.paper.closeTrade(t.ticket, exitPrice, reason, Date.now(), quoteToAccount);
+  }
+
+  private async resolvePaperQuoteToAccount(symbol: string, timeframe: Timeframe): Promise<number> {
+    const market = getMarketDefinition(symbol, timeframe);
+    if (!market) throw new Error(`Paper market definition missing for ${symbol}/${timeframe}`);
+    const account = (this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+    const quote = market.quoteCurrency.trim().toUpperCase();
+    if (quote === account) return 1;
+    if (!this.currencyRates) {
+      throw new Error(`Paper FX conversion unavailable for ${quote}->${account}`);
+    }
+    const rate = await this.currencyRates.getRate(quote);
+    if (!(rate != null && rate > 0 && Number.isFinite(rate))) {
+      throw new Error(`Paper FX conversion unavailable for ${quote}->${account}`);
+    }
+    return rate;
   }
 
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
