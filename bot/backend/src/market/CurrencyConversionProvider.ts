@@ -44,6 +44,8 @@ export class CurrencyConversionProvider {
       return { ...cached.rates };
     }
 
+    // Preserve exact broker symbols (e.g. EURUSD.a) for scanner lookup.
+    // Canonical normalization is used only for synthetic fallback symbols.
     const candidates = [
       ...getBrokerConversionSymbols(quote, account),
       ...getBrokerConversionSymbols(account, quote),
@@ -52,7 +54,7 @@ export class CurrencyConversionProvider {
     ];
 
     for (const symbol of [...new Set(candidates)]) {
-      if (!symbol || symbol.length < 6) continue;
+      if (!symbol || normalizeSymbol(symbol).length < 6) continue;
 
       const candles = await this.scanner
         .fetchCandles(symbol, 'M1', 2)
