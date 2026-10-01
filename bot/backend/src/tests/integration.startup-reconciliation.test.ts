@@ -2,6 +2,7 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { StartupReconciler } from '../integration/StartupReconciler';
 import { TelegramBot } from '../notifications/TelegramBot';
 import { SystemConfig } from '../types/trading.types';
+import { BinanceExecutor } from '../execution/BinanceExecutor';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -80,7 +81,42 @@ async function main() {
   try { await new StartupReconciler(cfg, noTicket, telegram).run(); } catch { ticketBlocked = true; }
   assert(ticketBlocked, 'open paper trade without ticket must block startup');
 
-  console.log('Result: 6 passed, 0 failed');
+  const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
+  const originalPing = (BinanceExecutor.prototype as any).ping;
+  const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
+  (BinanceExecutor.prototype as any).ping = async () => true;
+
+  try {
+    const spotClean = await newDb();
+    (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = async () => [
+      { asset: 'USDT', free: 1000, locked: 0 },
+    ];
+    await new StartupReconciler(spotCfg, spotClean, new TelegramBot(spotCfg)).run();
+
+    const spotHidden = await newDb();
+    (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = async () => [
+      { asset: 'BTC', free: 0.1, locked: 0 },
+      { asset: 'USDT', free: 1000, locked: 0 },
+    ];
+    let hiddenBlocked = false;
+    try { await new StartupReconciler(spotCfg, spotHidden, new TelegramBot(spotCfg)).run(); } catch { hiddenBlocked = true; }
+    assert(hiddenBlocked, 'unattributed Binance Spot inventory must block startup');
+
+    const spotOpen = await newDb();
+    spotOpen.insertTrade({
+      ticket: 9, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.1,
+      entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    let openBlocked = false;
+    try { await new StartupReconciler(spotCfg, spotOpen, new TelegramBot(spotCfg)).run(); } catch { openBlocked = true; }
+    assert(openBlocked, 'open Binance Spot bot trades must block ambiguous restart reconciliation');
+
+  } finally {
+    (BinanceExecutor.prototype as any).ping = originalPing;
+    (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
+  }
+
+  console.log('Result: 9 passed, 0 failed');
 }
 
 main().catch(error => {
