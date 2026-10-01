@@ -10,7 +10,7 @@ Backend requires Node.js >=20. Python pipeline uses the dependencies in `pipelin
 
 ## Docker
 
-Backend/frontend Dockerfiles are designed around `npm ci`, which requires lockfiles. The current repository has no npm lockfiles, so Docker build is currently blocked and was not executed successfully in the audit environment.
+Backend and frontend both include committed npm lockfiles, and the backend Dockerfile uses `npm ci` when the lockfile is present. This keeps image dependency installation deterministic. CI already typechecks, builds, audits production dependencies, and runs the backend/Python/frontend validation suites.
 
 ## Cloud / Back4App
 
