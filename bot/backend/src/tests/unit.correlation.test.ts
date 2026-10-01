@@ -32,6 +32,13 @@ describe('CorrelationFilter', () => {
     expect(r.blocked).toBe(true); // static map blocks EURUSD+GBPUSD
   });
 
+  test('normalizes broker suffixes for static correlation protection', () => {
+    const f = new CorrelationFilter();
+    const brokerTrade = { ...trade('GBPUSD.a'), side: 'BUY' as const };
+    const r = f.isCorrelated('EURUSD.raw', 'BUY', [brokerTrade]);
+    expect(r.blocked).toBe(true);
+  });
+
   test('blocks opposite directions when price correlation is strongly negative', () => {
     const sellTrade = { ...trade('GBPUSD'), side: 'SELL' as const };
     const f = new CorrelationFilter();
