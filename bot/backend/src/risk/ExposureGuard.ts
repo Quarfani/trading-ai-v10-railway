@@ -66,7 +66,7 @@ function notional(
 
   const markPrice = requireMarkPrice
     ? Number(prices[position.symbol])
-    : Number(prices[position.symbol] ?? position.entry);
+    : Number(position.entry);
 
   if (!(markPrice > 0) || !Number.isFinite(markPrice)) {
     return {
