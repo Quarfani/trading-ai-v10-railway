@@ -63,7 +63,7 @@ export class CircuitBreaker {
         this.telegram.sendMessage('✅ <b>Cooldown ended</b> — استئناف التداول').catch(() => {});
         this.trippedUntil = 0;
         this.consecutiveLosses = 0;
-      this.trippedUntil = 0;
+        this.persistState();
       }
       return true;
     }
