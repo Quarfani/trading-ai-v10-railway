@@ -95,53 +95,43 @@ export function runMonteCarloStress(
     let balance = startBalance;
     let peak = startBalance;
     let maxDD = 0;
-    let worstPeak = startBalance;
-    let worstPeakAge = 0;
-    let worstRecovered = false;
-
-    for (const key of Object.keys(recoveryBuckets)) recoveryBuckets[key].total++;
+    let maxDDPeak = startBalance;
+    let maxDDTroughStep = 0;
+    let recovered = false;
+    let recoveryTrades: number | null = null;
 
     for (let step = 1; step <= futureTrades; step++) {
       const sample = samples[Math.floor(rng() * samples.length)];
       balance = Math.max(0, balance + sample);
 
-      if (balance > peak) {
-        peak = balance;
-      }
+      if (balance > peak) peak = balance;
 
       const dd = peak > 0 ? (peak - balance) / peak : 0;
       if (dd > maxDD) {
         maxDD = dd;
-        worstPeak = peak;
-        worstPeakAge = 0;
-        worstRecovered = false;
-      } else if (maxDD > 0 && !worstRecovered) {
-        worstPeakAge++;
+        maxDDPeak = peak;
+        maxDDTroughStep = step;
+        recovered = false;
+        recoveryTrades = null;
       }
 
-      if (!worstRecovered && maxDD > 0 && balance >= worstPeak) {
-        worstRecovered = true;
-        recoveredTimes.push(worstPeakAge);
-      }
-
-      for (const key of Object.keys(recoveryBuckets)) {
-        const n = Number(key);
-        if (step >= n) recoveryBuckets[key].total = recoveryBuckets[key].total;
+      if (!recovered && maxDD > 0 && balance >= maxDDPeak) {
+        recovered = true;
+        recoveryTrades = Math.max(0, step - maxDDTroughStep);
       }
     }
 
-    if (maxDD > 0 && !worstRecovered) unrecovered++;
+    if (maxDD > 0 && recoveryTrades == null) unrecovered++;
+    if (recoveryTrades != null) {
+      recoveredTimes.push(recoveryTrades);
+      for (const key of Object.keys(recoveryBuckets)) {
+        if (recoveryTrades <= Number(key)) recoveryBuckets[key].ok++;
+      }
+    }
+
     finalBalances.push(balance);
     drawdowns.push(maxDD);
-
-    for (const key of Object.keys(recoveryBuckets)) {
-      const n = Number(key);
-      if (worstRecovered && recoveredTimes[recoveredTimes.length - 1] <= n) {
-        recoveryBuckets[key].ok++;
-      }
-    }
   }
-
   const total = simulations;
   return {
     simulations,
