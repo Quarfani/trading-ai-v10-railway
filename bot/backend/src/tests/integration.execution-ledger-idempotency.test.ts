@@ -179,7 +179,35 @@ async function main() {
     clearBrokerContracts();
   }
 
-  console.log("Result: 16 passed, 0 failed");
+  const claimDb = new DatabaseManager(":memory:");
+  await claimDb.initialize();
+  const firstClaim = claimDb.createExecutionLedger({
+    executionId: "claim-1",
+    operationKey: "race-operation",
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+  });
+  const secondClaim = claimDb.createExecutionLedger({
+    executionId: "claim-2",
+    operationKey: "race-operation",
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+  });
+  assert(firstClaim === true, "first ledger claim must win");
+  assert(secondClaim === false, "second concurrent ledger claim must lose atomically");
+  assert(
+    claimDb.getExecutionByOperationKey("race-operation")?.executionId === "claim-1",
+    "losing ledger claim must reuse the existing operation owner",
+  );
+  claimDb.raw().close();
+
+  console.log("Result: 17 passed, 0 failed");
 }
 
 main().catch(error => {
