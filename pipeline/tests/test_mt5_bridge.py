@@ -125,6 +125,16 @@ def test_position_ticket_resolution_fails_closed_without_identity():
     assert deal == 456
 
 
+def test_partial_execution_retcode_is_accepted():
+    mt5 = types.SimpleNamespace(
+        TRADE_RETCODE_DONE=10009,
+        TRADE_RETCODE_DONE_PARTIAL=10010,
+    )
+    assert bridge.is_successful_trade_retcode(10009, mt5)
+    assert bridge.is_successful_trade_retcode(10010, mt5)
+    assert not bridge.is_successful_trade_retcode(10006, mt5)
+
+
 def test_account_position_mode_detects_hedging():
     mt5 = types.SimpleNamespace(
         ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2,
