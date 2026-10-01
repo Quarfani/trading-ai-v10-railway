@@ -87,7 +87,14 @@ export class Backtester {
 
   constructor(private config: SystemConfig) {}
 
-  async run(symbol: string, candles: Candle[], startBalance = 10_000, timeframe: Timeframe = 'H1', historicalCurrencyRates: HistoricalRateSeries = {}): Promise<BacktestResult> {
+  async run(
+    symbol: string,
+    candles: Candle[],
+    startBalance = 10_000,
+    timeframe: Timeframe = 'H1',
+    historicalCurrencyRates: HistoricalRateSeries = {},
+    evaluationStartTime?: number,
+  ): Promise<BacktestResult> {
     const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}.db`);
     const db    = new DatabaseManager(tmpDb);
     await db.initialize();
@@ -265,7 +272,11 @@ export class Backtester {
       }
 
       // ── Signal generation ─────────────────────────────────────────────
-      if (!openPos && i % 4 === 0) {
+      if (
+        !openPos &&
+        i % 4 === 0 &&
+        (evaluationStartTime == null || cur.time >= evaluationStartTime)
+      ) {
         try {
           const entryQuoteToAccount = conversionAt(cur.time);
           if (entryQuoteToAccount == null) {
