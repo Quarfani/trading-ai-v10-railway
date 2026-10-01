@@ -339,10 +339,58 @@ export class Reconciler {
       const pos  = await this.exec.getBinancePosition(t.symbol);
 
       if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
-        // Binance has disappeared from the live position set, but this reconciler
-        // does not yet fetch authoritative account-trade fills/PnL. Never infer a
-        // profitable/losing close from market candles; stop and require reconciliation.
-        throw new Error(`Binance position ${t.symbol} is absent but authoritative fill/PnL history is unavailable`);
+        const unresolvedClose = t.id != null
+          ? this.db.getLatestUnresolvedExecutionForTrade(
+              t.id,
+              ['CLOSE', 'CLOSE_AT_MARKET'],
+            )
+          : null;
+
+        if (!unresolvedClose) {
+          throw new Error(
+            `Binance position ${t.symbol} is absent without an attributable unresolved close; manual reconciliation is required`,
+          );
+        }
+
+        const recovered = await this.exec.reconcileBinanceFullClose(
+          String(unresolvedClose.operationKey),
+          t.symbol,
+        );
+        const executedQty = Number(recovered.executedQty);
+        if (!Number.isFinite(executedQty) || executedQty <= 0) {
+          throw new Error(
+            `Binance full-close recovery returned invalid executed quantity for ${t.symbol}`,
+          );
+        }
+
+        const resolved = this.db.resolveReconciledFullClose(
+          t.id!,
+          String(unresolvedClose.executionId),
+          Number(t.realizedProfit ?? 0) + Number(recovered.realizedProfit),
+          Date.now(),
+          'MANUAL',
+          {
+            broker: 'binance',
+            symbol: t.symbol,
+            orderId: recovered.orderId,
+            executedQty,
+            realizedProfit: recovered.realizedProfit,
+            runtimeReconciliation: true,
+          },
+          recovered.orderId,
+        );
+        if (!resolved) {
+          throw new Error(
+            `Could not atomically reconcile Binance full-close operation=${unresolvedClose.executionId}`,
+          );
+        }
+
+        t.status = 'closed';
+        t.profit = Number(t.realizedProfit ?? 0) + Number(recovered.realizedProfit);
+        t.realizedProfit = t.profit;
+        this.tracker.recordClose(t.profit);
+        this.onClose({ ...t, profit: t.profit });
+      } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
 
       } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
         const unresolvedPartial = t.id != null
