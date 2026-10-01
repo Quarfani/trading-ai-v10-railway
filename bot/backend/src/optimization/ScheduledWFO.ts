@@ -128,7 +128,7 @@ export class ScheduledWFO {
           // Persist only a fully valid WFO result that passed the live promotion
           // threshold. CAUTION/DO_NOT_TRADE results never mutate active params.
           this.db.setSetting(
-            `wfo_params_${symbol}`,
+            `wfo_params_${symbol}_H1`,
             JSON.stringify({ ...p, updatedAt: Date.now(), wfoValid: true }),
           );
           successCount++;
