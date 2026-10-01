@@ -138,6 +138,8 @@ export interface SystemConfig {
   cooldownMinutes: number;
   minRR?: number;
   maxSlippagePips?: number;
+  /** Optional asset-agnostic maximum fill slippage as a fraction. */
+  maxSlippagePct?: number;
   maxDrawdown?: number;
   maxLeverage?: number;
   maxExposure?: number;
