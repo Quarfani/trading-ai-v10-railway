@@ -88,6 +88,8 @@ export class RiskManager {
       config.consecutiveLossLimit,
       config.cooldownMinutes * 60_000,
       telegram,
+      db,
+      config.accountName ?? 'default',
     );
     this.lossGuard = new DailyLossGuard(config, db, telegram);
     this.profitTarget = new DailyProfitTarget(config, db, telegram);
