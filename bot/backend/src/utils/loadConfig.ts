@@ -299,6 +299,51 @@ export function loadConfig(): SystemConfig {
     env('ACCOUNT_CURRENCY', 'USD'),
   );
 
+  const evidencePromotion = {
+    minSampleSize: validateRange(
+      'EVIDENCE_MIN_SAMPLE_SIZE',
+      num('EVIDENCE_MIN_SAMPLE_SIZE', 1),
+      1,
+      1_000_000_000,
+    ),
+    minOutOfSampleTrades: validateRange(
+      'EVIDENCE_MIN_OOS_TRADES',
+      num('EVIDENCE_MIN_OOS_TRADES', 1),
+      1,
+      1_000_000_000,
+    ),
+    minOutOfSampleProfitFactor: validateRange(
+      'EVIDENCE_MIN_OOS_PF',
+      num('EVIDENCE_MIN_OOS_PF', 1),
+      0,
+      100,
+    ),
+    minWalkForwardStability: validateRange(
+      'EVIDENCE_MIN_WFO_STABILITY',
+      num('EVIDENCE_MIN_WFO_STABILITY', 0),
+      0,
+      1,
+    ),
+    minParameterSensitivity: validateRange(
+      'EVIDENCE_MIN_PARAMETER_SENSITIVITY',
+      num('EVIDENCE_MIN_PARAMETER_SENSITIVITY', 0),
+      0,
+      1,
+    ),
+    minRegimeCoverage: validateRange(
+      'EVIDENCE_MIN_REGIME_COVERAGE',
+      num('EVIDENCE_MIN_REGIME_COVERAGE', 0),
+      0,
+      1,
+    ),
+    maxAgeMs: validateRange(
+      'EVIDENCE_MAX_AGE_DAYS',
+      num('EVIDENCE_MAX_AGE_DAYS', 30),
+      1,
+      3650,
+    ) * 24 * 3_600_000,
+  };
+
   const mt5Server = env(
     'MT5_SERVER_NAME',
     env('MT5_SERVER'),
