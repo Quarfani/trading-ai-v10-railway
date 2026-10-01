@@ -345,7 +345,7 @@ export class Backtester {
           const exitQuoteToAccount = conversionAt(cur.time);
           if (exitQuoteToAccount == null) {
             valid = false;
-            blockedReason = \`Missing historical \${quoteCurrency}->\${accountCurrency} conversion at \${cur.time}\`;
+            blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
             break;
           }
 
@@ -424,7 +424,7 @@ export class Backtester {
         const markRate = conversionAt(cur.time);
         if (markRate == null) {
           valid = false;
-          blockedReason = \`Missing historical \${quoteCurrency}->\${accountCurrency} conversion at \${cur.time}\`;
+          blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
           break;
         }
 
@@ -459,7 +459,7 @@ export class Backtester {
       const exitQuoteToAccount = conversionAt(last.time);
       if (exitQuoteToAccount == null) {
         valid = false;
-        blockedReason = \`Missing historical \${quoteCurrency}->\${accountCurrency} conversion at \${last.time}\`;
+        blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${last.time}`;
       } else {
         settlePosition(last.close, 'TIMEOUT', last.time, exitQuoteToAccount);
         recordEquity(last.time, balance);
@@ -468,7 +468,7 @@ export class Backtester {
 
     if (simulationErrors > 0 && valid) {
       valid = false;
-      blockedReason = \`Backtest encountered \${simulationErrors} simulation error(s)\`;
+      blockedReason = `Backtest encountered ${simulationErrors} simulation error(s)`;
     }
 
     try { fs.unlinkSync(tmpDb); } catch { /* pass */ }
