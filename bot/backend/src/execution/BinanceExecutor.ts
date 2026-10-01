@@ -648,7 +648,17 @@ export class BinanceExecutor {
       }
 
       const after=await this.getPosition(symbol);
-      const remainingVolume=Math.max(0,Math.abs(after?.positionAmt??0));
+      if (!after) {
+        throw new Error(
+          `Binance partial close position verification unavailable for ${symbol}`,
+        );
+      }
+      const remainingVolume=Math.max(0,Math.abs(after.positionAmt));
+      if (!(remainingVolume > 0 && remainingVolume < available)) {
+        throw new Error(
+          `Binance partial close returned invalid remaining position for ${symbol}: ${remainingVolume}`,
+        );
+      }
 
       const realized=await this.getFuturesOrderNetPnl(symbol,orderId);
       if(realized==null) {
@@ -693,6 +703,7 @@ export class BinanceExecutor {
     realizedProfit: number | null;
     realizedProfitCurrency: string | null;
   }> {
+    let brokerOrderId: number | undefined;
     let realizedProfit: number | null = null;
     let realizedProfitCurrency: string | null = null;
 
@@ -727,12 +738,15 @@ export class BinanceExecutor {
 
       if (this.isFutures) {
         const pos = await this.getPosition(symbol);
-        if (!pos || pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+        if (!pos) {
+          throw new Error(
+            `Binance full close position verification unavailable for ${symbol}`,
+          );
+        }
+        if (pos.positionAmt === 0) {
+          throw new Error(
+            `Binance full close found no open position for ${symbol}`,
+          );
         }
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
@@ -754,6 +768,7 @@ export class BinanceExecutor {
         if (!(closeOrderId > 0) || !Number.isFinite(closeOrderId)) {
           throw new Error('Binance full close returned invalid orderId');
         }
+        brokerOrderId = closeOrderId;
 
         const realized = await this.getFuturesOrderNetPnl(
           symbol,
@@ -799,7 +814,7 @@ export class BinanceExecutor {
       return {
         ok:true,
         orderId: this.isFutures
-          ? closeOrderId
+          ? brokerOrderId
           : undefined,
         realizedProfit:this.isFutures ? realizedProfit : null,
         realizedProfitCurrency:this.isFutures
