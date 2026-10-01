@@ -137,6 +137,16 @@ export class Reconciler {
 
   private async reconcileMT5(t: Trade): Promise<void> {
     if (!t.ticket) return;
+
+    const unresolvedOpen = t.id != null
+      ? this.db.getLatestUnresolvedExecutionForTrade(t.id, ['OPEN'])
+      : null;
+    if (unresolvedOpen) {
+      throw new Error(
+        'MT5 trade ' + String(t.ticket) +
+        ' has an unresolved OPEN execution; automatic reconciliation is unsafe and manual reconciliation is required',
+      );
+    }
       const r = await axios.get(
         `${this.config.mt5.bridgeUrl}/positions`,
         {
