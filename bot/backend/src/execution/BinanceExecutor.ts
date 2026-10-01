@@ -54,14 +54,31 @@ export class BinanceExecutor {
   private async emergencyCloseAfterProtectionFailure(signal: Signal, quantity: number): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const spec = getSymbolSpec(signal.symbol);
-    await this.signedPost(this.isFutures ? '/fapi/v1/order' : '/api/v3/order', {
-      symbol: signal.symbol,
-      side: closeSide,
-      type: 'MARKET',
-      quantity: this.formatQty(quantity, spec.volumeStep),
-      ...(this.isFutures ? { reduceOnly: 'true' } : {}),
-    });
-    this.logger.error(`[Binance] Emergency close submitted after protection failure: ${signal.symbol}`);
+    const result = await this.signedPost(
+      this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
+      {
+        symbol: signal.symbol,
+        side: closeSide,
+        type: 'MARKET',
+        quantity: this.formatQty(quantity, spec.volumeStep),
+        ...(this.isFutures ? { reduceOnly: 'true' } : {}),
+      },
+    );
+
+    const status = String(result?.status ?? '').toUpperCase();
+    const executed = Number(result?.executedQty ?? result?.origQty ?? 0);
+    if (status && status !== 'FILLED') {
+      throw new Error(`Emergency close order not fully filled: status=${status}`);
+    }
+    if (!(executed > 0) || executed + Math.max(spec.volumeStep, 1e-12) < quantity) {
+      throw new Error(
+        `Emergency close executed insufficient quantity: requested=${quantity} executed=${executed}`,
+      );
+    }
+
+    this.logger.error(
+      `[Binance] Emergency close filled after protection failure: ${signal.symbol} qty=${executed}`,
+    );
   }
 
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
@@ -114,7 +131,11 @@ export class BinanceExecutor {
       );
 
       const fillPrice = Number(entry.avgPrice ?? entry.fills?.[0]?.price ?? signal.price);
-      const ticket    = Number(entry.orderId);
+      const executedQty = Number(entry.executedQty ?? entry.origQty ?? quantity);
+      const ticket = Number(entry.orderId);
+      if (!(executedQty > 0) || !Number.isFinite(executedQty)) {
+        throw new Error('Binance order returned invalid executed quantity');
+      }
 
       this.logger.info(
         `[Binance] Entry: ${signal.side} ${quantity} ${signal.symbol} ` +
@@ -126,13 +147,13 @@ export class BinanceExecutor {
       //    immediate market close so we never knowingly continue unprotected.
       try {
         if (this.isFutures) {
-          await this.placeSLTP(signal, quantity, ticket, spec);
+          await this.placeSLTP(signal, executedQty, ticket, spec);
         } else {
-          await this.placeOCO(signal, quantity, ticket, spec);
+          await this.placeOCO(signal, executedQty, ticket, spec);
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
-        const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, quantity).catch(e => e);
+        const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQty).catch(e => e);
         if (emergencyError) throw new Error(`Protection failed and emergency close failed for ${signal.symbol}`);
         if (this.isFutures) {
           const remaining = await this.getPosition(signal.symbol);
@@ -146,7 +167,7 @@ export class BinanceExecutor {
         ticket,
         symbol:   signal.symbol,
         side:     signal.side,
-        volume:   quantity,
+        volume:   executedQty,
         entry:    fillPrice,
         sl:       signal.sl,
         tp:       signal.tp,
@@ -161,12 +182,16 @@ export class BinanceExecutor {
         if (recovered && !['CANCELED','REJECTED','EXPIRED'].includes(String(recovered.status ?? '').toUpperCase())) {
           const recoveredTicket = Number(recovered.orderId);
           const fillPriceRecovered = Number(recovered.avgPrice ?? recovered.fills?.[0]?.price ?? signal.price);
+          const executedQtyRecovered = Number(recovered.executedQty ?? recovered.origQty ?? quantity);
+          if (!(executedQtyRecovered > 0) || !Number.isFinite(executedQtyRecovered)) {
+            throw new Error('Recovered Binance order returned invalid executed quantity');
+          }
           this.logger.warn(`[Binance] Recovered ambiguous order ${clientOrderId} as ticket=${recoveredTicket}`);
           try {
-            if (this.isFutures) await this.placeSLTP(signal, quantity, recoveredTicket, getSymbolSpec(signal.symbol));
-            else await this.placeOCO(signal, quantity, recoveredTicket, getSymbolSpec(signal.symbol));
+            if (this.isFutures) await this.placeSLTP(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
+            else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
           } catch (protectionError: any) {
-            const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, quantity).catch(e => e);
+            const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
             if (this.isFutures) {
               const remaining = await this.getPosition(signal.symbol);
@@ -174,7 +199,7 @@ export class BinanceExecutor {
             }
             return null;
           }
-          return {ticket: recoveredTicket, symbol: signal.symbol, side: signal.side, volume: quantity, entry: fillPriceRecovered, sl: signal.sl, tp: signal.tp, status:'open', openedAt: Date.now(), source: signal.source};
+          return {ticket: recoveredTicket, symbol: signal.symbol, side: signal.side, volume: executedQtyRecovered, entry: fillPriceRecovered, sl: signal.sl, tp: signal.tp, status:'open', openedAt: Date.now(), source: signal.source};
         }
       }
       this.logger.error(`placeMarketOrder failed: ${e.response?.data ?? e.message}`);
