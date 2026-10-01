@@ -170,7 +170,7 @@ def test_aggregate_volume_limit_allows_other_direction():
     mt5 = types.SimpleNamespace(POSITION_TYPE_BUY=0)
     positions = [
         types.SimpleNamespace(type=0, volume=1.5),
-        types.SimpleNamespace(type=1, volume=3.0),
+        types.SimpleNamespace(type=1, volume=0.5),
     ]
     mt5.positions_get = lambda symbol: positions
     ok, _ = bridge.validate_aggregate_volume(
