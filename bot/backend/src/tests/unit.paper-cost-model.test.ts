@@ -34,10 +34,34 @@ try {
     else process.env[key] = previousRate;
     assert(r2.ok, "baseline paper trade should close");
     assert(result.profit < r2.profit, "holding cost must reduce paper profit");
+
+    const eurAccountTrader = new PaperTrader(10_000, "EUR");
+    let restoreBlocked = false;
+    try {
+      eurAccountTrader.restoreState([{
+        ticket: 500,
+        symbol: "EURUSD",
+        side: "BUY",
+        volume: 0.01,
+        entry: 1.1,
+        sl: 1.09,
+        tp: 1.12,
+        status: "open",
+        openedAt: Date.now(),
+        source: "RESTORE_TEST",
+        timeframe: "H1",
+      } as any], []);
+    } catch {
+      restoreBlocked = true;
+    }
+    assert(
+      restoreBlocked,
+      "restoring a non-USD paper position without entry FX conversion must fail closed",
+    );
   } finally {
     Math.random = originalRandom;
   }
-  console.log("Result: 3 passed, 0 failed");
+  console.log("Result: 4 passed, 0 failed");
 } finally {
   if (previous === undefined) delete process.env[key];
   else process.env[key] = previous;
