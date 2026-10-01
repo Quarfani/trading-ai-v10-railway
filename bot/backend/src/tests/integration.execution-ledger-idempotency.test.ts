@@ -115,7 +115,71 @@ async function main() {
     clearBrokerContracts();
   }
 
-  console.log("Result: 13 passed, 0 failed");
+  const closeDb = new DatabaseManager(":memory:");
+  await closeDb.initialize();
+  registerBrokerContract({
+    symbol: "EURUSD.a",
+    baseAsset: "EUR",
+    quoteCurrency: "USD",
+    assetClass: "FOREX",
+    contractType: "CFD",
+    venue: "MT5",
+    contractSize: 100000,
+    priceIncrement: 0.00001,
+    minVolume: 0.01,
+    maxVolume: 100,
+    volumeStep: 0.01,
+    marginModel: "BROKER_DEFINED",
+    source: "close-ledger-test",
+    observedAt: Date.now(),
+    verified: true,
+  });
+  const closeGateway = new ExecutionGateway(
+    { ...baseConfig("mt5"), symbols: ["EURUSD.a"] },
+    closeDb,
+  );
+  const closeTrade = {
+    id: 900,
+    ticket: 88,
+    symbol: "EURUSD.a",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 0.01,
+    entry: 1.1,
+    sl: 1.09,
+    tp: 1.12,
+    status: "open",
+    openedAt: 1_800_000_000_004,
+    source: "CLOSE_LEDGER_TEST",
+  } as any;
+
+  const originalClosePost = (axios as any).post;
+  (axios as any).post = async () => ({ data: { ok: true, closed: true } });
+  try {
+    const closed = await closeGateway.closeAtMarket(
+      closeTrade,
+      1.11,
+      "MANUAL",
+    );
+    assert(closed.ok, "MT5 closeAtMarket fixture must succeed");
+    const closeLedgers = closeDb.raw()
+      .prepare("SELECT action, status FROM execution_ledger WHERE symbol=?")
+      .all("EURUSD.a") as any[];
+    assert(
+      closeLedgers.length === 1,
+      "closeAtMarket must create exactly one execution-ledger operation",
+    );
+    assert(
+      closeLedgers[0].action === "CLOSE_AT_MARKET" &&
+      closeLedgers[0].status === "EXECUTED",
+      "closeAtMarket ledger must be executed",
+    );
+  } finally {
+    (axios as any).post = originalClosePost;
+    clearBrokerContracts();
+  }
+
+  console.log("Result: 16 passed, 0 failed");
 }
 
 main().catch(error => {
