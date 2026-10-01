@@ -6,9 +6,9 @@
 import 'dotenv/config';
 import * as path from 'path';
 import { SystemConfig, Mode, DataSource, Timeframe } from '../types/trading.types';
+import { TIMEFRAMES, isTimeframe } from '../market/market.types';
 
 const VALID_MODES:      Mode[]      = ['mt5', 'binance', 'paper'];
-const VALID_TIMEFRAMES: Timeframe[] = ['M1','M5','M15','M30','H1','H4','D1'];
 const VALID_DATA_SOURCES: DataSource[] = ['auto','mt5','binance'];
 const VALID_DEPLOYMENT_PROFILES = ['local', 'railway-paper', 'cloud-paper', 'cloud-testnet', 'production'] as const;
 
@@ -41,14 +41,16 @@ export function loadConfig(): SystemConfig {
     throw new Error(`[Config] MODE must be one of: ${VALID_MODES.join(', ')}. Got: "${mode}"`);
   }
 
-  const tfs = env('TIMEFRAMES', 'M5,M15,H1')
-    .split(',').map(s => s.trim()) as Timeframe[];
+  const rawTfs = env('TIMEFRAMES', 'M5,M15,H1')
+    .split(',').map(s => s.trim()).filter(Boolean);
 
-  for (const tf of tfs) {
-    if (!VALID_TIMEFRAMES.includes(tf)) {
-      throw new Error(`[Config] Invalid timeframe "${tf}". Valid: ${VALID_TIMEFRAMES.join(', ')}`);
+  for (const tf of rawTfs) {
+    if (!isTimeframe(tf)) {
+      throw new Error(`[Config] Invalid timeframe "${tf}". Valid: ${TIMEFRAMES.join(', ')}`);
     }
   }
+
+  const tfs = rawTfs as Timeframe[];
 
   const symbols = env('SYMBOLS', deploymentProfile === 'railway-paper' ? 'BTCUSDT,ETHUSDT' : 'EURUSD,GBPUSD')
     .split(',').map(s => s.trim()).filter(Boolean);

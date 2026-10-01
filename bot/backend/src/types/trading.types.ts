@@ -11,7 +11,8 @@
 export type Side         = 'BUY' | 'SELL';
 export type Mode         = 'mt5' | 'binance' | 'paper';
 export type DataSource   = 'auto' | 'mt5' | 'binance';
-export type Timeframe    = 'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1';
+import { Timeframe } from '../market/market.types';
+export type { Timeframe } from '../market/market.types';
 export type DecisionType = 'BUY' | 'SELL' | 'NO_TRADE';
 
 // ─── Market data ──────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ export interface Signal {
   timestamp:  number;
   regime?:    string;
   exitPrice?: number;
-  timeframe?: string;
+  timeframe?: Timeframe;
   quality?:   number;
 }
 
@@ -85,7 +86,7 @@ export interface Trade {
   id?:         number;
   ticket?:     number;
   symbol:      string;
-  timeframe?:  string;   // [FIX] was missing from interface
+  timeframe?:  Timeframe;   // canonical timeframe contract
   side:        Side;
   volume:      number;
   entry:       number;

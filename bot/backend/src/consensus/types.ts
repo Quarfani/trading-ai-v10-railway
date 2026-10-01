@@ -6,7 +6,7 @@
  * ══════════════════════════════════════════════════════════════════════════
  */
 
-import { Candle, Signal, Side } from '../types/trading.types';
+import { Candle, Signal, Side, Timeframe } from '../types/trading.types';
 
 // ─── Strategy signal (output of each strategy) ────────────────────────────
 
@@ -41,6 +41,7 @@ export interface IStrategy {
 
 export interface StrategyContext {
   symbol:    string;
+  timeframe: Timeframe;
   candles:   Candle[];
   h4Candles: Candle[];
   regime:    string;

@@ -11,7 +11,7 @@ import { StrategyConsensusEngine }  from './StrategyConsensusEngine';
 import { createAllAdapters }        from './StrategyAdapters';
 import { ConsensusConfig, ConsensusResult, StrategyContext } from './types';
 import { ConsensusLogger } from './ConsensusLogger';
-import { Candle }                   from '../types/trading.types';
+import { Candle, Timeframe }        from '../types/trading.types';
 
 export interface LogEntry extends ConsensusResult {
   symbol: string;
@@ -45,10 +45,12 @@ export class ConsensusOrchestrator {
     candles:   Candle[],
     h4Candles: Candle[],
     regime:    string,
+    timeframe: Timeframe = 'H1',
   ): ConsensusResult {
     // [FIX] Build full StrategyContext with all required fields
     const ctx: StrategyContext = {
       symbol,
+      timeframe,
       candles,
       h4Candles,
       regime:    regime as any,

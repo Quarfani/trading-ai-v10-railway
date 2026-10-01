@@ -6,10 +6,11 @@
  */
 import axios      from 'axios';
 import { Candle, DataSource, SystemConfig, Timeframe } from '../types/trading.types';
+import { TIMEFRAME_MS } from '../market/market.types';
 import { Logger } from '../utils/Logger';
 
 // Cache TTL per timeframe (ms) — بيانات M1 تتغير كل دقيقة، H4 كل 4 ساعات
-const CACHE_TTL: Record<string, number> = {
+const CACHE_TTL: Record<Timeframe, number> = {
   M1: 55_000, M5: 270_000, M15: 800_000,
   M30: 1_700_000, H1: 55_000, H4: 14_000_000, D1: 82_000_000,
 };
@@ -37,7 +38,7 @@ export class MarketScanner {
     }
 
     const key    = `${symbol}_${tf}`;
-    const ttl    = CACHE_TTL[tf] ?? 800_000;
+    const ttl    = CACHE_TTL[tf] ?? TIMEFRAME_MS.M15;
     const cached = this.cache.get(key);
     if(cached && now-cached.fetchedAt<ttl && cached.candles.length>=count) return cached.candles.slice(-count);
 
@@ -92,7 +93,7 @@ export class MarketScanner {
   }
 
   private async fromBinance(symbol:string,tf:Timeframe,count:number):Promise<Candle[]>{
-    const MAP:Record<Timeframe,string>={M1:'1m',M5:'5m',M15:'15m',M30:'30m',H1:'1h',H4:'4h',D1:'1d'};
+    const MAP: Record<Timeframe, string> = { M1:'1m', M5:'5m', M15:'15m', M30:'30m', H1:'1h', H4:'4h', D1:'1d' };
     const futures=this.config.binance.futures;
     const base=futures?(this.config.binance.env==='testnet'?'https://testnet.binancefuture.com/fapi/v1/klines':'https://fapi.binance.com/fapi/v1/klines'):(this.config.binance.env==='testnet'?'https://testnet.binance.vision/api/v3/klines':'https://api.binance.com/api/v3/klines');
     const target=Math.max(1,Math.min(count,10000)); let endTime:number|undefined; const all:Candle[]=[];

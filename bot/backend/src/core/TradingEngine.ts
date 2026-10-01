@@ -794,6 +794,7 @@ export class TradingEngine extends EventEmitter {
         candles,
         h4Candles,
         regime.regime,
+        tf,
       );
 
     this.consensusDecisionCount += 1;
