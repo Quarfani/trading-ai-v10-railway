@@ -564,11 +564,11 @@ export class BinanceExecutor {
       const status = String(oco?.listStatusType ?? '').toUpperCase();
       const listStatus = String(oco?.listOrderStatus ?? '').toUpperCase();
       if (
-        !['EXEC_STARTED', 'EXECUTING', 'ALL_DONE'].includes(status) &&
-        !['EXECUTING', 'ALL_DONE'].includes(listStatus)
+        !['EXEC_STARTED', 'EXECUTING'].includes(status) &&
+        !['EXECUTING'].includes(listStatus)
       ) {
         throw new Error(
-          `Binance Spot OCO list is not in a known lifecycle state: status=${status} listStatus=${listStatus}`,
+          `Binance Spot OCO list is not an active protection state: status=${status} listStatus=${listStatus}`,
         );
       }
 
@@ -598,8 +598,29 @@ export class BinanceExecutor {
           (String(r.clientOrderId ?? '') === belowClientOrderId ||
             String(r.type ?? '').toUpperCase().includes('STOP')),
       );
+
+      if (
+        String(tpReport?.side ?? '').toUpperCase() !== closeSide ||
+        String(slReport?.side ?? '').toUpperCase() !== closeSide
+      ) {
+        throw new Error('Binance Spot OCO protection legs have an unexpected side');
+      }
       if (!tpReport || !slReport) {
         throw new Error('Binance Spot OCO legs could not be identified authoritatively');
+      }
+
+      const expectedQty = Number(quantity);
+      const tpQty = Number(tpReport.origQty ?? tpReport.quantity);
+      const slQty = Number(slReport.origQty ?? slReport.quantity);
+      if (
+        !(expectedQty > 0) ||
+        !Number.isFinite(expectedQty) ||
+        !Number.isFinite(tpQty) ||
+        !Number.isFinite(slQty) ||
+        Math.abs(tpQty - expectedQty) > Math.max(spec.volumeStep, expectedQty * 0.0001) ||
+        Math.abs(slQty - expectedQty) > Math.max(spec.volumeStep, expectedQty * 0.0001)
+      ) {
+        throw new Error('Binance Spot OCO leg quantities do not match the executed entry quantity');
       }
 
       const tpId = Number(tpReport.orderId);
