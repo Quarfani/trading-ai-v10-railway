@@ -44,8 +44,12 @@ export class AdaptiveTuner {
     try {
       const row = this.db.raw().prepare(`
         SELECT SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as w, COUNT(*) as n
-        FROM trades WHERE status='closed' AND symbol=? AND source LIKE ? AND openedAt > ?
-      `).get(symbol, `%${source}%`, Date.now() - 30 * 24 * 3_600_000) as
+        FROM trades
+        WHERE status='closed'
+          AND symbol=?
+          AND INSTR('+' || source || '+', '+' || ? || '+') > 0
+          AND closedAt > ?
+      `).get(symbol, source, Date.now() - 30 * 24 * 3_600_000) as
         { w: number; n: number } | undefined;
       if (!row || row.n < 10) return 1.0;
       return Math.max(0.5, Math.min(1.5, 0.5 + row.w / row.n));
@@ -64,7 +68,7 @@ export class AdaptiveTuner {
           SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins,
           AVG(profit) as avg_profit,
           MAX(CASE WHEN profit < 0 THEN ABS(profit) ELSE 0 END) as max_loss
-        FROM trades WHERE status='closed' AND openedAt > ?
+        FROM trades WHERE status='closed' AND closedAt > ?
         GROUP BY source HAVING total >= 8
       `).all(cutoff) as Array<{
         source: string; total: number; wins: number;
@@ -75,16 +79,16 @@ export class AdaptiveTuner {
 
       // Build per-engine stats (source may be TREND+RSI — split it)
       const engineStats: Record<string, {
-        trades: number; wins: number; profits: number[]; maxLoss: number;
+        trades: number; wins: number; totalProfit: number; maxLoss: number;
       }> = {};
 
       for (const row of rows) {
         const names = row.source.split('+').map(s => s.trim());
         for (const name of names) {
-          if (!engineStats[name]) engineStats[name] = { trades: 0, wins: 0, profits: [], maxLoss: 0 };
+          if (!engineStats[name]) engineStats[name] = { trades: 0, wins: 0, totalProfit: 0, maxLoss: 0 };
           engineStats[name].trades  += row.total;
           engineStats[name].wins    += row.wins;
-          engineStats[name].profits.push(row.avg_profit);
+          engineStats[name].totalProfit += Number(row.avg_profit) * Number(row.total);
           engineStats[name].maxLoss  = Math.max(engineStats[name].maxLoss, row.max_loss);
         }
       }
@@ -99,7 +103,7 @@ export class AdaptiveTuner {
         if (!entry) continue;
 
         const wr           = stats.trades > 0 ? stats.wins / stats.trades : 0.5;
-        const avgProfit    = stats.profits.reduce((s, v) => s + v, 0) / stats.profits.length;
+        const avgProfit    = stats.trades > 0 ? stats.totalProfit / stats.trades : 0;
         const sharpe       = this.estimateSharpe(name, cutoff);
         const rolling_wr   = this.rollingWinRate(name, 30, cutoff);
 
@@ -125,9 +129,12 @@ export class AdaptiveTuner {
     try {
       const profits = this.db.raw().prepare(`
         SELECT profit FROM trades
-        WHERE status='closed' AND source LIKE ? AND openedAt > ? AND profit IS NOT NULL
+        WHERE status='closed'
+          AND INSTR('+' || source || '+', '+' || ? || '+') > 0
+          AND closedAt > ?
+          AND profit IS NOT NULL
         ORDER BY closedAt
-      `).all(`%${name}%`, cutoff).map((r: any) => r.profit as number);
+      `).all(name, cutoff).map((r: any) => r.profit as number);
 
       if (profits.length < 10) return 0;
       const mean = profits.reduce((s, v) => s + v, 0) / profits.length;
@@ -142,9 +149,11 @@ export class AdaptiveTuner {
     try {
       const rows = this.db.raw().prepare(`
         SELECT profit FROM trades
-        WHERE status='closed' AND source LIKE ? AND openedAt > ?
+        WHERE status='closed'
+          AND INSTR('+' || source || '+', '+' || ? || '+') > 0
+          AND closedAt > ?
         ORDER BY closedAt DESC LIMIT ?
-      `).all(`%${name}%`, cutoff, lastN) as Array<{ profit: number }>;
+      `).all(name, cutoff, lastN) as Array<{ profit: number }>;
       if (rows.length < 5) return 0.5;
       return rows.filter(r => r.profit > 0).length / rows.length;
     } catch { return 0.5; }
