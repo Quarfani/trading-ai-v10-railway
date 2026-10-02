@@ -430,6 +430,18 @@ const MIGRATIONS: Migration[] = [
         ON model_decisions(predictionId);
     `
   },
+  {
+    version: 17, name: 'ml_prediction_outcomes',
+    up: `
+      ALTER TABLE model_decisions ADD COLUMN predictedLabel INTEGER;
+      ALTER TABLE model_decisions ADD COLUMN outcomeLabel INTEGER;
+      ALTER TABLE model_decisions ADD COLUMN outcomeProfit REAL;
+      ALTER TABLE model_decisions ADD COLUMN outcomeRecordedAt INTEGER;
+      ALTER TABLE model_decisions ADD COLUMN outcomeSentAt INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_model_decisions_outbox
+        ON model_decisions(outcomeRecordedAt, outcomeSentAt, predictionId);
+    `
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
