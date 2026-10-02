@@ -4,7 +4,7 @@
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
 Current head: verify refs/heads/main before resuming
-Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410
+Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410 (latest known green; post-checkpoint changes are unverified until CI is available)
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -50,9 +50,10 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, corrupt persisted execution results, and conflicting partial position/history state.
 
 ## NEXT TASK
-After the current main validation run is green:
-A. Validate the atomic execution-ledger claim/reconciliation hardening through CI.
-B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E evidence, without automatically resolving UNKNOWN states.
+After Actions capacity/log availability is restored:
+A. Run the focused backend integration test covering migration v15 and indexed execution-ledger trade identity.
+B. Verify CI on the current main head; if green, continue paper execution/reconciliation soak evidence.
+C. Preserve UNKNOWN execution states and never auto-retry ambiguous broker operations.
 
 ## STOP/RESUME
 1. Read this file and verify current main SHA.
@@ -65,3 +66,12 @@ B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E
 - Latest successful main CI: #549 (c1eb40fc08c3624691b06f3533fe43ff7e924410)
 - Main CI #550 and #551 completed as failures. Both runs finished within seconds and their job step summaries/log blobs are currently unavailable through the GitHub integration, so the exact failure cause is not verified.
 - Do not burn Actions minutes on blind reruns. First establish whether this is an Actions/billing/runner-level block; GitHub Free includes 2,000 Actions minutes/month and usage can be blocked after quota exhaustion when no valid payment method/budget is available.
+
+## LAST DEVELOPMENT SESSION (2026-10-02)
+- Added migration v15: execution_ledger.tradeId plus index (tradeId,status,updatedAt).
+- createExecutionLedger now extracts request.tradeId into the indexed column while retaining requestJson compatibility.
+- Reconciliation lookup uses the indexed tradeId first and falls back only for pre-v15 rows.
+- Added integration assertion that tradeId is persisted.
+- Fixed a migration syntax typo before stopping.
+- Post-checkpoint commits: d242e4e74f1eb31f905132c4b40c346360dce477 plus d7ac2c4049ddb340f1b74376d4132abbb99e4dad and f34d97dd3146e32c3d0b40b6429f6044a8203a8f.
+- CI has NOT been run on these changes; do not claim them verified until a green run exists.
