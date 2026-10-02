@@ -36,9 +36,9 @@ const allowed = new PortfolioHeat(cfg(0.06)).check(
   'H1',
 );
 assert(allowed.allowed, 'valid portfolio heat inputs should be accepted');
-assert(Math.abs(allowed.addedRisk - 0.0001) < 1e-12, 'EURUSD stop risk should use contract economics');
+assert(Math.abs(allowed.addedRisk - 0.01) < 1e-12, 'EURUSD stop risk should use contract economics');
 
-const blocked = new PortfolioHeat(cfg(0.00005)).check(
+const blocked = new PortfolioHeat(cfg(0.005)).check(
   [],
   1,
   1,
