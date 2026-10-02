@@ -59,6 +59,26 @@ describe('DrawdownScaler', () => {
     expect(otherAccount.getStatus(11000).peakEquity).toBe(11000);
   });
 
+  test('invalid current equity fails closed', () => {
+    const s = new DrawdownScaler(mockDb, 10000);
+    const nan = s.getStatus(Number.NaN);
+    expect(nan.level).toBe('STOP');
+    expect(nan.volumeScale).toBe(0);
+
+    const zero = s.getStatus(0);
+    expect(zero.level).toBe('STOP');
+    expect(zero.volumeScale).toBe(0);
+  });
+
+  test('invalid persisted peak is ignored or fails closed without producing NaN state', () => {
+    state.clear();
+    state.set('peak_equity:default', 'not-a-number');
+    const s = new DrawdownScaler(mockDb, 10000);
+    const r = s.getStatus(10000);
+    expect(Number.isFinite(r.peakEquity)).toBe(true);
+    expect(r.level).toBe('NORMAL');
+  });
+
   test('drawdownPct is 0 when at peak', () => {
     const s = new DrawdownScaler(mockDb, 10000);
     const r = s.getStatus(10000);
