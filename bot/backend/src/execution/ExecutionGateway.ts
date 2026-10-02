@@ -397,6 +397,11 @@ export class ExecutionGateway {
     return converted;
   }
 
+  private getOpenOperationKeyForTrade(tradeId: number): string | undefined {
+    const row = this.db.getLatestExecutedOpenOperationForTrade(tradeId);
+    return row?.operationKey ? String(row.operationKey) : undefined;
+  }
+
   private async closeBrokerTrade(
     t: Trade,
     operationKey: string,
@@ -435,6 +440,7 @@ export class ExecutionGateway {
         t.volume,
         t.side,
         this.makeClientOrderId(operationKey),
+        t.id ? this.getOpenOperationKeyForTrade(t.id) : undefined,
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
