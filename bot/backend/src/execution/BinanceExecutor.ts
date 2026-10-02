@@ -353,8 +353,23 @@ export class BinanceExecutor {
           }
           this.logger.warn(`[Binance] Recovered ambiguous order ${clientOrderId} as ticket=${recoveredTicket}`);
           try {
-            if (this.isFutures) await this.placeSLTP(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
-            else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
+            if (this.isFutures) {
+              await this.placeSLTP(
+                signal,
+                executedQtyRecovered,
+                recoveredTicket,
+                getSymbolSpec(signal.symbol),
+                protectionOperationKey,
+              );
+            } else {
+              await this.placeOCO(
+                signal,
+                executedQtyRecovered,
+                recoveredTicket,
+                getSymbolSpec(signal.symbol),
+                protectionOperationKey,
+              );
+            }
           } catch (protectionError: any) {
             const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
