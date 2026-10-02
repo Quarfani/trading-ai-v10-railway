@@ -121,7 +121,12 @@ export class ExecutionGateway {
     try {
       let trade: Trade | null = null;
       if (this.config.mode === 'mt5') trade = await this.executeMT5(signal, volume, timeframe, operationKey);
-      else if (this.config.mode === 'binance') trade = await this.executeBinance(signal, volume, clientOrderId);
+      else if (this.config.mode === 'binance') trade = await this.executeBinance(
+        signal,
+        volume,
+        clientOrderId,
+        operationKey,
+      );
       else {
         const quoteToAccount = await this.resolvePaperQuoteToAccount(signal.symbol, timeframe);
         trade = this.paper.placeOrder(signal, volume, timeframe, quoteToAccount);
@@ -184,8 +189,18 @@ export class ExecutionGateway {
     };
   }
 
-  private async executeBinance(signal: Signal, volume: number, clientOrderId?: string): Promise<Trade> {
-    const t = await this.binance.placeMarketOrder(signal, volume, clientOrderId);
+  private async executeBinance(
+    signal: Signal,
+    volume: number,
+    clientOrderId?: string,
+    protectionOperationKey?: string,
+  ): Promise<Trade> {
+    const t = await this.binance.placeMarketOrder(
+      signal,
+      volume,
+      clientOrderId,
+      protectionOperationKey,
+    );
     if (!t) throw new Error('Binance order failed or protection did not reach a verified safe state');
     return t;
   }
