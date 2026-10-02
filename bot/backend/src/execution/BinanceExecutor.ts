@@ -107,6 +107,104 @@ export class BinanceExecutor {
     );
   }
 
+  private async getSpotOrderNetPnl(
+    symbol: string,
+    orderId: number,
+    entryPrice: number,
+    entrySide: 'BUY' | 'SELL',
+    expectedExecutedQty: number,
+  ): Promise<{ profit: number; currency: string; avgPrice: number | null } | null> {
+    if (
+      this.isFutures ||
+      !(orderId > 0) ||
+      !Number.isFinite(orderId) ||
+      !(entryPrice > 0) ||
+      !Number.isFinite(entryPrice) ||
+      !(expectedExecutedQty > 0) ||
+      !Number.isFinite(expectedExecutedQty)
+    ) {
+      return null;
+    }
+
+    const quote = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
+    if (!quote) return null;
+
+    const trades = await this.signedGet('/api/v3/myTrades', {
+      symbol,
+      orderId,
+      limit: 1000,
+    });
+    if (!Array.isArray(trades) || trades.length === 0) return null;
+
+    const baseAsset = symbol.slice(0, -quote.length);
+    let grossQuote = 0;
+    let totalQty = 0;
+    let feeQuote = 0;
+
+    for (const fill of trades) {
+      const price = Number(fill?.price);
+      const qty = Number(fill?.qty);
+      const commission = Number(fill?.commission ?? 0);
+      const commissionAsset = String(
+        fill?.commissionAsset ?? '',
+      ).toUpperCase();
+
+      if (
+        !(price > 0) ||
+        !Number.isFinite(price) ||
+        !(qty > 0) ||
+        !Number.isFinite(qty) ||
+        !Number.isFinite(commission) ||
+        commission < 0
+      ) {
+        return null;
+      }
+
+      if (
+        !commissionAsset ||
+        ![quote, baseAsset].includes(commissionAsset)
+      ) {
+        return null;
+      }
+
+      grossQuote += price * qty;
+      totalQty += qty;
+
+      if (commissionAsset === quote) {
+        feeQuote += commission;
+      } else {
+        feeQuote += commission * price;
+      }
+    }
+
+    const qtyTolerance = Math.max(
+      getSymbolSpec(symbol).volumeStep,
+      expectedExecutedQty * 0.0001,
+    );
+    if (
+      !(totalQty > 0) ||
+      !Number.isFinite(totalQty) ||
+      Math.abs(totalQty - expectedExecutedQty) > qtyTolerance ||
+      !Number.isFinite(grossQuote) ||
+      !Number.isFinite(feeQuote)
+    ) {
+      return null;
+    }
+
+    const grossEntry = entryPrice * totalQty;
+    const profit = entrySide === 'BUY'
+      ? grossQuote - grossEntry - feeQuote
+      : grossEntry - grossQuote - feeQuote;
+
+    if (!Number.isFinite(profit)) return null;
+
+    return {
+      profit,
+      currency: quote,
+      avgPrice: grossQuote / totalQty,
+    };
+  }
+
   private async getFuturesOrderNetPnl(
     symbol: string,
     orderId: number,
@@ -258,6 +356,8 @@ export class BinanceExecutor {
   async recoverOperation(
     symbol: string,
     operationKey: string,
+    entryPrice?: number,
+    entrySide?: 'BUY' | 'SELL',
   ): Promise<{
     orderId: number;
     status: string;
@@ -269,12 +369,16 @@ export class BinanceExecutor {
     return this.recoverOrderByClientId(
       symbol,
       this.makeClientOrderId(operationKey),
+      entryPrice,
+      entrySide,
     );
   }
 
   async recoverOrderByClientId(
     symbol: string,
     clientOrderId: string,
+    entryPrice?: number,
+    entrySide?: 'BUY' | 'SELL',
   ): Promise<{
     orderId: number;
     status: string;
@@ -293,13 +397,43 @@ export class BinanceExecutor {
       if (!(executedQty >= 0) || !Number.isFinite(executedQty)) return null;
 
       if (!this.isFutures) {
+        const status = String(order.status ?? '').toUpperCase();
+        if (status !== 'FILLED' || !(executedQty > 0)) {
+          return {
+            orderId,
+            status,
+            executedQty,
+            avgPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
+            realizedProfit: null,
+            realizedProfitCurrency: null,
+          };
+        }
+
+        if (
+          !Number.isFinite(Number(entryPrice)) ||
+          !(Number(entryPrice) > 0) ||
+          !entrySide
+        ) {
+          return null;
+        }
+
+        const realized = await this.getSpotOrderNetPnl(
+          symbol,
+          orderId,
+          Number(entryPrice),
+          entrySide,
+          executedQty,
+        );
+
         return {
           orderId,
-          status: String(order.status ?? '').toUpperCase(),
+          status,
           executedQty,
-          avgPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
-          realizedProfit: null,
-          realizedProfitCurrency: null,
+          avgPrice: Number.isFinite(avgPrice)
+            ? avgPrice
+            : (realized?.avgPrice ?? 0),
+          realizedProfit: realized?.profit ?? null,
+          realizedProfitCurrency: realized?.currency ?? null,
         };
       }
 
@@ -1359,6 +1493,7 @@ export class BinanceExecutor {
     side?: 'BUY' | 'SELL',
     clientOrderId?: string,
     protectionOperationKey?: string,
+    entryPrice?: number,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -1575,6 +1710,38 @@ export class BinanceExecutor {
           );
         }
 
+        const orderId = Number(closeOrder?.orderId);
+        if (!(orderId > 0) || !Number.isFinite(orderId)) {
+          throw new Error(
+            `Binance Spot market close returned invalid orderId for ${symbol}`,
+          );
+        }
+
+        if (
+          !Number.isFinite(Number(entryPrice)) ||
+          !(Number(entryPrice) > 0) ||
+          !side
+        ) {
+          throw new Error(
+            `Binance Spot close lacks the local entry price/side required for authoritative PnL for ${symbol}`,
+          );
+        }
+
+        const realized = await this.getSpotOrderNetPnl(
+          symbol,
+          orderId,
+          Number(entryPrice),
+          side,
+          executedQty,
+        );
+        if (!realized) {
+          throw new Error(
+            `Binance Spot close fills/PnL could not be verified for ${symbol}`,
+          );
+        }
+        realizedProfit = realized.profit;
+        realizedProfitCurrency = realized.currency;
+
         const after = await this.getPosition(symbol);
         if (!after) {
           throw new Error(
@@ -1596,11 +1763,9 @@ export class BinanceExecutor {
       }
 
       return {
-        ok:true,
-        realizedProfit:this.isFutures ? realizedProfit : null,
-        realizedProfitCurrency:this.isFutures
-          ? realizedProfitCurrency
-          : null,
+        ok: true,
+        realizedProfit,
+        realizedProfitCurrency,
       };
     } catch(e:any) {
       this.logger.error(`closePosition failed: ${e?.message??e}`);
