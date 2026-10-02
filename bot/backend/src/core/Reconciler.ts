@@ -396,22 +396,190 @@ export class Reconciler {
 
   private async reconcileBinance(t: Trade): Promise<void> {
     if (!t.ticket) return;
-      const pos  = await this.exec.getBinancePosition(t.symbol);
 
-      if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
-        // Binance has disappeared from the live position set, but this reconciler
-        // does not yet fetch authoritative account-trade fills/PnL. Never infer a
-        // profitable/losing close from market candles; stop and require reconciliation.
-        throw new Error(`Binance position ${t.symbol} is absent but authoritative fill/PnL history is unavailable`);
+    const pos = await this.exec.getBinancePosition(t.symbol);
+    const remaining = pos ? Math.abs(pos.positionAmt) : 0;
+    const unresolvedClose = t.id
+      ? this.db.getLatestUnresolvedExecutionForTrade(
+          t.id,
+          ['CLOSE', 'CLOSE_AT_MARKET'],
+        )
+      : null;
+    const unresolvedPartial = t.id
+      ? this.db.getLatestUnresolvedExecutionForTrade(
+          t.id,
+          ['PARTIAL_CLOSE'],
+        )
+      : null;
 
-      } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
-        // Partial close
-        const remaining = Math.abs(pos.positionAmt);
-        this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
-        this.db.raw()
-          .prepare('UPDATE trades SET volume=? WHERE id=?')
-          .run(remaining, t.id!);
+    if (!pos || remaining < 0.0001) {
+      if (
+        unresolvedClose &&
+        await this.reconcileBinanceFullClose(t, unresolvedClose)
+      ) {
+        return;
       }
+      // Never infer a Binance close or PnL from the absence of a live position.
+      // Older operations that predate durable clientOrderId support, or orders
+      // without authoritative fill/PnL, remain unresolved and therefore blocked.
+      throw new Error(
+        `Binance position ${t.symbol} is absent but authoritative close execution/PnL recovery is unavailable`,
+      );
+    }
+
+    if (remaining < t.volume - 0.001) {
+      if (
+        unresolvedPartial &&
+        await this.reconcileBinancePartialClose(t, unresolvedPartial, remaining)
+      ) {
+        return;
+      }
+
+      // External/manual partial reduction may still be reflected in local size,
+      // but it does not resolve an UNKNOWN execution unless its exact broker
+      // operation and authoritative fills are matched.
+      this.logger.info(
+        `[${t.symbol}] Binance partial: ${remaining} remaining`,
+      );
+      this.db.raw()
+        .prepare('UPDATE trades SET volume=? WHERE id=? AND status=\\'open\\'')
+        .run(remaining, t.id!);
+    }
+  }
+
+  private async reconcileBinanceFullClose(
+    t: Trade,
+    operation: any,
+  ): Promise<boolean> {
+    if (!t.id) return false;
+    const recovered = await this.exec.recoverBinanceExecution(
+      t.symbol,
+      String(operation.operationKey),
+    );
+    if (!recovered) return false;
+    if (recovered.status !== 'FILLED') return false;
+
+    const expectedVolume = Number(operation.volume ?? t.volume);
+    if (
+      !(recovered.executedQty > 0) ||
+      Math.abs(recovered.executedQty - expectedVolume) >
+        Math.max(1e-8, expectedVolume * 0.0001)
+    ) {
+      return false;
+    }
+    if (
+      recovered.realizedProfit == null ||
+      !Number.isFinite(recovered.realizedProfit)
+    ) {
+      return false;
+    }
+
+    const request = operation.requestJson
+      ? (() => {
+          try { return JSON.parse(operation.requestJson) as any; }
+          catch { return null; }
+        })()
+      : null;
+    const reason = String(request?.reason ?? 'MANUAL').toUpperCase();
+    const exitPrice = Number(recovered.avgPrice);
+    if (!(exitPrice > 0) || !Number.isFinite(exitPrice)) return false;
+
+    const resolved = this.db.resolveReconciledFullClose(
+      t.id,
+      String(operation.executionId),
+      recovered.realizedProfit,
+      Date.now(),
+      ['TP', 'SL', 'TIMEOUT', 'MANUAL'].includes(reason) ? reason : 'MANUAL',
+      {
+        broker: 'binance',
+        ticket: t.ticket,
+        brokerOrderId: recovered.orderId,
+        executedQty: recovered.executedQty,
+        realizedProfit: recovered.realizedProfit,
+        avgPrice: exitPrice,
+      },
+      recovered.orderId,
+    );
+    if (!resolved) return false;
+
+    this.recordReconciledClose(
+      t,
+      exitPrice,
+      ['TP', 'SL', 'TIMEOUT', 'MANUAL'].includes(reason) ? reason : 'MANUAL',
+      recovered.realizedProfit,
+    );
+    this.logger.info(
+      `[${operation.action}] atomically recovered Binance close operation=${operation.operationKey}`,
+    );
+    return true;
+  }
+
+  private async reconcileBinancePartialClose(
+    t: Trade,
+    operation: any,
+    remaining: number,
+  ): Promise<boolean> {
+    if (!t.id) return false;
+    const recovered = await this.exec.recoverBinanceExecution(
+      t.symbol,
+      String(operation.operationKey),
+    );
+    if (!recovered) return false;
+    if (recovered.status !== 'FILLED') return false;
+
+    const requestedVolume = Number(operation.requestJson
+      ? (() => {
+          try { return JSON.parse(operation.requestJson)?.volume; }
+          catch { return null; }
+        })()
+      : operation.volume);
+    if (!(requestedVolume > 0)) return false;
+
+    if (
+      !(recovered.executedQty > 0) ||
+      Math.abs(recovered.executedQty - requestedVolume) >
+        Math.max(1e-8, requestedVolume * 0.0001)
+    ) {
+      return false;
+    }
+    if (
+      recovered.realizedProfit == null ||
+      !Number.isFinite(recovered.realizedProfit)
+    ) {
+      return false;
+    }
+
+    if (Math.abs(remaining - (t.volume - recovered.executedQty)) >
+        Math.max(1e-8, t.volume * 0.0001)) {
+      return false;
+    }
+
+    const cumulativeProfit =
+      Number(t.realizedProfit ?? 0) + recovered.realizedProfit;
+    if (!Number.isFinite(cumulativeProfit)) return false;
+
+    const resolved = this.db.resolveReconciledPartialClose(
+      t.id,
+      String(operation.executionId),
+      +remaining.toFixed(8),
+      cumulativeProfit,
+      {
+        broker: 'binance',
+        ticket: t.ticket,
+        brokerOrderId: recovered.orderId,
+        closedVolume: recovered.executedQty,
+        remainingVolume: +remaining.toFixed(8),
+        profit: recovered.realizedProfit,
+        cumulativeRealizedProfit: cumulativeProfit,
+      },
+      recovered.orderId,
+    );
+    if (!resolved) return false;
+
+    this.logger.info(
+      `[${operation.action}] atomically recovered Binance partial operation=${operation.operationKey}`,
+    );
+    return true;
   }
 
   // ─── Common close + record ─────────────────────────────────────────
