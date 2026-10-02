@@ -423,6 +423,7 @@ export class BinanceExecutor {
     ticket:number,
     symbol:string,
     volume:number,
+    clientOrderId?: string,
   ):Promise<{
     ok:boolean;
     remainingVolume:number;
@@ -466,6 +467,7 @@ export class BinanceExecutor {
         type:'MARKET',
         quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
         reduceOnly:'true',
+        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
       });
 
       const orderId=Number(order?.orderId);
@@ -474,7 +476,23 @@ export class BinanceExecutor {
       }
 
       const after=await this.getPosition(symbol);
-      const remainingVolume=Math.max(0,Math.abs(after?.positionAmt??0));
+      if (!after) {
+        throw new Error(
+          `Binance partial close ${symbol} executed but post-fill position verification is unavailable`,
+        );
+      }
+      const remainingVolume=Math.max(0,Math.abs(after.positionAmt));
+      const tolerance=Math.max(
+        getSymbolSpec(symbol).volumeStep,
+        qty * 0.02,
+        1e-12,
+      );
+      const expectedRemaining=Math.max(0, available - qty);
+      if (Math.abs(remainingVolume - expectedRemaining) > tolerance) {
+        throw new Error(
+          `Binance partial close ${symbol} post-fill volume mismatch: expected=${expectedRemaining} actual=${remainingVolume}`,
+        );
+      }
 
       const realized=await this.getFuturesOrderNetPnl(symbol,orderId);
       if(realized==null) {
@@ -511,6 +529,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -520,6 +539,32 @@ export class BinanceExecutor {
     let realizedProfitCurrency: string | null = null;
 
     try {
+      const verifiedPosition = this.isFutures
+        ? await this.getPosition(symbol)
+        : null;
+
+      if (this.isFutures && (!verifiedPosition || verifiedPosition.positionAmt === 0)) {
+        if (clientOrderId) {
+          const recovered = await this.reconcileFullCloseByClientOrderId(
+            symbol,
+            clientOrderId,
+            Date.now(),
+          );
+          if (recovered.ok) {
+            return {
+              ok: true,
+              realizedProfit: recovered.realizedProfit,
+              realizedProfitCurrency: recovered.realizedProfitCurrency,
+            };
+          }
+        }
+        return {
+          ok: false,
+          realizedProfit: null,
+          realizedProfitCurrency: null,
+        };
+      }
+
       const ids = this.orderMap.get(ticket);
       if (ids) {
         const oldOrderIds = [ids.slOrderId, ids.tpOrderId].filter(
@@ -549,13 +594,9 @@ export class BinanceExecutor {
       }
 
       if (this.isFutures) {
-        const pos = await this.getPosition(symbol);
+        const pos = verifiedPosition;
         if (!pos || pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+          throw new Error(`Binance full close position verification unavailable for ${symbol}`);
         }
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
@@ -570,6 +611,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
@@ -584,6 +626,23 @@ export class BinanceExecutor {
         if (realized == null) {
           throw new Error(
             `Binance full close ${symbol} executed but authoritative fills/PnL are unavailable`,
+          );
+        }
+
+        const afterClose = await this.getPosition(symbol);
+        if (!afterClose) {
+          throw new Error(
+            `Binance full close ${symbol} executed but post-fill position verification is unavailable`,
+          );
+        }
+        const remainingTolerance = Math.max(
+          getSymbolSpec(symbol).volumeStep,
+          Math.abs(closeQty) * 0.02,
+          1e-12,
+        );
+        if (Math.abs(afterClose.positionAmt) > remainingTolerance) {
+          throw new Error(
+            `Binance full close ${symbol} did not flatten the position: remaining=${afterClose.positionAmt}`,
           );
         }
 
@@ -641,7 +700,22 @@ export class BinanceExecutor {
   async getPosition(symbol: string): Promise<{ positionAmt: number; entryPrice: number; unrealizedProfit: number } | null> {
     if (this.isFutures) {
       const res = await this.signedGet('/fapi/v2/positionRisk', { symbol });
-      const pos = Array.isArray(res) ? res.find((p: any) => p.symbol === symbol) : res;
+      const matches = Array.isArray(res)
+        ? res.filter((p: any) => p && String(p.symbol) === symbol)
+        : res ? [res] : [];
+      const liveMatches = matches.filter(
+        (p: any) =>
+          Number.isFinite(Number(p.positionAmt)) &&
+          Math.abs(Number(p.positionAmt)) > 1e-12,
+      );
+
+      if (liveMatches.length > 1) {
+        throw new Error(
+          `Binance returned multiple live position sides for ${symbol}; reconciliation is unsafe`,
+        );
+      }
+
+      const pos = liveMatches[0] ?? matches[0];
       if (!pos) return null;
       const positionAmt = Number(pos.positionAmt);
       const entryPrice = Number(pos.entryPrice);
