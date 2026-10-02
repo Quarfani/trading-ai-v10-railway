@@ -32,4 +32,9 @@ assert(
   'Sunday morning FX session must be closed',
 );
 
-console.log('Result: 6 passed, 0 failed');
+const syntheticCrypto = filter.check('TREND', '1000PEPEUSDT', saturday);
+assert(
+  syntheticCrypto.session === 'CRYPTO_24_7',
+  'USDT-suffixed Binance symbols must use the crypto session path',
+);
+console.log('Result: 7 passed, 0 failed');
