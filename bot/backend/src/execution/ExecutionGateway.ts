@@ -743,6 +743,10 @@ export class ExecutionGateway {
     };
   }
 
+  getBinanceOpenOrders(symbol: string) {
+    return this.binance.getOpenOrders(symbol);
+  }
+
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
 
   private beginDestructive(operationKey: string, action: string, trade: Trade, request: Record<string, unknown>) {
