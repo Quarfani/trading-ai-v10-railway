@@ -590,6 +590,39 @@ async function main() {
     "Binance close MARKET order must carry the ledger-derived clientOrderId",
   );
 
+  const partialIdentityExecutor = new BinanceExecutor(baseConfig("binance")) as any;
+  const partialPosts: any[] = [];
+  partialIdentityExecutor.getPosition = async () => ({
+    positionAmt: 0.1,
+    entryPrice: 50_000,
+    unrealizedProfit: 0,
+  });
+  partialIdentityExecutor.signedPost = async (_path: string, params: any) => {
+    partialPosts.push(params);
+    return { orderId: 99902 };
+  };
+  partialIdentityExecutor.getFuturesOrderNetPnl = async () => ({
+    profit: 2.25,
+    currency: "USDT",
+  });
+  partialIdentityExecutor.getPosition = async () => ({
+    positionAmt: 0.1,
+    entryPrice: 50_000,
+    unrealizedProfit: 0,
+  });
+  const partialClientOrderId = makeBinanceClientOrderId("ledger-partial-identity-op");
+  const partialIdentityResult = await partialIdentityExecutor.closePartialPosition(
+    1000,
+    "BTCUSDT",
+    0.04,
+    partialClientOrderId,
+  );
+  assert(partialIdentityResult.ok === true, "Binance partial close with deterministic clientOrderId must succeed");
+  assert(
+    partialPosts[0]?.newClientOrderId === partialClientOrderId,
+    "Binance partial close MARKET order must carry the ledger-derived clientOrderId",
+  );
+
   const claimDb = new DatabaseManager(":memory:");
   await claimDb.initialize();
   const firstClaim = claimDb.createExecutionLedger({
