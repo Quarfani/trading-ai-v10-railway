@@ -56,7 +56,21 @@ async function main() {
   assert(reopened.ok, "full close should succeed after stale protection is cleared");
   assert(closeClientOrderId === "ta_full_test", "full close must forward the durable Binance clientOrderId");
 
-  console.log("Result: 4 passed, 0 failed");
+  (executor as any).getPosition = async () => ({
+    positionAmt: 0.1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  const residual = await executor.closePosition(
+    42,
+    "BTCUSDT",
+    1,
+    "BUY",
+    "ta_full_residual_test",
+  );
+  assert(!residual.ok, "full close must fail when Binance reports a residual position");
+  
+  console.log("Result: 5 passed, 0 failed");
 }
 
 main().catch(error => {
