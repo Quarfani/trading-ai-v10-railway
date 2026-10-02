@@ -250,6 +250,50 @@ async function main() {
   );
   modifyBlockedDb.raw().close();
 
+  const protectionLossDb = new DatabaseManager(":memory:");
+  await protectionLossDb.initialize();
+  const protectionLossTradeId = protectionLossDb.insertTrade({
+    ticket: 506,
+    symbol: "BTCUSDT",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 1,
+    entry: 100,
+    sl: 90,
+    tp: 120,
+    status: "open",
+    openedAt: Date.now(),
+    source: "BINANCE_RECON_PROTECTION_LOSS",
+  } as any);
+  const protectionLossExec = {
+    getBinancePosition: async () => ({
+      positionAmt: 1,
+      entryPrice: 100,
+      unrealizedProfit: 0,
+    }),
+    getBinanceOpenOrders: async () => [
+      { orderId: 7201, side: "SELL", type: "STOP_MARKET", stopPrice: "90", closePosition: "true" },
+    ],
+  };
+  let protectionLossBlocked = false;
+  try {
+    await (makeReconciler(protectionLossDb, protectionLossExec) as any).reconcileOne(
+      protectionLossDb.getOpenTrades()[0],
+    );
+  } catch {
+    protectionLossBlocked = true;
+  }
+  assert(
+    protectionLossBlocked,
+    "missing Binance TP protection must block runtime reconciliation",
+  );
+  assert(
+    protectionLossDb.getOpenTrades().length === 1 &&
+    protectionLossDb.getOpenTrades()[0].id === protectionLossTradeId,
+    "missing protection must not silently close or mutate the trade",
+  );
+  protectionLossDb.raw().close();
+
   const blockedDb = new DatabaseManager(":memory:");
   await blockedDb.initialize();
   const blockedTradeId = blockedDb.insertTrade({
@@ -301,7 +345,7 @@ async function main() {
   );
   blockedDb.raw().close();
 
-  console.log("Result: 18 passed, 0 failed");
+  console.log("Result: 21 passed, 0 failed");
 }
 
 main().catch(error => {
