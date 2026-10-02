@@ -17,6 +17,7 @@ Benefits vs single model:
 """
 import json
 import pickle
+import hashlib
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -340,13 +341,20 @@ class EnsembleModel(BaseModel):
     def save(self) -> Path:
         # Save ensemble meta (weights, config)
         meta_path = self.model_dir / "ensemble_config.json"
+        payload = {
+            "model":                self.name,
+            "symbol":               self.symbol,
+            "timeframe":            self.timeframe,
+            "feature_cols":         FEATURE_COLS,
+            "weights":              self._weights,
+            "trained_models":       self._trained_models,
+            "confidence_min":       self.confidence_min,
+            "disagreement_penalty": self.disagreement_penalty,
+        }
+        payload["fingerprint"] = self._config_fingerprint(payload)
+
         with open(meta_path, "w") as f:
-            json.dump({
-                "weights":              self._weights,
-                "trained_models":       self._trained_models,
-                "confidence_min":       self.confidence_min,
-                "disagreement_penalty": self.disagreement_penalty,
-            }, f, indent=2)
+            json.dump(payload, f, indent=2)
 
         # Sub-models save themselves
         return meta_path
@@ -359,9 +367,29 @@ class EnsembleModel(BaseModel):
         with open(meta_path) as f:
             cfg = json.load(f)
 
+        required_meta = {
+            "model": self.name,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "feature_cols": FEATURE_COLS,
+            "weights": cfg.get("weights", {}),
+            "trained_models": cfg.get("trained_models", []),
+            "confidence_min": cfg.get("confidence_min", 0.55),
+            "disagreement_penalty": cfg.get("disagreement_penalty", 0.10),
+        }
+        if cfg.get("fingerprint") != self._config_fingerprint(required_meta):
+            logger.error(
+                f"Rejected ensemble config fingerprint mismatch for "
+                f"{self.symbol}/{self.timeframe}"
+            )
+            return False
+
         self._weights = cfg.get("weights", {})
         self._trained_models = cfg.get("trained_models", [])
         self.confidence_min = float(cfg.get("confidence_min", 0.55))
+        self.disagreement_penalty = float(
+            cfg.get("disagreement_penalty", 0.10)
+        )
 
         if not isinstance(self._weights, dict):
             return False
@@ -402,6 +430,18 @@ class EnsembleModel(BaseModel):
         self._weights = valid_weights
         self._trained = True
         return True
+
+    @staticmethod
+    def _config_fingerprint(payload: dict) -> str:
+        normalized = dict(payload)
+        normalized.pop("fingerprint", None)
+        canonical = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
     # ─── Comparison report ────────────────────────────────────────────────────
 
