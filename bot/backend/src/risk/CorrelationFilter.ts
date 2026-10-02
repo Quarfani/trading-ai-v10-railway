@@ -79,6 +79,38 @@ export class CorrelationFilter {
     return { blocked: false };
   }
 
+  getExposurePeers(
+    symbol: string,
+    side: Side,
+    openTrades: Trade[],
+    candleMap?: Record<string, Candle[]>,
+  ): Array<{ trade: Trade; correlation: number }> {
+    const canonicalSymbol = canonicalCorrelationSymbol(symbol);
+    const peers: Array<{ trade: Trade; correlation: number }> = [];
+
+    for (const t of openTrades) {
+      const canonicalExisting = canonicalCorrelationSymbol(t.symbol);
+      if (canonicalExisting === canonicalSymbol) continue;
+
+      if (candleMap?.[symbol] && candleMap?.[t.symbol]) {
+        const corr = this.getPearson(symbol, t.symbol, candleMap[symbol], candleMap[t.symbol]);
+        const sideSign = side === 'BUY' ? 1 : -1;
+        const existingSideSign = t.side === 'BUY' ? 1 : -1;
+        const exposureCorrelation = corr * sideSign * existingSideSign;
+        if (exposureCorrelation > this.MAX_CORR) {
+          peers.push({ trade: t, correlation: exposureCorrelation });
+        }
+        continue;
+      }
+
+      if (t.side !== side) continue;
+      const staticPeers = STATIC_PAIRS[canonicalSymbol] ?? [];
+      if (staticPeers.includes(canonicalExisting)) {
+        peers.push({ trade: t, correlation: this.MAX_CORR });
+      }
+    }
+    return peers;
+  }
   /** Update live candle data for correlation calculation */
   updateCandles(symbolA: string, symbolB: string, candlesA: Candle[], candlesB: Candle[]) {
     const key  = this.pairKey(symbolA, symbolB);
