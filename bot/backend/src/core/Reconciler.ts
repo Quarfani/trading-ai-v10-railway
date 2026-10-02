@@ -401,6 +401,28 @@ export class Reconciler {
       ['MOVE_SL_TP'],
     );
 
+    if (pos && Math.abs(pos.positionAmt) >= 0.0001) {
+      const brokerSide = Number(pos.positionAmt) > 0 ? 'BUY' : 'SELL';
+      if (brokerSide !== t.side) {
+        throw new Error(
+          `Binance side mismatch ${t.symbol}: DB=${t.side} broker=${brokerSide}`,
+        );
+      }
+
+      const brokerVolume = Math.abs(Number(pos.positionAmt));
+      if (!Number.isFinite(brokerVolume) || brokerVolume <= 0) {
+        throw new Error(`Binance invalid position volume for ${t.symbol}`);
+      }
+
+      const volumeTolerance = Math.max(0.00000001, t.volume * 0.02);
+      const volumeDiff = Math.abs(brokerVolume - t.volume);
+      if (volumeDiff > volumeTolerance && !unresolvedPartial && !unresolvedClose) {
+        throw new Error(
+          `Binance unexpected position-size change for ${t.symbol}: DB=${t.volume} broker=${brokerVolume}; no matching execution-ledger operation`,
+        );
+      }
+    }
+
     if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
       if (unresolvedPartial) {
         throw new Error(
@@ -508,10 +530,16 @@ export class Reconciler {
     }
 
     const remaining = Math.abs(pos.positionAmt);
-    if (remaining >= t.volume - 0.001) return;
+    if (Math.abs(remaining - t.volume) <= Math.max(0.00000001, t.volume * 0.02)) return;
+
+    if (!unresolvedPartial) {
+      throw new Error(
+        `Binance position size changed without a PARTIAL_CLOSE ledger operation for ${t.symbol}; manual reconciliation is required`,
+      );
+    }
 
     this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
-    if (unresolvedPartial) {
+    {
       let request: any = null;
       try {
         request = unresolvedPartial.requestJson ? JSON.parse(unresolvedPartial.requestJson) : null;
