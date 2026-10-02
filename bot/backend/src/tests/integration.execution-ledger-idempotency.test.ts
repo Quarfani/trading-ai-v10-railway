@@ -596,6 +596,17 @@ async function main() {
     atomicOpenSuccessDb.getOpenTrades().length === 1,
     "successful atomic OPEN must persist exactly one local trade",
   );
+  const persistedOpen = atomicOpenSuccessDb.raw().prepare(
+    "SELECT mlPredictionId, commission, commissionCurrency, realizedProfit FROM trades WHERE id=?",
+  ).get(openId) as any;
+  // Re-fetch on the same database connection: this proves the values survive
+  // the atomic INSERT/ledger transition rather than only existing in memory.
+  assert(
+    persistedOpen.mlPredictionId == null &&
+      Number(persistedOpen.commission) === 0,
+    "atomic OPEN compatibility path must persist commission fields",
+  );
+
   atomicOpenSuccessDb.raw().close();
 
   const atomicSlTpDb = new DatabaseManager(":memory:");
