@@ -81,6 +81,9 @@ export class CircuitBreaker {
         this.trippedUntil = 0;
         this.consecutiveLosses = 0;
         this.persistState();
+        if (this.stateCorrupt) {
+          return false;
+        }
       }
       return true;
     }
