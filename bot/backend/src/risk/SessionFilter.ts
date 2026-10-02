@@ -146,7 +146,9 @@ export class SessionFilter {
 
     for (const fh of FUNDING_HOURS) {
       const fundingMin = fh * 60;
-      if (Math.abs(minOfDay - fundingMin) <= FUNDING_BUFFER_MIN) {
+      const directDistance = Math.abs(minOfDay - fundingMin);
+      const wrappedDistance = 24 * 60 - directDistance;
+      if (Math.min(directDistance, wrappedDistance) <= FUNDING_BUFFER_MIN) {
         return true;
       }
     }
