@@ -487,12 +487,8 @@ export class Reconciler {
       const resolved = this.db.resolveReconciledProtectionModify(
         t.id!,
         String(unresolvedModify.executionId),
-        recoveredProtection.slOrderId === recoveredProtection.slOrderId
-          ? desiredSl
-          : desiredSl,
-        recoveredProtection.tpOrderId === recoveredProtection.tpOrderId
-          ? desiredTp
-          : desiredTp,
+        desiredSl,
+        desiredTp,
         {
           broker: 'binance',
           symbol: t.symbol,
