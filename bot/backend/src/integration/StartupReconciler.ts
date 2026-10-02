@@ -353,6 +353,145 @@ export class StartupReconciler {
       closeTimeMsc: history.closeTimeMsc,
     };
   }
+  private async resolveAuthoritativeBinanceOpenLedgers(
+    exec: BinanceExecutor,
+    positions: any[],
+  ): Promise<void> {
+    if (!this.config.binance.futures) return;
+
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, requestJson
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action='OPEN'
+      ORDER BY createdAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      operationKey: string;
+      requestJson?: string | null;
+    }>;
+
+    const bySymbol = new Map<string, Array<typeof rows[number]>>();
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      try {
+        const request = JSON.parse(row.requestJson);
+        const symbol = String(request?.signal?.symbol ?? '').trim().toUpperCase();
+        if (!symbol) continue;
+        const list = bySymbol.get(symbol) ?? [];
+        list.push(row);
+        bySymbol.set(symbol, list);
+      } catch {
+        // malformed requestJson remains unresolved and blocks startup
+      }
+    }
+
+    const existingOpenSymbols = new Set(
+      this.db.getOpenTrades().map(trade => String(trade.symbol).toUpperCase()),
+    );
+
+    for (const [symbol, candidates] of bySymbol) {
+      // A single exchange position cannot be attributed safely to multiple
+      // unknown opening operations for the same symbol.
+      if (candidates.length !== 1 || existingOpenSymbols.has(symbol)) continue;
+
+      const row = candidates[0];
+      let request: any;
+      try {
+        request = JSON.parse(row.requestJson!);
+      } catch {
+        continue;
+      }
+
+      const signal = request?.signal;
+      const side = String(signal?.side ?? '').toUpperCase();
+      const expectedVolume = Number(request?.volume);
+      const expectedSl = Number(signal?.sl);
+      const expectedTp = Number(signal?.tp);
+      const timeframe = String(request?.timeframe ?? signal?.timeframe ?? 'H1');
+
+      if (
+        (side !== 'BUY' && side !== 'SELL') ||
+        !(expectedVolume > 0) ||
+        !Number.isFinite(expectedVolume) ||
+        !Number.isFinite(expectedSl) ||
+        !Number.isFinite(expectedTp)
+      ) {
+        continue;
+      }
+
+      const position = positions.find(
+        (candidate: any) => String(candidate.symbol).toUpperCase() === symbol,
+      );
+      if (!position) continue;
+
+      const positionSide = Number(position.positionAmt) > 0 ? 'BUY' : 'SELL';
+      const positionVolume = Math.abs(Number(position.positionAmt));
+      const tolerance = Math.max(1e-8, expectedVolume * 0.02);
+      if (
+        positionSide !== side ||
+        !Number.isFinite(positionVolume) ||
+        positionVolume <= 0 ||
+        Math.abs(positionVolume - expectedVolume) > tolerance
+      ) {
+        continue;
+      }
+
+      const recovered = await exec.reconcileBinanceOpenOperation(
+        symbol,
+        row.operationKey,
+        side,
+        expectedVolume,
+      );
+      if (!recovered) continue;
+
+      const protection = await exec.reconcileBinanceProtectionModify(
+        symbol,
+        row.operationKey,
+        expectedSl,
+        expectedTp,
+      );
+      if (!protection) continue;
+
+      const recoveredTrade = {
+        ticket: recovered.orderId,
+        symbol,
+        side,
+        volume: recovered.executedQty,
+        entry: recovered.entryPrice,
+        sl: expectedSl,
+        tp: expectedTp,
+        status: 'open',
+        openedAt: Number(signal?.timestamp ?? row.createdAt ?? Date.now()),
+        source: String(signal?.source ?? 'RECOVERED_OPEN'),
+        timeframe,
+        account: this.config.accountName ?? 'default',
+      } as any;
+
+      const recoveredId = this.db.resolveRecoveredOpenTrade(
+        row.executionId,
+        recoveredTrade,
+        {
+          broker: 'binance',
+          operationKey: row.operationKey,
+          entryOrderId: recovered.orderId,
+          executedQty: recovered.executedQty,
+          entryPrice: recovered.entryPrice,
+          slOrderId: protection.slOrderId,
+          tpOrderId: protection.tpOrderId,
+          recovery: 'startup',
+        },
+        recovered.orderId,
+      );
+
+      if (recoveredId) {
+        this.logger.warn(
+          `[Binance] Recovered authoritative OPEN operation=${row.operationKey} as trade id=${recoveredId}`,
+        );
+      }
+    }
+  }
+
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
@@ -396,6 +535,7 @@ export class StartupReconciler {
     }
 
     const positions = await exec.getAllPositions();
+    await this.resolveAuthoritativeBinanceOpenLedgers(exec, positions);
     const openTrades = this.db.getOpenTrades();
     const bySymbol = new Map<string, any>(
       positions.map(p => [p.symbol, p]),
