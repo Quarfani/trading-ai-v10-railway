@@ -282,12 +282,22 @@ class BaseModel(ABC):
         return meta.get("accuracy", 0.0)
 
     def _model_checksum(self) -> str:
-        model_file = self.model_dir / "model.pkl"
-        if not model_file.exists():
+        candidates = (
+            "model.pkl",
+            "model.keras",
+            "model.pt",
+        )
+        model_file = next(
+            (self.model_dir / name for name in candidates
+             if (self.model_dir / name).exists()),
+            None,
+        )
+        if model_file is None:
             return ""
         h = hashlib.md5()
         with open(model_file, "rb") as f:
-            h.update(f.read())
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
         return h.hexdigest()[:12]
 
     # ─── Data prep helpers ────────────────────────────────────────────────────
