@@ -70,7 +70,32 @@ async function main() {
   );
   assert(!residual.ok, "full close must fail when Binance reports a residual position");
   
-  console.log("Result: 5 passed, 0 failed");
+  (executor as any).orderMap.clear();
+  let restartPostSubmitted = false;
+  (executor as any).getOpenOrders = async () => [
+    { orderId: 801, side: "SELL", type: "STOP_MARKET", closePosition: "true" },
+    { orderId: 802, side: "SELL", type: "TAKE_PROFIT_MARKET", closePosition: "true" },
+  ];
+  (executor as any).signedDelete = async () => ({});
+  (executor as any).signedGet = async () => [
+    { realizedPnl: "10", commission: "0.10", commissionAsset: "USDT" },
+  ];
+  (executor as any).getPosition = async () => null;
+
+  const unavailable = await executor.closePosition(
+    999,
+    "BTCUSDT",
+    1,
+    "BUY",
+    "restart-close-unavailable",
+  );
+  assert(!unavailable.ok, "restart close must fail closed when position state is unavailable");
+  assert(
+    !restartPostSubmitted,
+    "restart close must not submit a market close without verified position state",
+  );
+
+  console.log("Result: 7 passed, 0 failed");
 }
 
 main().catch(error => {
