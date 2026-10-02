@@ -18,11 +18,15 @@ async function main() {
     return { positionAmt: 0.6, entryPrice: 100, unrealizedProfit: 0 };
   };
 
-  (executor as any).signedPost = async () => ({
-    orderId: 321,
-    status: "FILLED",
-    executedQty: "0.4",
-  });
+  let submittedClientOrderId = "";
+  (executor as any).signedPost = async (_path: string, payload: any) => {
+    submittedClientOrderId = String(payload?.newClientOrderId ?? "");
+    return {
+      orderId: 321,
+      status: "FILLED",
+      executedQty: "0.4",
+    };
+  };
 
   (executor as any).signedGet = async (path: string) => {
     assert(path === "/fapi/v1/userTrades", "partial PnL must use Futures userTrades");
@@ -32,8 +36,9 @@ async function main() {
     ];
   };
 
-  const ok = await executor.closePartialPosition(7, "BTCUSDT", 0.4);
+  const ok = await executor.closePartialPosition(7, "BTCUSDT", 0.4, "ta_partial_test");
   assert(ok.ok, "partial close should succeed with authoritative fills");
+  assert(submittedClientOrderId === "ta_partial_test", "partial close must forward the durable Binance clientOrderId");
   assert(ok.remainingVolume === 0.6, "remaining broker position must be authoritative");
   assert(
     Math.abs(ok.realizedProfit - 54.7) < 1e-12,
@@ -44,7 +49,7 @@ async function main() {
   (executor as any).signedGet = async () => [
     { realizedPnl: "50", commission: "0.20", commissionAsset: "BTC" },
   ];
-  const badFee = await executor.closePartialPosition(7, "BTCUSDT", 0.4);
+  const badFee = await executor.closePartialPosition(7, "BTCUSDT", 0.4, "ta_partial_test_2");
   assert(!badFee.ok, "unexpected commission asset must fail closed");
 
   console.log("Result: 4 passed, 0 failed");
