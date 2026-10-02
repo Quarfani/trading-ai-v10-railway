@@ -1813,6 +1813,7 @@ export class BinanceExecutor {
         });
 
         const status = String(closeOrder?.status ?? '').toUpperCase();
+        const executedQty = Number(
           closeOrder?.executedQty ??
           closeOrder?.origQty ??
           0,
