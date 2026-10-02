@@ -346,6 +346,7 @@ export class BinanceExecutor {
     quantity: number,
     ticket:   number,
     spec:     ReturnType<typeof getSymbolSpec>,
+    operationKey?: string,
   ): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const qty       = this.formatQty(quantity, spec.volumeStep);
@@ -363,6 +364,9 @@ export class BinanceExecutor {
         stopPrice:        slPrice,
         closePosition:    'true',
         workingType:      'MARK_PRICE',
+        ...(operationKey
+          ? { newClientOrderId: this.protectionClientOrderId(operationKey, 'sl') }
+          : {}),
       });
       ids.slOrderId = Number(slOrder.orderId);
       this.logger.info(
@@ -381,6 +385,9 @@ export class BinanceExecutor {
         stopPrice:        tpPrice,
         closePosition:    'true',
         workingType:      'MARK_PRICE',
+        ...(operationKey
+          ? { newClientOrderId: this.protectionClientOrderId(operationKey, 'tp') }
+          : {}),
       });
       ids.tpOrderId = Number(tpOrder.orderId);
       this.logger.info(
@@ -487,6 +494,7 @@ export class BinanceExecutor {
     side:'BUY'|'SELL',
     newSl:number,
     newTp:number,
+    operationKey?: string,
   ):Promise<boolean>{
     if(!this.isFutures)return false;
     try{
@@ -508,7 +516,7 @@ export class BinanceExecutor {
         symbol, side, price:0, confidence:1, sl:newSl, tp:newTp,
         source:'modify', reason:'modify', timestamp:Date.now(),
       } as Signal;
-      await this.placeSLTP(sig, quantity, ticket, getSymbolSpec(symbol));
+      await this.placeSLTP(sig, quantity, ticket, getSymbolSpec(symbol), operationKey);
 
       const replacement=this.orderMap.get(ticket);
       const replacementIds=[replacement?.slOrderId,replacement?.tpOrderId].filter(
