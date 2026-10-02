@@ -69,7 +69,47 @@ async function main() {
     "Binance protection clientOrderId must satisfy the documented 32-char format",
   );
 
-  console.log("Result: 6 passed, 0 failed");
+  (executor as any).orderMap.clear();
+  const restartDeleted: number[] = [];
+  let verificationPass = false;
+  (executor as any).getOpenOrders = async () => {
+    if (!verificationPass) {
+      return [
+        { orderId: 201, side: "SELL", type: "STOP_MARKET", closePosition: "true", stopPrice: "90" },
+        { orderId: 202, side: "SELL", type: "TAKE_PROFIT_MARKET", closePosition: "true", stopPrice: "110" },
+      ];
+    }
+    return [];
+  };
+  (executor as any).signedDelete = async (_path: string, params: any) => {
+    restartDeleted.push(Number(params.orderId));
+    if (restartDeleted.length === 2) verificationPass = true;
+    return {};
+  };
+  (executor as any).getPosition = async () => ({
+    positionAmt: 1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  (executor as any).placeSLTP = async () => {};
+  const restartModified = await executor.modifyPosition(
+    999,
+    "BTCUSDT",
+    "BUY",
+    90,
+    110,
+    "restart-modify-operation",
+  );
+  assert(
+    restartModified,
+    "modify must recover and replace broker protective orders after process restart",
+  );
+  assert(
+    restartDeleted.includes(201) && restartDeleted.includes(202),
+    "restart modify must cancel both broker-side protective orders",
+  );
+
+  console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
