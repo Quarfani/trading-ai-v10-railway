@@ -433,6 +433,60 @@ async function main() {
     axios.get = originalAxiosGet;
   }
 
+  const binanceRecoveryDb = await newDb();
+  const binanceRecoveryTradeId = binanceRecoveryDb.insertTrade({
+    ticket: 601, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 1,
+    entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
+  });
+  binanceRecoveryDb.createExecutionLedger({
+    executionId: 'binance-startup-close',
+    operationKey: 'binance-startup-close-op',
+    action: 'CLOSE_AT_MARKET',
+    status: 'UNKNOWN',
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    volume: 1,
+    request: { tradeId: binanceRecoveryTradeId, exitPrice: 101, reason: 'MANUAL' },
+  });
+
+  const futuresCfg = config() as SystemConfig;
+  const originalGetAllPositions = (BinanceExecutor.prototype as any).getAllPositions;
+  const originalRecoverOperation = (BinanceExecutor.prototype as any).recoverOperation;
+  try {
+    (BinanceExecutor.prototype as any).getAllPositions = async () => [];
+    (BinanceExecutor.prototype as any).recoverOperation = async (symbol: string, operationKey: string) => {
+      assert(symbol === 'BTCUSDT', 'startup Binance recovery must use the trade symbol');
+      assert(operationKey === 'binance-startup-close-op', 'startup Binance recovery must use the exact operation key');
+      return {
+        orderId: 9911,
+        status: 'FILLED',
+        executedQty: 1,
+        avgPrice: 101,
+        realizedProfit: 14.5,
+        realizedProfitCurrency: 'USDT',
+      };
+    };
+    await new StartupReconciler(
+      futuresCfg,
+      binanceRecoveryDb,
+      new TelegramBot(futuresCfg),
+    ).run();
+    assert(
+      binanceRecoveryDb.getOpenTrades().length === 0,
+      'startup reconciliation must settle a recoverable Binance full close',
+    );
+    const startupBinanceLedger = binanceRecoveryDb.getExecutionByOperationKey('binance-startup-close-op');
+    assert(
+      startupBinanceLedger.status === 'EXECUTED' &&
+      startupBinanceLedger.brokerOrderId === '9911',
+      'startup Binance reconciliation must resolve the exact broker operation',
+    );
+  } finally {
+    (BinanceExecutor.prototype as any).getAllPositions = originalGetAllPositions;
+    (BinanceExecutor.prototype as any).recoverOperation = originalRecoverOperation;
+    binanceRecoveryDb.raw().close();
+  }
+
   const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
   const originalPing = (BinanceExecutor.prototype as any).ping;
   const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
