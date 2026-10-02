@@ -109,8 +109,13 @@ export class DailyLossGuard {
     const account = String(this.config.accountName ?? 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
     const key = `daily_start_equity:${account}:${today}`;
 
-    const existing = Number(this.db.getSetting(key));
-    if (Number.isFinite(existing) && existing > 0) return existing;
+    const raw = this.db.getSetting(key);
+    if (raw != null && String(raw).trim() !== '') {
+      const existing = Number(raw);
+      if (Number.isFinite(existing) && existing > 0) return existing;
+      this.logger.error(`Invalid persisted daily start equity for ${key} — trading blocked`);
+      return NaN;
+    }
 
     const equity = Number(currentEquity);
     if (!(equity > 0) || !Number.isFinite(equity)) {
