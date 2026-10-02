@@ -657,6 +657,8 @@ export class StartupReconciler {
       const recovered = await exec.recoverOperation(
         String(trade.symbol),
         String(row.operationKey),
+        Number(trade.entry),
+        trade.side,
       );
       if (!recovered || recovered.status !== 'FILLED') continue;
       if (!(recovered.executedQty > 0) || !Number.isFinite(recovered.executedQty)) continue;
