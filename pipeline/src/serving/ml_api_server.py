@@ -27,6 +27,7 @@ import asyncio
 import os
 import threading
 import time
+import uuid
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -127,6 +128,7 @@ class CandleList(PydanticModel):
 class PredictResponse(PydanticModel):
     symbol:     str
     timeframe:  str
+    prediction_id: str
     signal:     str          # BUY | SELL | NO_TRADE
     prob_buy:   float
     prob_sell:  float
@@ -260,9 +262,11 @@ async def predict(body: CandleList):
         return _no_trade_response(body)
 
     signal_str = {1: "BUY", -1: "SELL", 0: "NO_TRADE"}[result.label]
+    prediction_id = uuid.uuid4().hex
     return PredictResponse(
         symbol     = body.symbol,
         timeframe  = body.timeframe,
+        prediction_id = prediction_id,
         signal     = signal_str,
         prob_buy   = result.buy_prob,
         prob_sell  = result.sell_prob,
@@ -278,6 +282,7 @@ def _no_trade_response(body: CandleList) -> PredictResponse:
     return PredictResponse(
         symbol    = body.symbol,
         timeframe = body.timeframe,
+        prediction_id = "",
         signal    = "NO_TRADE",
         prob_buy  = 0.33, prob_sell = 0.33, prob_hold = 0.34,
         confidence = 0.0, has_model = False, latency_ms = 0.0, model = "none",
@@ -329,10 +334,11 @@ async def trigger_retrain(body: RetrainRequest):
 
 @app.post("/record_trade", dependencies=[Depends(require_auth)])
 async def record_trade(body: dict):
-    """Record closed trade outcome for online learning."""
-    server    = get_ml_server()
-    symbol    = str(body.get("symbol", "")).strip().upper()
+    """Record either a prediction outcome or a feature-backed online-learning sample."""
+    server = get_ml_server()
+    symbol = str(body.get("symbol", "")).strip().upper()
     timeframe = str(body.get("timeframe", "")).strip()
+
     try:
         profit = float(body.get("profit"))
         signal = int(body.get("signal"))
@@ -362,13 +368,33 @@ async def record_trade(body: dict):
         if predicted_signal not in (-1, 0, 1):
             raise HTTPException(status_code=422, detail="Invalid predicted_signal")
 
+    actual_label = body.get("actual_label")
+    if actual_label is not None:
+        try:
+            actual_label = int(actual_label)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="actual_label must be numeric")
+        if actual_label not in (-1, 0, 1):
+            raise HTTPException(status_code=422, detail="Invalid actual_label")
+
+    if prediction_id and predicted_signal is not None and actual_label is not None:
+        server.record_prediction_outcome(
+            symbol=symbol,
+            timeframe=timeframe,
+            prediction_id=prediction_id,
+            predicted_signal=predicted_signal,
+            actual_label=actual_label,
+            profit=profit,
+        )
+        return {"ok": True, "recorded": "prediction_outcome"}
+
     candles = body.get("entry_candles", [])
     if candles:
         ok, reason = _validate_candles(candles)
         if not ok:
             raise HTTPException(status_code=422, detail=reason)
 
-        cols   = ["time", "open", "high", "low", "close", "volume"]
+        cols = ["time", "open", "high", "low", "close", "volume"]
         df_raw = pd.DataFrame(candles, columns=cols)
         try:
             df_feat = _fe.generate(df_raw, symbol)
@@ -391,7 +417,7 @@ async def record_trade(body: dict):
         except Exception as e:
             logger.warning(f"record_trade feature error: {e}")
 
-    return {"ok": True}
+    return {"ok": True, "recorded": "trade_outcome"}
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
