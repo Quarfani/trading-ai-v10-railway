@@ -609,11 +609,15 @@ export class Reconciler {
 
     const tpTolerance = Math.max(1e-8, Math.abs(t.tp) * 1e-6);
     const slTolerance = Math.max(1e-8, Math.abs(t.sl) * 1e-6);
+    const quantityTolerance = Math.max(
+      1e-8,
+      Math.abs(Number(t.volume)) * 0.0001,
+    );
     const tpLeg = legOrders.find(
       (order: any) =>
         String(order.side).toUpperCase() === closeSide &&
         String(order.type).toUpperCase().includes('LIMIT') &&
-        Number(order.origQty ?? order.quantity) > 0 &&
+        Math.abs(Number(order.origQty ?? order.quantity) - Number(t.volume)) <= quantityTolerance &&
         Math.abs(Number(order.price) - t.tp) <= tpTolerance &&
         String(order.status).toUpperCase() === 'NEW',
     );
@@ -621,7 +625,7 @@ export class Reconciler {
       (order: any) =>
         String(order.side).toUpperCase() === closeSide &&
         String(order.type).toUpperCase().includes('STOP') &&
-        Number(order.origQty ?? order.quantity) > 0 &&
+        Math.abs(Number(order.origQty ?? order.quantity) - Number(t.volume)) <= quantityTolerance &&
         Math.abs(Number(order.stopPrice) - t.sl) <= slTolerance &&
         String(order.status).toUpperCase() === 'NEW',
     );
