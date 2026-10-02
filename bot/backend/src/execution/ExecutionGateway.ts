@@ -380,6 +380,14 @@ export class ExecutionGateway {
   }
 
   async closeTrade(t: Trade) {
+    if (
+      this.config.mode !== 'paper' &&
+      (!Number.isInteger(Number(t.id)) || Number(t.id) <= 0)
+    ) {
+      this.logger.error('Live close rejected: durable trade.id is required for execution-ledger reconciliation');
+      return false;
+    }
+
     const key = this.stableKey('CLOSE', {
       id: t.id,
       ticket: t.ticket,
@@ -439,6 +447,14 @@ export class ExecutionGateway {
     exitPrice: number,
     reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL' = 'MANUAL',
   ) {
+    if (
+      this.config.mode !== 'paper' &&
+      (!Number.isInteger(Number(t.id)) || Number(t.id) <= 0)
+    ) {
+      this.logger.error('Live closeAtMarket rejected: durable trade.id is required for execution-ledger reconciliation');
+      return { ok: false };
+    }
+
     const key = this.stableKey('CLOSE_AT_MARKET', {
       id: t.id,
       ticket: t.ticket,
@@ -568,7 +584,16 @@ export class ExecutionGateway {
 
 
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
-    if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
+    if (!(volume > 0) || volume >= t.volume) {
+      return { ok: false, profit: 0, remainingVolume: t.volume };
+    }
+    if (
+      this.config.mode !== 'paper' &&
+      (!Number.isInteger(Number(t.id)) || Number(t.id) <= 0)
+    ) {
+      this.logger.error('Live partial close rejected: durable trade.id is required for execution-ledger reconciliation');
+      return { ok: false, profit: 0, remainingVolume: t.volume };
+    }
 
     // A replay of the same operation is safe and must return the persisted
     // result before the short-lived in-process lock can reject it.
