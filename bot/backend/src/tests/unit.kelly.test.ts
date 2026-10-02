@@ -35,9 +35,9 @@ describe('KellyPositionSizer', () => {
     expect(volume).toBeGreaterThan(0);
   });
 
-  test('negative Kelly produces minimum risk, not negative volume', () => {
+  test('negative Kelly fails closed', () => {
     const { volume } = sizer.size('EURUSD','BUY',1.2000,1.1900,mockConfig,badStats,50);
-    expect(volume).toBeGreaterThan(0);
+    expect(volume).toBe(0);
   });
 
   test('high quality score produces larger volume than low quality', () => {
