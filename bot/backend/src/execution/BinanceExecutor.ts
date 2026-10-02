@@ -84,7 +84,7 @@ export class BinanceExecutor {
   private async getFuturesOrderNetPnl(
     symbol: string,
     orderId: number,
-  ): Promise<{ profit: number; currency: string } | null> {
+  ): Promise<{ profit: number; currency: string; avgPrice: number | null } | null> {
     if (!this.isFutures || !(orderId > 0)) return null;
 
     const fills = await this.signedGet('/fapi/v1/userTrades', {
@@ -96,10 +96,14 @@ export class BinanceExecutor {
 
     let net = 0;
     let currency = '';
+    let weightedPrice = 0;
+    let totalQty = 0;
 
     for (const fill of fills) {
       const realizedPnl = Number(fill?.realizedPnl);
       const commission = Number(fill?.commission);
+      const fillPrice = Number(fill?.price);
+      const fillQty = Number(fill?.qty);
       const commissionAsset = String(
         fill?.commissionAsset ?? '',
       ).toUpperCase();
@@ -108,6 +112,14 @@ export class BinanceExecutor {
         !Number.isFinite(realizedPnl) ||
         !Number.isFinite(commission) ||
         commission < 0
+      ) {
+        return null;
+      }
+      if (
+        !Number.isFinite(fillPrice) ||
+        !Number.isFinite(fillQty) ||
+        fillPrice <= 0 ||
+        fillQty <= 0
       ) {
         return null;
       }
@@ -120,10 +132,17 @@ export class BinanceExecutor {
       else if (currency !== commissionAsset) return null;
 
       net += realizedPnl - commission;
+      weightedPrice += fillPrice * fillQty;
+      totalQty += fillQty;
     }
 
     if (!currency || !Number.isFinite(net)) return null;
-    return { profit: net, currency };
+    const avgPrice = totalQty > 0 ? weightedPrice / totalQty : null;
+    return {
+      profit: net,
+      currency,
+      avgPrice: Number.isFinite(avgPrice ?? NaN) ? avgPrice : null,
+    };
   }
 
 
@@ -201,11 +220,15 @@ export class BinanceExecutor {
       }
 
       const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+      const recoveredAvgPrice =
+        Number.isFinite(avgPrice) && avgPrice > 0
+          ? avgPrice
+          : realized?.avgPrice ?? null;
       return {
         orderId,
         status: String(order.status ?? '').toUpperCase(),
         executedQty,
-        avgPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
+        avgPrice: recoveredAvgPrice ?? 0,
         realizedProfit: realized?.profit ?? null,
         realizedProfitCurrency: realized?.currency ?? null,
       };
