@@ -356,6 +356,38 @@ class TestEnsembleSafety:
         assert abs(result.confidence - 0.7) < 1e-12
 
 
+    def test_ensemble_load_rejects_config_fingerprint_corruption(self, tmp_path):
+        from src.models.ensemble_model import EnsembleModel
+
+        ensemble = EnsembleModel("TEST", "1h", use_lstm=False)
+        ensemble.model_dir = tmp_path / "ensemble"
+        ensemble.model_dir.mkdir(parents=True)
+        ensemble._weights = {"xgboost": 1.0}
+        ensemble._trained_models = ["xgboost"]
+        ensemble.confidence_min = 0.55
+        ensemble.disagreement_penalty = 0.10
+
+        import json
+        payload = {
+            "model": "ensemble",
+            "symbol": "TEST",
+            "timeframe": "1h",
+            "feature_cols": FEATURE_COLS,
+            "weights": {"xgboost": 1.0},
+            "trained_models": ["xgboost"],
+            "confidence_min": 0.55,
+            "disagreement_penalty": 0.10,
+        }
+        payload["fingerprint"] = ensemble._config_fingerprint(payload)
+        (ensemble.model_dir / "ensemble_config.json").write_text(json.dumps(payload))
+
+        loaded = json.loads((ensemble.model_dir / "ensemble_config.json").read_text())
+        loaded["symbol"] = "OTHER"
+        (ensemble.model_dir / "ensemble_config.json").write_text(json.dumps(loaded))
+
+        assert not ensemble.load()
+
+
 class TestModelServer:
 
     def test_server_singleton(self):
