@@ -121,7 +121,16 @@ export class SessionFilter {
   }
 
   currentSession(tsMs = Date.now()): TradingSession {
-    const hour = new Date(tsMs).getUTCHours();
+    const dt = new Date(tsMs);
+    const day = dt.getUTCDay();
+    const hour = dt.getUTCHours();
+
+    // Standard FX/Metals weekend closure in UTC:
+    // Friday late session through Sunday before the market reopens.
+    if (day === 6 || (day === 0 && hour < 22)) {
+      return 'DEAD_ZONE';
+    }
+
     if (hour >= 22 || hour < 1) return 'DEAD_ZONE';
     if (hour >= 13 && hour < 17) return 'OVERLAP';
     if (hour >= 17 && hour < 22) return 'NEWYORK';
