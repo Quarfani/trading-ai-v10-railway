@@ -216,7 +216,7 @@ class ModelServer:
                 logger.error(
                     f"Rejected invalid prediction_id for {symbol}/{timeframe}"
                 )
-                return
+                return False
 
         if predicted_signal is not None and predicted_signal not in (-1, 0, 1):
             logger.error(
@@ -268,7 +268,7 @@ class ModelServer:
         predicted_signal: int,
         actual_label: int,
         profit: float,
-    ) -> None:
+    ) -> bool:
         """Record a durable prediction outcome without requiring entry features."""
         key = self._key(symbol, timeframe)
 
@@ -282,12 +282,12 @@ class ModelServer:
                 f"Rejected invalid prediction/actual label for {symbol}/{timeframe}: "
                 f"predicted={predicted_signal} actual={actual_label}"
             )
-            return
+            return False
 
         profit_value = float(profit)
         if not np.isfinite(profit_value):
             logger.error(f"Rejected non-finite prediction outcome profit for {symbol}/{timeframe}")
-            return
+            return False
 
         with self._lock:
             outcomes = self._outcomes.setdefault(key, [])
@@ -309,7 +309,8 @@ class ModelServer:
                         f"Conflicting duplicate prediction outcome rejected: "
                         f"{symbol}/{timeframe}/{prediction_id}"
                     )
-                return
+                    return False
+                return True
 
             outcomes.append({
                 "prediction_id": prediction_id,
@@ -322,6 +323,7 @@ class ModelServer:
             self._outcomes[key] = outcomes[-5000:]
 
         self._check_degradation(symbol, timeframe)
+        return True
 
     def _trigger_online_update(self, symbol: str, timeframe: str) -> None:
         """Apply buffered samples to model via incremental learning."""
