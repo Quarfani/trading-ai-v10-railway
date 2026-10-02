@@ -155,6 +155,99 @@ async function main() {
   assert(partialLedger.brokerOrderId === "7002", "Binance partial recovery must persist broker order identity");
   partialDb.raw().close();
 
+  const modifyDb = new DatabaseManager(":memory:");
+  await modifyDb.initialize();
+  const modifyTradeId = modifyDb.insertTrade({
+    ticket: 504,
+    symbol: "BTCUSDT",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 1,
+    entry: 100,
+    sl: 90,
+    tp: 120,
+    status: "open",
+    openedAt: Date.now(),
+    source: "BINANCE_RECON_MODIFY",
+  } as any);
+  modifyDb.createExecutionLedger({
+    executionId: "binance-modify-1",
+    operationKey: "binance-modify-op",
+    action: "MOVE_SL_TP",
+    status: "UNKNOWN",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 1,
+    request: { tradeId: modifyTradeId, newSl: 95, newTp: 110 },
+  });
+
+  const modifyExec = {
+    getBinancePosition: async () => ({
+      positionAmt: 1,
+      entryPrice: 100,
+      unrealizedProfit: 0,
+    }),
+    getBinanceOpenOrders: async (symbol: string) => {
+      assert(symbol === "BTCUSDT", "protective-order recovery must use the trade symbol");
+      return [
+        { orderId: 7101, side: "SELL", type: "STOP_MARKET", stopPrice: "95" },
+        { orderId: 7102, side: "SELL", type: "TAKE_PROFIT_MARKET", stopPrice: "110" },
+      ];
+    },
+  };
+  await (makeReconciler(modifyDb, modifyExec) as any).reconcileOne(modifyDb.getOpenTrades()[0]);
+  const modifyLedger = modifyDb.getExecutionByOperationKey("binance-modify-op");
+  assert(modifyLedger.status === "EXECUTED", "verified Binance protective orders must resolve MOVE_SL_TP");
+  modifyDb.raw().close();
+
+  const modifyBlockedDb = new DatabaseManager(":memory:");
+  await modifyBlockedDb.initialize();
+  const modifyBlockedTradeId = modifyBlockedDb.insertTrade({
+    ticket: 505,
+    symbol: "BTCUSDT",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 1,
+    entry: 100,
+    sl: 90,
+    tp: 120,
+    status: "open",
+    openedAt: Date.now(),
+    source: "BINANCE_RECON_MODIFY_BLOCK",
+  } as any);
+  modifyBlockedDb.createExecutionLedger({
+    executionId: "binance-modify-blocked-1",
+    operationKey: "binance-modify-blocked-op",
+    action: "MOVE_SL_TP",
+    status: "UNKNOWN",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 1,
+    request: { tradeId: modifyBlockedTradeId, newSl: 95, newTp: 110 },
+  });
+  const modifyBlockedExec = {
+    getBinancePosition: async () => ({
+      positionAmt: 1,
+      entryPrice: 100,
+      unrealizedProfit: 0,
+    }),
+    getBinanceOpenOrders: async () => [
+      { orderId: 7103, side: "SELL", type: "STOP_MARKET", stopPrice: "95" },
+    ],
+  };
+  let modifyBlocked = false;
+  try {
+    await (makeReconciler(modifyBlockedDb, modifyBlockedExec) as any).reconcileOne(modifyBlockedDb.getOpenTrades()[0]);
+  } catch {
+    modifyBlocked = true;
+  }
+  assert(modifyBlocked, "missing one Binance protective leg must block the trade");
+  assert(
+    modifyBlockedDb.getExecutionByOperationKey("binance-modify-blocked-op").status === "UNKNOWN",
+    "incomplete Binance protective state must preserve UNKNOWN",
+  );
+  modifyBlockedDb.raw().close();
+
   const blockedDb = new DatabaseManager(":memory:");
   await blockedDb.initialize();
   const blockedTradeId = blockedDb.insertTrade({
@@ -206,7 +299,7 @@ async function main() {
   );
   blockedDb.raw().close();
 
-  console.log("Result: 12 passed, 0 failed");
+  console.log("Result: 20 passed, 0 failed");
 }
 
 main().catch(error => {
