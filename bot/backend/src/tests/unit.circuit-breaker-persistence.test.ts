@@ -43,4 +43,23 @@ const nonFinite = new CircuitBreaker(3, 60_000, null, store, "acct-D");
 nonFinite.recordResult(Number.NaN);
 assert(!nonFinite.canTrade(), "non-finite PnL must block circuit breaker trading");
 
-console.log("Result: 6 passed, 0 failed");
+const failingStore = {
+  getSetting: (_key: string) => null,
+  setSetting: (_key: string, _value: string) => {
+    throw new Error('storage unavailable');
+  },
+};
+const persistenceFailure = new CircuitBreaker(
+  3,
+  60_000,
+  null,
+  failingStore,
+  'acct-E',
+);
+persistenceFailure.recordResult(-10);
+assert(
+  !persistenceFailure.canTrade(),
+  'circuit-breaker persistence failure must block trading',
+);
+
+console.log("Result: 7 passed, 0 failed");
