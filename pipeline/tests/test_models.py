@@ -271,6 +271,8 @@ class TestXGBoostModel:
 
         ok = model.online_update(X_new, y_new)
         assert ok  # XGBoost supports incremental learning
+        meta = model.load_meta()
+        assert meta.get("checksum") == model._model_checksum()
 
 
 class TestModelServer:
