@@ -64,6 +64,9 @@ export class PositionSizer {
       !Number.isFinite(entry) ||
       !(sl > 0) ||
       !Number.isFinite(sl) ||
+      (side !== 'BUY' && side !== 'SELL') ||
+      (side === 'BUY' && sl >= entry) ||
+      (side === 'SELL' && sl <= entry) ||
       !Number.isFinite(qualityScore) ||
       qualityScore < 0 ||
       qualityScore > 100
