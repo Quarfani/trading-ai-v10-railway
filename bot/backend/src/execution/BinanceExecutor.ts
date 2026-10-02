@@ -601,9 +601,29 @@ export class BinanceExecutor {
         }
       );
 
-      const fillPrice = Number(entry.avgPrice ?? entry.fills?.[0]?.price ?? signal.price);
+      let fillPrice = Number(entry.avgPrice ?? entry.fills?.[0]?.price ?? 0);
       const executedQty = Number(entry.executedQty ?? entry.origQty ?? quantity);
       const ticket = Number(entry.orderId);
+      let entryCommission = 0;
+      let entryCommissionCurrency: string | undefined;
+      if (!this.isFutures) {
+        const summary = await this.getSpotOrderFillSummary(
+          signal.symbol,
+          ticket,
+          executedQty,
+        );
+        if (!summary) {
+          throw new Error(
+            `Binance Spot entry fills/commission could not be verified for ${signal.symbol}`
+          );
+        }
+        fillPrice = summary.avgPrice;
+        entryCommission = summary.feeQuote;
+        entryCommissionCurrency = summary.currency;
+      }
+      if (!(fillPrice > 0) || !Number.isFinite(fillPrice)) {
+        throw new Error('Binance order returned invalid fill price');
+      }
       if (!(executedQty > 0) || !Number.isFinite(executedQty)) {
         throw new Error('Binance order returned invalid executed quantity');
       }
@@ -646,15 +666,21 @@ export class BinanceExecutor {
 
       return {
         ticket,
-        symbol:   signal.symbol,
-        side:     signal.side,
-        volume:   executedQty,
-        entry:    fillPrice,
-        sl:       signal.sl,
-        tp:       signal.tp,
-        status:   'open',
+        symbol: signal.symbol,
+        side: signal.side,
+        volume: executedQty,
+        entry: fillPrice,
+        sl: signal.sl,
+        tp: signal.tp,
+        status: 'open',
         openedAt: Date.now(),
-        source:   signal.source,
+        source: signal.source,
+        ...(entryCommission > 0
+          ? {
+              commission: entryCommission,
+              commissionCurrency: entryCommissionCurrency,
+            }
+          : {}),
       };
 
     } catch (e: any) {
@@ -1481,7 +1507,6 @@ export class BinanceExecutor {
       }
 
       const status = String(order?.status ?? '').toUpperCase();
-      const executedQty = Number(order?.executedQty ?? order?.cumQty ?? 0);
       if (status && status !== 'FILLED') {
         throw new Error(`Binance partial close was not fully filled: status=${status}`);
       }
@@ -1642,7 +1667,6 @@ export class BinanceExecutor {
         }
 
         const closeStatus = String(closeOrder?.status ?? '').toUpperCase();
-        const executedQty = Number(closeOrder?.executedQty ?? closeOrder?.cumQty ?? 0);
         const quantityTolerance = Math.max(
           getSymbolSpec(symbol).volumeStep,
           Math.abs(closeQty) * 0.0001,
@@ -1738,7 +1762,6 @@ export class BinanceExecutor {
         });
 
         const status = String(closeOrder?.status ?? '').toUpperCase();
-        const executedQty = Number(
           closeOrder?.executedQty ??
           closeOrder?.origQty ??
           0,
