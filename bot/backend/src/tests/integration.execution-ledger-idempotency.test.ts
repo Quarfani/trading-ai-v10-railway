@@ -463,6 +463,95 @@ async function main() {
   );
   atomicFullDb.raw().close();
 
+  const atomicSlTpDb = new DatabaseManager(":memory:");
+  await atomicSlTpDb.initialize();
+  const atomicSlTpTradeId = atomicSlTpDb.insertTrade({
+    ticket: 993, symbol: "EURUSD.a", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(), source: "ATOMIC_SLTP_TEST",
+  } as any);
+  atomicSlTpDb.createExecutionLedger({
+    executionId: "atomic-sltp-fail",
+    operationKey: "atomic-sltp-fail-op",
+    action: "MOVE_SL_TP",
+    status: "UNKNOWN",
+    symbol: "EURUSD.a",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId: atomicSlTpTradeId, newSl: 1.095, newTp: 1.115 },
+  });
+  atomicSlTpDb.raw().exec(`
+    CREATE TRIGGER fail_atomic_sltp_ledger
+    BEFORE UPDATE OF status ON execution_ledger
+    WHEN NEW.executionId='atomic-sltp-fail' AND NEW.status='EXECUTED'
+    BEGIN SELECT RAISE(ABORT, 'forced sltp ledger failure'); END;
+  `);
+  let atomicSlTpFailed = false;
+  try {
+    atomicSlTpDb.resolveReconciledSLTP(
+      atomicSlTpTradeId,
+      "atomic-sltp-fail",
+      1.095,
+      1.115,
+      { broker: "binance", ticket: 993 },
+      993,
+    );
+  } catch {
+    atomicSlTpFailed = true;
+  }
+  assert(atomicSlTpFailed, "forced SLTP ledger failure must abort the atomic transaction");
+  const rolledBackSlTp = atomicSlTpDb.raw()
+    .prepare("SELECT sl, tp FROM trades WHERE id=?")
+    .get(atomicSlTpTradeId) as any;
+  assert(
+    rolledBackSlTp.sl === 1.09 && rolledBackSlTp.tp === 1.12,
+    "atomic SLTP failure must roll back the trade protection values",
+  );
+  assert(
+    atomicSlTpDb.getExecutionByOperationKey("atomic-sltp-fail-op").status === "UNKNOWN",
+    "atomic SLTP failure must preserve UNKNOWN ledger state",
+  );
+  atomicSlTpDb.raw().close();
+
+  const atomicSlTpSuccessDb = new DatabaseManager(":memory:");
+  await atomicSlTpSuccessDb.initialize();
+  const atomicSlTpSuccessTradeId = atomicSlTpSuccessDb.insertTrade({
+    ticket: 994, symbol: "EURUSD.a", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(), source: "ATOMIC_SLTP_SUCCESS",
+  } as any);
+  atomicSlTpSuccessDb.createExecutionLedger({
+    executionId: "atomic-sltp-success",
+    operationKey: "atomic-sltp-success-op",
+    action: "MOVE_SL_TP",
+    status: "UNKNOWN",
+    symbol: "EURUSD.a",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId: atomicSlTpSuccessTradeId, newSl: 1.095, newTp: 1.115 },
+  });
+  assert(
+    atomicSlTpSuccessDb.resolveReconciledSLTP(
+      atomicSlTpSuccessTradeId,
+      "atomic-sltp-success",
+      1.095,
+      1.115,
+      { broker: "binance", ticket: 994 },
+      994,
+    ) === true,
+    "atomic SLTP reconciliation must resolve the operation",
+  );
+  const slTpSuccessTrade = atomicSlTpSuccessDb.raw()
+    .prepare("SELECT sl, tp FROM trades WHERE id=?")
+    .get(atomicSlTpSuccessTradeId) as any;
+  assert(
+    slTpSuccessTrade.sl === 1.095 && slTpSuccessTrade.tp === 1.115,
+    "atomic SLTP reconciliation must persist current protection values",
+  );
+  assert(
+    atomicSlTpSuccessDb.getExecutionByOperationKey("atomic-sltp-success-op").status === "EXECUTED",
+    "atomic SLTP reconciliation must execute the ledger",
+  );
+  atomicSlTpSuccessDb.raw().close();
+
   const stateDb = new DatabaseManager(":memory:");
   await stateDb.initialize();
   const invalidStateCreated = stateDb.createExecutionLedger({
@@ -592,7 +681,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 25 passed, 0 failed");
+  console.log("Result: 31 passed, 0 failed");
 }
 
 main().catch(error => {
