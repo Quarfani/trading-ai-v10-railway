@@ -477,8 +477,8 @@ export class MLTrainingPipeline {
         FROM trades
         WHERE status='closed'
           AND symbol=?
-          AND openedAt > ?
-          AND openedAt < ?
+          AND closedAt > ?
+          AND closedAt < ?
       `).get(symbol, cutoff, asOfMs) as any;
       const value = Number(r?.wr);
       return Number.isFinite(value) ? value : 0.5;
@@ -497,8 +497,8 @@ export class MLTrainingPipeline {
         FROM trades
         WHERE status='closed'
           AND source LIKE ?
-          AND openedAt > ?
-          AND openedAt < ?
+          AND closedAt > ?
+          AND closedAt < ?
       `).get(`%${primary}%`, cutoff, asOfMs) as any;
       const value = Number(r?.wr);
       return Number.isFinite(value) ? value : 0.5;
