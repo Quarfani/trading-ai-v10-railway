@@ -75,6 +75,96 @@ async function main() {
     assert(resolved?.profit === 25, "closed MT5 history must expose authoritative PnL");
     assert(resolved?.reason === "SL", "closed MT5 history must preserve close reason");
 
+    const modifyDb = new DatabaseManager(":memory:");
+    await modifyDb.initialize();
+    const modifyTradeId = modifyDb.insertTrade({
+      ticket: 76, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 0.1,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: "open", openedAt: Date.now(),
+      source: "RECON_MODIFY_TEST",
+    } as any);
+    modifyDb.createExecutionLedger({
+      executionId: "recon-modify-1",
+      operationKey: "recon-modify-op",
+      action: "MOVE_SL_TP",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.1,
+      request: { tradeId: modifyTradeId, newSl: 1.0950, newTp: 1.1150 },
+    });
+    (axios as any).get = async (url: string) => {
+      if (url.endsWith("/positions")) {
+        return {
+          data: {
+            ok: true,
+            positions: [{
+              ticket: 76, symbol: "EURUSD", type: "BUY", volume: 0.1,
+              sl: 1.0950, tp: 1.1150,
+            }],
+          },
+        };
+      }
+      throw new Error("unexpected URL");
+    };
+    const modifyExec = {} as any;
+    const modifyReconciler = new Reconciler(
+      config(), modifyDb, modifyExec,
+      { sendMessage: async () => {} } as any,
+      { recordClose: () => {} } as any,
+      {} as any,
+      { activate: async () => {} } as any,
+      () => {},
+    );
+    await (modifyReconciler as any).reconcileOne(modifyDb.getOpenTrades()[0]);
+    assert(
+      modifyDb.getExecutionByOperationKey("recon-modify-op").status === "EXECUTED",
+      "matching MT5 protective state must resolve UNKNOWN MOVE_SL_TP",
+    );
+    const modifiedTrade = modifyDb.getOpenTrades()[0];
+    assert(
+      modifiedTrade.sl === 1.0950 && modifiedTrade.tp === 1.1150,
+      "MT5 protective recovery must persist the broker SL/TP values",
+    );
+    modifyDb.raw().close();
+
+    const driftDb = new DatabaseManager(":memory:");
+    await driftDb.initialize();
+    driftDb.insertTrade({
+      ticket: 75, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 0.1,
+      entry: 1.1000, sl: 1.0900, tp: 1.1200, status: "open", openedAt: Date.now(),
+      source: "RECON_DRIFT_TEST",
+    } as any);
+    (axios as any).get = async (url: string) => {
+      if (url.endsWith("/positions")) {
+        return {
+          data: {
+            ok: true,
+            positions: [{
+              ticket: 75, symbol: "EURUSD", type: "BUY", volume: 0.1,
+              sl: 1.0950, tp: 1.1150,
+            }],
+          },
+        };
+      }
+      throw new Error("unexpected URL");
+    };
+    let driftBlocked = false;
+    try {
+      await (new Reconciler(
+        config(), driftDb, {} as any,
+        { sendMessage: async () => {} } as any,
+        { recordClose: () => {} } as any,
+        {} as any,
+        { activate: async () => {} } as any,
+        () => {},
+      ) as any).reconcileOne(driftDb.getOpenTrades()[0]);
+    } catch {
+      driftBlocked = true;
+    }
+    assert(driftBlocked, "unexplained MT5 protective-order drift must block runtime reconciliation");
+    assert(driftDb.getOpenTrades().length === 1, "protective-order drift must not close the trade silently");
+    driftDb.raw().close();
+
     const db = new DatabaseManager(":memory:");
     await db.initialize();
     const tradeId = db.insertTrade({
@@ -128,7 +218,7 @@ async function main() {
       db.raw().close();
     }
 
-    console.log("Result: 8 passed, 0 failed");
+    console.log("Result: 13 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
