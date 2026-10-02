@@ -248,6 +248,32 @@ class BaseModel(ABC):
                 self._meta = json.load(f)
         return self._meta
 
+    def validate_loaded_metadata(self) -> bool:
+        """
+        Verify that a persisted model belongs to this exact model/symbol/timeframe
+        and that its feature schema and file checksum are intact.
+        """
+        try:
+            meta = self.load_meta()
+            if not isinstance(meta, dict) or not meta:
+                return False
+            if meta.get("model") != self.name:
+                return False
+            if str(meta.get("symbol")) != str(self.symbol):
+                return False
+            if str(meta.get("timeframe")) != str(self.timeframe):
+                return False
+            feature_cols = meta.get("feature_cols")
+            if feature_cols != FEATURE_COLS:
+                return False
+            expected_checksum = str(meta.get("checksum") or "")
+            actual_checksum = self._model_checksum()
+            if not expected_checksum or expected_checksum != actual_checksum:
+                return False
+            return True
+        except Exception:
+            return False
+
     def is_trained(self) -> bool:
         return self._trained or (self.model_dir / "meta.json").exists()
 
