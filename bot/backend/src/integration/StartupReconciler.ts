@@ -459,8 +459,11 @@ export class StartupReconciler {
         )
       ) continue;
 
-      const resolved = this.db.resolveExecutionLedger(
+      const resolved = this.db.resolveReconciledSLTP(
+        tradeId,
         String(row.executionId),
+        newSl,
+        newTp,
         {
           broker: 'binance',
           ticket: Number(trade.ticket),
@@ -730,16 +733,30 @@ export class StartupReconciler {
       const openOrders = await exec.getOpenOrders(t.symbol);
       const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
       const matching = openOrders.filter((o: any) => String(o.side).toUpperCase() === closeSide);
-      const stopOrders = matching.filter((o: any) => /STOP_LOSS|STOP_MARKET/.test(String(o.type ?? '').toUpperCase()));
-      const takeOrders = matching.filter((o: any) => /TAKE_PROFIT|LIMIT_MAKER/.test(String(o.type ?? '').toUpperCase()));
-      const slOk = stopOrders.some((o: any) => Number.isFinite(Number(o.stopPrice)) && Math.abs(Number(o.stopPrice) - t.sl) <= Math.max(1e-8, t.sl * 0.001));
-      const tpOk = takeOrders.some((o: any) => {
-        const p0 = Number(o.price);
-        const sp = Number(o.stopPrice);
-        return (Number.isFinite(p0) && Math.abs(p0 - t.tp) <= Math.max(1e-8, t.tp * 0.001)) ||
-               (Number.isFinite(sp) && Math.abs(sp - t.tp) <= Math.max(1e-8, t.tp * 0.001));
-      });
+      const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+      const stopOrders = matching.filter((o: any) =>
+        String(o.type ?? '').toUpperCase() === 'STOP_MARKET' &&
+        String(o.closePosition).toLowerCase() === 'true',
+      );
+      const takeOrders = matching.filter((o: any) =>
+        String(o.type ?? '').toUpperCase() === 'TAKE_PROFIT_MARKET' &&
+        String(o.closePosition).toLowerCase() === 'true',
+      );
+      const slOk = stopOrders.some((o: any) =>
+        Number.isFinite(Number(o.stopPrice)) &&
+        Math.abs(Number(o.stopPrice) - t.sl) <= tolerance(t.sl),
+      );
+      const tpOk = takeOrders.some((o: any) =>
+        Number.isFinite(Number(o.stopPrice)) &&
+        Math.abs(Number(o.stopPrice) - t.tp) <= tolerance(t.tp),
+      );
       if (!slOk || !tpOk) throw new Error(`Binance protective orders missing/mismatched for ${t.symbol}`);
+      if (
+        (t.side === 'BUY' && !(t.sl < p.entryPrice && t.tp > p.entryPrice)) ||
+        (t.side === 'SELL' && !(t.sl > p.entryPrice && t.tp < p.entryPrice))
+      ) {
+        throw new Error(`Binance protective order direction invalid for ${t.symbol}`);
+      }
     }
 
     for (const [symbol] of bySymbol) {
