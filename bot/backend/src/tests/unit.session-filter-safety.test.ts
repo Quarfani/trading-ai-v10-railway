@@ -37,4 +37,24 @@ assert(
   syntheticCrypto.session === 'CRYPTO_24_7',
   'USDT-suffixed Binance symbols must use the crypto session path',
 );
-console.log('Result: 7 passed, 0 failed');
+const fundingBeforeMidnight = filter.check(
+  'TREND',
+  'BTCUSDT',
+  Date.parse('2026-10-02T23:59:00.000Z'),
+);
+assert(
+  !fundingBeforeMidnight.allowed,
+  'BTCUSDT must be blocked one minute before the 00:00 UTC funding window',
+);
+
+const fundingAfterMidnight = filter.check(
+  'TREND',
+  'BTCUSDT',
+  Date.parse('2026-10-03T00:04:00.000Z'),
+);
+assert(
+  !fundingAfterMidnight.allowed,
+  'BTCUSDT must remain blocked inside the 00:00 UTC funding buffer',
+);
+
+console.log('Result: 9 passed, 0 failed');
