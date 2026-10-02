@@ -3,7 +3,7 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 984f0a5b0975cf2a4cdcce55081b5dc80c46df1d
+Current head: a7a7ba613bb09e0ec756869178a3b52a04900572
 Current verified status: The code changes in this development line have NOT been validated by a green GitHub Actions run. GitHub Actions capacity is exhausted, so do not burn minutes on blind reruns.
 
 ## TARGET
@@ -138,7 +138,17 @@ IMPORTANT: test files contain human-readable Result counters, but because CI/loc
 8. Real broker E2E/soak evidence remains outstanding for non-USD conversions, restart interruption, broker latency, and long-run protection/reconciliation behavior.
 
 ## IMMEDIATE NEXT TASK
-Audit Binance Spot OCO restart recovery and protective-order half-creation failure handling. Keep UNKNOWN states authoritative and never auto-retry ambiguous broker operations.
+Audit Binance Spot accounting semantics for entry/exit commission and multi-trade same-asset inventory, then audit all UNKNOWN close reconciliation paths for exact broker evidence. Continue fail-closed behavior and do not mutate local state on unattributed broker actions.
+
+## LATEST CHECKPOINT
+- Spot OCO cancellation now uses the exact OCO list identity and verifies the list is fully done and all legs are no longer open before manual market close.
+- Spot close post-state now verifies the exact inventory delta (before - executedQty = after) instead of requiring total asset inventory to reach zero, so multiple same-asset holdings are supported without false residual failures.
+- Binance Spot close now requires authoritative fills via /api/v3/myTrades and computes exit PnL in the quote asset from fill price/qty/commission. Unknown third-asset commissions fail closed.
+- ExecutionGateway passes local trade entry price/side into Binance close and startup/runtime recovery so Spot close PnL can be recovered after restart.
+- Unattributed broker-side Binance partial reductions no longer rewrite local trade volume; reconciliation blocks for manual reconciliation instead.
+- Binance Futures SL/TP creation is recover-before-create and recover-after-timeout; Spot OCO creation is operation-key idempotent and restart-recoverable.
+- Ensemble/model artifact validation, baseline-aware training recommendation, NVIDIA fail-closed live behavior, daily equity anchor corruption handling, correlation fail-closed behavior, and PositionSizer stop-direction validation are all in the current development line.
+- CI/local green validation is still outstanding. No claim of passing tests is valid until execution is available.
 
 ## RESUME PROCEDURE
 1. Read this file first.
@@ -149,13 +159,12 @@ Audit Binance Spot OCO restart recovery and protective-order half-creation failu
 
 ## DEVELOPMENT HISTORY / RECENT HEADS
 Recent important commits in this development line include:
-- 2b47ca9aa7d6b1d29fd3d72127b326c30104f52e — Binance clientOrderId <=32 enforcement
-- 7d38f252e4862ab9fd79e786d541edcf1dc8ddbf — unified ExecutionGateway/BinanceExecutor clientOrderId derivation
-- d263c2e994cfa261d0040caa31dd208321fc22c1 — restart-safe broker-visible Binance protective order recovery
-- 5effef3c07cbb1049b83236c24a860a5a5a311ca — emergency-close residual-position verification
-- 56630f3f8330027b97c9a161d14a69a9208b999c — CircuitBreaker null-Telegram safety
-- d60303374165c6db8a1787d01d31c2b3307d811e — CircuitBreaker persisted-state fail-closed
-- 984f0a5b0975cf2a4cdcce55081b5dc80c46df1d — latest current HEAD checkpoint
+- 700e11b7814b4f47ddecac2a99a977d443309008 — Spot OCO list-level cancellation and exact inventory-delta verification
+- 42cca10fcb05550fd95744a5b34a6eba75be162b — Spot close PnL recovery from authoritative fills
+- 6ede90b590abdb6208b1fa3005795c99acf4fff3 — pass entry price/side into Binance recovery
+- 336763262467f3210dbb69d84eb9a2dab843f22e — fail closed on unattributed Binance position reductions
+- a26442ebfbe5cb5bf099494e48f8f029b1a554e5 — NVIDIA live fail-closed
+- a7a7ba613bb09e0ec756869178a3b52a04900572 — latest current HEAD checkpoint
 
 ## FINAL RULE
 Never infer “internet is closed” from a single tool failure. Verify the specific service/tool limitation separately before reporting connectivity problems.
