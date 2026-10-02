@@ -59,7 +59,22 @@ export class MLEnhancer {
       return signal;
     }
 
-    const cacheKey = `${signal.symbol}_${signal.side}_${tf}_${signal.timestamp}`;
+    const cacheFingerprint = JSON.stringify({
+      symbol: signal.symbol,
+      side: signal.side,
+      timeframe: tf,
+      signalTimestamp: signal.timestamp,
+      candles: candles.slice(-5).map(c => [
+        c.time, c.open, c.high, c.low, c.close, c.volume,
+      ]),
+      h4Candles: h4Candles.slice(-5).map(c => [
+        c.time, c.open, c.high, c.low, c.close, c.volume,
+      ]),
+    });
+    const cacheKey = crypto
+      .createHash('sha256')
+      .update(cacheFingerprint)
+      .digest('hex');
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.ts < 60_000) return cached.result;
 
