@@ -47,6 +47,25 @@ registerBrokerContract({
   verified: true,
 });
 
+const corruptDb = new DatabaseManager(':memory:');
+await corruptDb.initialize();
+const corruptKey = 'daily_start_equity:loss-corrupt:' + new Date().toISOString().slice(0, 10);
+corruptDb.setSetting(corruptKey, 'NaN');
+const corruptLossGuard = new DailyLossGuard(
+  { ...config, accountName: 'loss-corrupt', mode: 'binance' } as any,
+  corruptDb,
+  telegram,
+);
+assert(
+  !(await corruptLossGuard.canTrade({}, 5000)),
+  'corrupt live daily equity anchor must block the loss guard',
+);
+assert(
+  corruptDb.getSetting(corruptKey) === 'NaN',
+  'corrupt daily loss equity anchor must not be overwritten',
+);
+corruptDb.raw().close();
+
 const invalidConfig = { ...config, maxDailyLoss: Number.NaN } as any;
 const invalidGuard = new DailyLossGuard(invalidConfig, db, telegram);
 assert(
@@ -99,7 +118,7 @@ assert(
 
 
 clearBrokerContracts();
-console.log("Result: 8 passed, 0 failed");
+console.log("Result: 10 passed, 0 failed");
 }
 
 main().catch(error => {
