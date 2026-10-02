@@ -495,6 +495,48 @@ def test_idempotency_loader_rejects_infinite_timestamps(tmp_path, monkeypatch):
     bridge._idempotency_load_disk()
     assert bridge._idempotency_lookup("infinite") is None
 
+def test_idempotency_key_reuse_with_different_request_is_conflict(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "simulation"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    bridge._sim_positions[9001] = {
+        "ticket": 9001,
+        "symbol": "EURUSD",
+        "side": "BUY",
+        "volume": 0.1,
+        "sl": 1.09,
+        "tp": 1.12,
+        "price": 1.10,
+    }
+    client = bridge.app.test_client()
+
+    first = client.post(
+        "/modify",
+        json={
+            "ticket": 9001,
+            "sl": 1.095,
+            "tp": 1.115,
+            "idempotency_key": "same-key",
+        },
+    )
+    assert first.status_code == 200
+    assert first.get_json()["ok"] is True
+
+    conflict = client.post(
+        "/modify",
+        json={
+            "ticket": 9001,
+            "sl": 1.08,
+            "tp": 1.13,
+            "idempotency_key": "same-key",
+        },
+    )
+    assert conflict.status_code == 409
+    assert "different request" in conflict.get_json()["error"]
+
+    bridge._sim_positions.pop(9001, None)
+
+
 def test_positions_endpoint_fails_closed_when_mt5_returns_none(monkeypatch):
     bridge._idempotency_cache.clear()
     bridge.BRIDGE_MODE = "live"
