@@ -51,7 +51,11 @@ export class BinanceExecutor {
     });
   }
 
-  private async emergencyCloseAfterProtectionFailure(signal: Signal, quantity: number): Promise<void> {
+  private async emergencyCloseAfterProtectionFailure(
+    signal: Signal,
+    quantity: number,
+    operationKey?: string,
+  ): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const spec = getSymbolSpec(signal.symbol);
     const result = await this.signedPost(
@@ -62,6 +66,9 @@ export class BinanceExecutor {
         type: 'MARKET',
         quantity: this.formatQty(quantity, spec.volumeStep),
         ...(this.isFutures ? { reduceOnly: 'true' } : {}),
+        ...(operationKey
+          ? { newClientOrderId: this.makeClientOrderId(`PROTECTION_FAIL:${operationKey}`) }
+          : {}),
       },
     );
 
@@ -336,7 +343,11 @@ export class BinanceExecutor {
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
-        const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQty).catch(e => e);
+        const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+          signal,
+          executedQty,
+          clientOrderId,
+        ).catch(e => e);
         if (emergencyError) throw new Error(`Protection failed and emergency close failed for ${signal.symbol}`);
         if (this.isFutures) {
           const remaining = await this.getPosition(signal.symbol);
