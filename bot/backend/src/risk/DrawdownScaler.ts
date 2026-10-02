@@ -49,6 +49,20 @@ export class DrawdownScaler {
    * @param currentEquity  Live account equity
    */
   getStatus(currentEquity: number): DrawdownStatus {
+    if (!(Number.isFinite(currentEquity) && currentEquity > 0)) {
+      const safePeak = Number.isFinite(this.peakEquity) && this.peakEquity > 0
+        ? this.peakEquity
+        : 0;
+      return {
+        peakEquity: safePeak,
+        currentEquity,
+        drawdownPct: 1,
+        volumeScale: 0,
+        level: 'STOP',
+        message: '🛑 Invalid current equity — TRADING STOPPED',
+      };
+    }
+
     // Update peak if equity is at a new high
     if (currentEquity > this.peakEquity) {
       this.peakEquity = currentEquity;
@@ -103,6 +117,9 @@ export class DrawdownScaler {
 
   /** Manually reset peak (e.g. after manual deposit) */
   resetPeak(newPeak: number) {
+    if (!(Number.isFinite(newPeak) && newPeak > 0)) {
+      throw new Error('Equity peak must be a finite positive number');
+    }
     this.peakEquity = newPeak;
     this.savePeak();
     this.logger.info(`Peak manually reset to $${newPeak.toFixed(2)}`);
@@ -133,8 +150,13 @@ export class DrawdownScaler {
     try {
       const saved = this.db.getSetting(this.peakKey);
       if (saved) {
-        this.peakEquity = Math.max(this.peakEquity, Number(saved));
-        this.logger.info(`Loaded equity peak: $${this.peakEquity.toFixed(2)}`);
+        const parsed = Number(saved);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          this.peakEquity = Math.max(this.peakEquity, parsed);
+          this.logger.info(`Loaded equity peak: ${this.peakEquity.toFixed(2)}`);
+        } else if (this.failClosed) {
+          throw new Error('Equity peak persistence contained an invalid value');
+        }
       }
     } catch (e) {
       if (this.failClosed) throw new Error(`Equity peak load failed: ${e instanceof Error ? e.message : String(e)}`);
