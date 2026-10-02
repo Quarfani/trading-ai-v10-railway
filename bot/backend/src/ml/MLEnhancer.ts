@@ -15,6 +15,7 @@ interface MLResponse {
   model: string;
   model_version?: string;
   prompt_version?: string;
+  prediction_id?: string;
 }
 
 export class MLEnhancer {
@@ -68,7 +69,12 @@ export class MLEnhancer {
         headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {},
       });
       const ml = res.data;
+      const predictionId =
+        String(ml.prediction_id ?? '').trim() ||
+        crypto.randomUUID();
+
       this.recordDecision({
+        predictionId,
         symbol: signal.symbol, modelName: ml.model, modelVersion: ml.model_version ?? '',
         promptVersion: ml.prompt_version ?? '', inputHash, output: ml, latencyMs: Date.now() - started,
         decision: ml.signal,
@@ -104,6 +110,7 @@ export class MLEnhancer {
 
       const enhanced: Signal = {
         ...signal,
+        mlPredictionId: predictionId,
         confidence: +newConf.toFixed(4),
         reason: `${signal.reason} [ML:${ml.model} p${signal.side}=${(signal.side === 'BUY' ? ml.prob_buy : ml.prob_sell).toFixed(2)}]`,
       };
@@ -118,11 +125,24 @@ export class MLEnhancer {
     }
   }
 
-  async recordOutcome(symbol: string, timeframe: string, profit: number, signal: number, candles: Candle[]): Promise<void> {
+  async recordOutcome(
+    symbol: string,
+    timeframe: string,
+    profit: number,
+    signal: number,
+    candles: Candle[],
+    predictionId?: string,
+    predictedSignal?: number,
+  ): Promise<void> {
     if (!this.enabled || !this.available || this.required === false && process.env.ML_ONLINE_LEARNING_ENABLED !== 'true') return;
     try {
       await axios.post(`${this.url}/record_trade`, {
-        symbol, timeframe, profit, signal,
+        symbol,
+        timeframe,
+        profit,
+        signal,
+        ...(predictionId ? { prediction_id: predictionId } : {}),
+        ...(predictedSignal !== undefined ? { predicted_signal: predictedSignal } : {}),
         entry_candles: candles.slice(-60).map(c => [c.time, c.open, c.high, c.low, c.close, c.volume]),
       }, { timeout: 2_000, headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {} });
     } catch (e: any) {
@@ -143,14 +163,15 @@ export class MLEnhancer {
   }
 
   private recordDecision(d: {
+    predictionId: string;
     symbol: string; modelName: string; modelVersion: string; promptVersion: string;
     inputHash: string; output: unknown; latencyMs: number; decision: string;
   }) {
     try {
       this.db.raw().prepare(`
-        INSERT INTO model_decisions(modelName,modelVersion,promptVersion,inputHash,output,latencyMs,decision,symbol,timestamp)
-        VALUES (?,?,?,?,?,?,?,?,?)
-      `).run(d.modelName, d.modelVersion, d.promptVersion, d.inputHash, JSON.stringify(d.output), d.latencyMs, d.decision, d.symbol, Date.now());
+        INSERT INTO model_decisions(predictionId,modelName,modelVersion,promptVersion,inputHash,output,latencyMs,decision,symbol,timestamp)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+      `).run(d.predictionId, d.modelName, d.modelVersion, d.promptVersion, d.inputHash, JSON.stringify(d.output), d.latencyMs, d.decision, d.symbol, Date.now());
     } catch (e) {
       // A model audit write is important, but a transient DB issue must still not
       // silently permit a required-ML trade.
