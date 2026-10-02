@@ -127,6 +127,31 @@ export class BinanceExecutor {
   }
 
 
+  async recoverProtectionByOperation(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{
+    sl: any | null;
+    tp: any | null;
+  }> {
+    try {
+      const sl = await this.findOrderByClientId(
+        symbol,
+        this.makeProtectionClientOrderId(operationKey, 'SL'),
+      );
+      const tp = await this.findOrderByClientId(
+        symbol,
+        this.makeProtectionClientOrderId(operationKey, 'TP'),
+      );
+      return { sl: sl ?? null, tp: tp ?? null };
+    } catch (e: any) {
+      this.logger.warn(
+        `[Binance] recoverProtectionByOperation failed: ${e?.message ?? e}`,
+      );
+      return { sl: null, tp: null };
+    }
+  }
+
   async recoverOperation(
     symbol: string,
     operationKey: string,
@@ -197,6 +222,18 @@ export class BinanceExecutor {
     return `ta_${digest}`.slice(0, 36);
   }
 
+  private makeProtectionClientOrderId(
+    operationKey: string,
+    kind: 'SL' | 'TP',
+  ): string {
+    const digest = crypto
+      .createHash('sha256')
+      .update(`PROTECTION:${kind}:${operationKey}`)
+      .digest('hex')
+      .slice(0, 28);
+    return `ta${kind.toLowerCase()}_${digest}`.slice(0, 36);
+  }
+
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
     try {
       return await this.signedGet(
@@ -263,7 +300,7 @@ export class BinanceExecutor {
       //    immediate market close so we never knowingly continue unprotected.
       try {
         if (this.isFutures) {
-          await this.placeSLTP(signal, executedQty, ticket, spec);
+          await this.placeSLTP(signal, executedQty, ticket, spec, clientOrderId);
         } else {
           await this.placeOCO(signal, executedQty, ticket, spec);
         }
@@ -330,6 +367,7 @@ export class BinanceExecutor {
     quantity: number,
     ticket:   number,
     spec:     ReturnType<typeof getSymbolSpec>,
+    protectionKey?: string,
   ): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const qty       = this.formatQty(quantity, spec.volumeStep);
@@ -337,6 +375,12 @@ export class BinanceExecutor {
     const tpPrice   = this.formatPrice(signal.tp, spec.pip);
 
     const ids: OpenOrderIds = {};
+    const slClientOrderId = protectionKey
+      ? this.makeProtectionClientOrderId(protectionKey, 'SL')
+      : undefined;
+    const tpClientOrderId = protectionKey
+      ? this.makeProtectionClientOrderId(protectionKey, 'TP')
+      : undefined;
 
     // Stop Loss
     try {
@@ -347,6 +391,7 @@ export class BinanceExecutor {
         stopPrice:        slPrice,
         closePosition:    'true',
         workingType:      'MARK_PRICE',
+        ...(slClientOrderId ? { newClientOrderId: slClientOrderId } : {}),
       });
       ids.slOrderId = Number(slOrder.orderId);
       this.logger.info(
@@ -365,6 +410,7 @@ export class BinanceExecutor {
         stopPrice:        tpPrice,
         closePosition:    'true',
         workingType:      'MARK_PRICE',
+        ...(tpClientOrderId ? { newClientOrderId: tpClientOrderId } : {}),
       });
       ids.tpOrderId = Number(tpOrder.orderId);
       this.logger.info(
@@ -435,6 +481,7 @@ export class BinanceExecutor {
     side:'BUY'|'SELL',
     newSl:number,
     newTp:number,
+    protectionKey?: string,
   ):Promise<boolean>{
     if(!this.isFutures)return false;
     try{
@@ -481,6 +528,7 @@ export class BinanceExecutor {
         quantity,
         ticket,
         getSymbolSpec(symbol),
+        protectionKey,
       );
       return true;
     }catch(e:any){
