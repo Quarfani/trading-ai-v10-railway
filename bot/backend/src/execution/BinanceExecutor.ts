@@ -511,6 +511,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -570,6 +571,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
@@ -615,6 +617,7 @@ export class BinanceExecutor {
             closeQty,
             getSymbolSpec(symbol).volumeStep,
           ),
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
       }
 
