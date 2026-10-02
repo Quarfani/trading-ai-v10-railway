@@ -3,7 +3,7 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 73463b94763a62277739aaa39fca8de0bc9dd936
+Current head: 41bf5a64c3ea62008135a30eb8e9c3631da29760
 Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410 (latest known green; post-checkpoint changes are unverified until CI is available)
 
 ## TARGET
@@ -50,10 +50,10 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, corrupt persisted execution results, and conflicting partial position/history state.
 
 ## NEXT TASK
-After Actions capacity/log availability is restored:
-A. Run the focused backend integration test covering migration v15 and indexed execution-ledger trade identity.
-B. Verify CI on the current main head; if green, continue paper execution/reconciliation soak evidence.
-C. Preserve UNKNOWN execution states and never auto-retry ambiguous broker operations.
+1. When GitHub Actions capacity/log access is restored, run the focused backend integration test and verify the current main head.
+2. Until then, continue static/code-level hardening only; do not burn Actions minutes on blind reruns.
+3. Next high-value area: inspect reconciliation settlement paths for atomicity between broker-confirmed state and local trade updates.
+4. Preserve UNKNOWN execution states and never auto-retry ambiguous broker operations.
 
 ## STOP/RESUME
 1. Read this file and verify current main SHA.
