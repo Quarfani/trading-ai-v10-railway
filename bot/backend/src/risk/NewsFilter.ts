@@ -62,6 +62,7 @@ export class NewsFilter {
   private logger    = new Logger('NewsFilter');
   private events:   NewsEvent[] = [];
   private lastFetch = 0;
+  private calendarCorrupt = false;
 
   // Block windows in milliseconds
   private readonly HIGH_PRE      = 45 * 60_000;
@@ -81,7 +82,16 @@ export class NewsFilter {
     now    = Date.now(),
     blockMedium = false,
   ): { blocked: boolean; event?: NewsEvent } {
-    const sym = symbol.toUpperCase();
+    if (
+      !Number.isFinite(now) ||
+      now <= 0 ||
+      now > Date.now() + 5_000
+    ) {
+      return { blocked: true };
+    }
+
+    const sym = String(symbol ?? '').trim().toUpperCase();
+    if (!sym) return { blocked: true };
     const currencies = this.getCurrencies(sym);
 
     for (const ev of this.events) {
@@ -114,7 +124,13 @@ export class NewsFilter {
   }
 
   isFresh(now = Date.now()): boolean {
-    return this.lastFetch > 0 && now - this.lastFetch <= this.MAX_STALE;
+    return (
+      !this.calendarCorrupt &&
+      Number.isFinite(now) &&
+      now >= this.lastFetch &&
+      this.lastFetch > 0 &&
+      now - this.lastFetch <= this.MAX_STALE
+    );
   }
 
   getLastFetchAt(): number {
@@ -129,18 +145,47 @@ export class NewsFilter {
         'https://nfs.faireconomy.media/ff_calendar_thisweek.json',
         { timeout: 8_000 },
       );
-      const raw: any[] = r.data ?? [];
-      this.events = raw
-        .filter(e => e.impact === 'High' || e.impact === 'Medium')
-        .map(e => ({
-          time:     new Date(e.date).getTime(),
-          impact:   (e.impact === 'High' ? 'high' : 'medium') as 'high' | 'medium',
-          title:    e.title ?? '',
-          currency: e.country ?? '',
-        }));
+      const raw: any[] = Array.isArray(r.data) ? r.data : [];
+      const relevant = raw.filter(
+        e => e?.impact === 'High' || e?.impact === 'Medium',
+      );
+
+      const parsed: NewsEvent[] = [];
+      let corrupt = !Array.isArray(r.data);
+      for (const e of relevant) {
+        const time = new Date(e?.date).getTime();
+        const currency = String(e?.country ?? '').trim().toUpperCase();
+        const title = String(e?.title ?? '').trim();
+        if (
+          !Number.isFinite(time) ||
+          time <= 0 ||
+          !currency ||
+          !title
+        ) {
+          corrupt = true;
+          continue;
+        }
+        parsed.push({
+          time,
+          impact: (e.impact === 'High' ? 'high' : 'medium') as 'high' | 'medium',
+          title,
+          currency,
+        });
+      }
+
+      this.calendarCorrupt = corrupt;
+      if (corrupt) {
+        this.logger.error(
+          'News calendar contained malformed high/medium-impact events — news gate is fail-closed',
+        );
+        return;
+      }
+
+      this.events = parsed;
       this.lastFetch = Date.now();
       this.logger.info(`News calendar updated: ${this.events.length} events`);
     } catch (e: any) {
+      this.calendarCorrupt = true;
       this.logger.warn(`News fetch failed: ${e.message} — cached calendar age=${this.lastFetch > 0 ? Math.round((Date.now() - this.lastFetch) / 60_000) + 'm' : 'unknown'}`);
     }
   }
