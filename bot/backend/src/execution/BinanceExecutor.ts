@@ -248,6 +248,89 @@ export class BinanceExecutor {
     };
   }
 
+  private async getFuturesOrderFillSummary(
+    symbol: string,
+    orderId: number,
+    expectedQty: number,
+  ): Promise<{
+    currency: string;
+    avgPrice: number;
+    commission: number;
+    totalQty: number;
+  } | null> {
+    if (
+      !this.isFutures ||
+      !(orderId > 0) ||
+      !Number.isFinite(orderId) ||
+      !(expectedQty > 0) ||
+      !Number.isFinite(expectedQty)
+    ) {
+      return null;
+    }
+
+    const fills = await this.signedGet('/fapi/v1/userTrades', {
+      symbol,
+      orderId,
+    });
+    if (!Array.isArray(fills) || fills.length === 0) return null;
+
+    let currency = '';
+    let weightedPrice = 0;
+    let totalQty = 0;
+    let commission = 0;
+
+    for (const fill of fills) {
+      const fillPrice = Number(fill?.price);
+      const fillQty = Number(fill?.qty);
+      const fee = Number(fill?.commission);
+      const feeAsset = String(fill?.commissionAsset ?? '').toUpperCase();
+
+      if (
+        !(fillPrice > 0) ||
+        !Number.isFinite(fillPrice) ||
+        !(fillQty > 0) ||
+        !Number.isFinite(fillQty) ||
+        !Number.isFinite(fee) ||
+        fee < 0 ||
+        !['USDT', 'USDC', 'BUSD'].includes(feeAsset)
+      ) {
+        return null;
+      }
+
+      if (!currency) currency = feeAsset;
+      else if (currency !== feeAsset) return null;
+
+      weightedPrice += fillPrice * fillQty;
+      totalQty += fillQty;
+      commission += fee;
+    }
+
+    const tolerance = Math.max(
+      getSymbolSpec(symbol).volumeStep,
+      expectedQty * 0.0001,
+    );
+    if (
+      !currency ||
+      !(totalQty > 0) ||
+      !Number.isFinite(totalQty) ||
+      Math.abs(totalQty - expectedQty) > tolerance ||
+      !(commission >= 0) ||
+      !Number.isFinite(commission)
+    ) {
+      return null;
+    }
+
+    const avgPrice = weightedPrice / totalQty;
+    if (!(avgPrice > 0) || !Number.isFinite(avgPrice)) return null;
+
+    return {
+      currency,
+      avgPrice,
+      commission,
+      totalQty,
+    };
+  }
+
   private async getFuturesOrderNetPnl(
     symbol: string,
     orderId: number,
@@ -620,6 +703,20 @@ export class BinanceExecutor {
         fillPrice = summary.avgPrice;
         entryCommission = summary.feeQuote;
         entryCommissionCurrency = summary.currency;
+      } else {
+        const summary = await this.getFuturesOrderFillSummary(
+          signal.symbol,
+          ticket,
+          executedQty,
+        );
+        if (!summary) {
+          throw new Error(
+            `Binance Futures entry fills/commission could not be verified for ${signal.symbol}`
+          );
+        }
+        fillPrice = summary.avgPrice;
+        entryCommission = summary.commission;
+        entryCommissionCurrency = summary.currency;
       }
       if (!(fillPrice > 0) || !Number.isFinite(fillPrice)) {
         throw new Error('Binance order returned invalid fill price');
@@ -696,18 +793,31 @@ export class BinanceExecutor {
           );
           let entryCommissionRecovered = 0;
           let entryCommissionCurrencyRecovered: string | undefined;
-          if (!this.isFutures) {
-            try {
-              const summary = await this.getSpotOrderFillSummary(
-                signal.symbol,
-                recoveredTicket,
-                executedQtyRecovered,
+          try {
+            const summary = this.isFutures
+              ? await this.getFuturesOrderFillSummary(
+                  signal.symbol,
+                  recoveredTicket,
+                  executedQtyRecovered,
+                )
+              : await this.getSpotOrderFillSummary(
+                  signal.symbol,
+                  recoveredTicket,
+                  executedQtyRecovered,
+                );
+            if (!summary) {
+              throw new Error(
+                this.isFutures
+                  ? 'Futures entry fill summary unavailable'
+                  : 'Spot entry fill summary unavailable',
               );
-              if (!summary) throw new Error('Spot entry fill summary unavailable');
-              fillPriceRecovered = summary.avgPrice;
-              entryCommissionRecovered = summary.feeQuote;
-              entryCommissionCurrencyRecovered = summary.currency;
-            } catch (summaryError: any) {
+            }
+            fillPriceRecovered = summary.avgPrice;
+            entryCommissionRecovered = this.isFutures
+              ? summary.commission
+              : summary.feeQuote;
+            entryCommissionCurrencyRecovered = summary.currency;
+          } catch (summaryError: any) {
               const emergencyError = await this.emergencyCloseAfterProtectionFailure(
                 signal,
                 executedQtyRecovered,
