@@ -39,7 +39,28 @@ export class SessionFilter {
   private logger = new Logger('SessionFilter');
 
   check(source: string, symbol: string, tsMs = Date.now()): SessionCheckResult {
-    const sym = symbol.toUpperCase();
+    if (
+      !Number.isFinite(tsMs) ||
+      tsMs <= 0 ||
+      tsMs > Date.now() + 5_000
+    ) {
+      return {
+        allowed: false,
+        session: 'DEAD_ZONE',
+        reason: '✗ Invalid market timestamp — trading blocked',
+        score: 0,
+      };
+    }
+
+    const sym = String(symbol ?? '').trim().toUpperCase();
+    if (!sym) {
+      return {
+        allowed: false,
+        session: 'DEAD_ZONE',
+        reason: '✗ Invalid symbol — trading blocked',
+        score: 0,
+      };
+    }
 
     // [FIX] Crypto: always allowed (24/7 market)
     const isCrypto = CRYPTO_SYMBOLS.some(c => sym.startsWith(c)) || sym.endsWith('USDT') || sym.endsWith('USDC');
