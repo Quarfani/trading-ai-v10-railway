@@ -297,24 +297,167 @@ export class Reconciler {
 
   private async reconcileBinance(t: Trade): Promise<void> {
     if (!t.ticket) return;
-      const pos  = await this.exec.getBinancePosition(t.symbol);
 
-      if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
-        // Binance has disappeared from the live position set, but this reconciler
-        // does not yet fetch authoritative account-trade fills/PnL. Never infer a
-        // profitable/losing close from market candles; stop and require reconciliation.
-        throw new Error(`Binance position ${t.symbol} is absent but authoritative fill/PnL history is unavailable`);
+    const pos = await this.exec.getBinancePosition(t.symbol);
+    const liveVolume = pos && Number.isFinite(Number(pos.positionAmt))
+      ? Math.abs(Number(pos.positionAmt))
+      : 0;
 
-      } else if (Math.abs(pos.positionAmt) < t.volume - 0.001) {
-        // Partial close
-        const remaining = Math.abs(pos.positionAmt);
-        this.logger.info(`[${t.symbol}] Binance partial: ${remaining} remaining`);
-        this.db.raw()
-          .prepare('UPDATE trades SET volume=? WHERE id=?')
-          .run(remaining, t.id!);
+    if (!pos || liveVolume < 1e-12) {
+      const unresolved = t.id != null
+        ? this.db.getUnresolvedExecutionsForTrade(
+            t.id,
+            ['CLOSE', 'CLOSE_AT_MARKET', 'PARTIAL_CLOSE'],
+          )
+        : [];
+
+      const closes = unresolved.filter(row =>
+        ['CLOSE', 'CLOSE_AT_MARKET'].includes(String(row.action)),
+      );
+      if (closes.length !== 1) {
+        throw new Error(
+          `Binance position ${t.symbol} is absent without exactly one attributable unresolved close; manual reconciliation is required`,
+        );
       }
-  }
 
+      const unresolvedClose = closes[0];
+      const recovered = await this.exec.reconcileBinanceFullClose(
+        String(unresolvedClose.operationKey),
+        t.symbol,
+        Number(unresolvedClose.createdAt),
+      );
+
+      const expectedQty = Math.abs(Number(t.volume));
+      const qtyTolerance = Math.max(1e-12, expectedQty * 0.02);
+      if (
+        !Number.isFinite(recovered.executedQty) ||
+        recovered.executedQty <= 0 ||
+        !Number.isFinite(expectedQty) ||
+        expectedQty <= 0 ||
+        Math.abs(recovered.executedQty - expectedQty) > qtyTolerance
+      ) {
+        throw new Error(
+          `Binance full-close recovery quantity mismatch for ${t.symbol}: recovered=${recovered.executedQty} expected=${expectedQty}`,
+        );
+      }
+
+      const persisted = this.db.raw().prepare(
+        'SELECT realizedProfit FROM trades WHERE id=? LIMIT 1',
+      ).get(t.id!) as { realizedProfit?: number } | undefined;
+      const priorRealized = Number(persisted?.realizedProfit ?? 0);
+      if (!Number.isFinite(priorRealized) || !Number.isFinite(recovered.realizedProfit)) {
+        throw new Error(`Binance full-close recovered PnL is invalid for ${t.symbol}`);
+      }
+      const cumulativeRealized = priorRealized + recovered.realizedProfit;
+      if (!Number.isFinite(cumulativeRealized)) {
+        throw new Error(`Binance cumulative realized PnL is invalid for ${t.symbol}`);
+      }
+
+      const resolved = this.db.resolveReconciledFullClose(
+        t.id!,
+        String(unresolvedClose.executionId),
+        cumulativeRealized,
+        Date.now(),
+        'MANUAL',
+        {
+          broker: 'binance',
+          symbol: t.symbol,
+          orderId: recovered.orderId,
+          executedQty: recovered.executedQty,
+          realizedProfit: recovered.realizedProfit,
+          cumulativeRealizedProfit: cumulativeRealized,
+          runtimeReconciliation: true,
+        },
+        recovered.orderId,
+      );
+      if (!resolved) {
+        throw new Error(
+          `Could not atomically reconcile Binance full-close operation=${unresolvedClose.executionId}`,
+        );
+      }
+
+      t.status = 'closed';
+      t.profit = cumulativeRealized;
+      t.realizedProfit = cumulativeRealized;
+      this.tracker.recordClose(cumulativeRealized);
+      this.onClose({ ...t, profit: cumulativeRealized });
+      return;
+    }
+
+    const dbVolume = Math.abs(Number(t.volume));
+    const volumeTolerance = Math.max(1e-12, dbVolume * 0.02);
+    if (liveVolume < dbVolume - volumeTolerance) {
+      const unresolvedPartials = t.id != null
+        ? this.db.getUnresolvedExecutionsForTrade(t.id, ['PARTIAL_CLOSE'])
+        : [];
+      if (unresolvedPartials.length !== 1) {
+        throw new Error(
+          `Binance position size decreased for ${t.symbol} without exactly one attributable PARTIAL_CLOSE; manual reconciliation is required`,
+        );
+      }
+
+      const unresolvedPartial = unresolvedPartials[0];
+      const recovered = await this.exec.reconcileBinancePartialClose(
+        String(unresolvedPartial.operationKey),
+        t.symbol,
+        Number(unresolvedPartial.createdAt),
+      );
+
+      const recoveredRemaining = Number(recovered.remainingVolume);
+      const positionTolerance = Math.max(1e-12, dbVolume * 0.02);
+      if (
+        !Number.isFinite(recoveredRemaining) ||
+        recoveredRemaining <= 0 ||
+        Math.abs(recoveredRemaining - liveVolume) > positionTolerance ||
+        recoveredRemaining >= dbVolume
+      ) {
+        throw new Error(
+          `Binance partial recovery volume mismatch for ${t.symbol}: recovered=${recoveredRemaining} live=${liveVolume} db=${dbVolume}`,
+        );
+      }
+
+      const persisted = this.db.raw().prepare(
+        'SELECT realizedProfit FROM trades WHERE id=? LIMIT 1',
+      ).get(t.id!) as { realizedProfit?: number } | undefined;
+      const priorRealized = Number(persisted?.realizedProfit ?? 0);
+      if (!Number.isFinite(priorRealized) || !Number.isFinite(recovered.realizedProfit)) {
+        throw new Error(`Binance partial recovered PnL is invalid for ${t.symbol}`);
+      }
+      const cumulativeRealized = priorRealized + recovered.realizedProfit;
+      if (!Number.isFinite(cumulativeRealized)) {
+        throw new Error(`Binance cumulative partial PnL is invalid for ${t.symbol}`);
+      }
+
+      const resolved = this.db.resolveReconciledPartialClose(
+        t.id!,
+        String(unresolvedPartial.executionId),
+        recoveredRemaining,
+        cumulativeRealized,
+        {
+          broker: 'binance',
+          symbol: t.symbol,
+          orderId: recovered.orderId,
+          executedQty: recovered.executedQty,
+          remainingVolume: recoveredRemaining,
+          realizedProfit: recovered.realizedProfit,
+          cumulativeRealizedProfit: cumulativeRealized,
+          runtimeReconciliation: true,
+        },
+        recovered.orderId,
+      );
+      if (!resolved) {
+        throw new Error(
+          `Could not atomically reconcile Binance partial operation=${unresolvedPartial.executionId}`,
+        );
+      }
+
+      t.volume = recoveredRemaining;
+      t.realizedProfit = cumulativeRealized;
+      this.logger.info(
+        `[${t.symbol}] Binance partial recovered order=${recovered.orderId} remaining=${recoveredRemaining} cumulativePnL=${cumulativeRealized.toFixed(8)}`,
+      );
+    }
+  }
   // ─── Common close + record ─────────────────────────────────────────
 
   private async closeAndRecord(
