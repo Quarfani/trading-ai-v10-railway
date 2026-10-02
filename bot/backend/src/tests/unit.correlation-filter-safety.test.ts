@@ -56,4 +56,29 @@ const corrupt = filter.isCorrelated(
 );
 assert(corrupt.blocked, 'corrupt correlation price data must fail closed');
 
-console.log('Result: 2 passed, 0 failed');
+const flat = Array.from({ length: 20 }, (_, i) => ({
+  time: Date.now() - (20 - i) * 60_000,
+  open: 100,
+  high: 100,
+  low: 100,
+  close: 100,
+  volume: 1,
+}));
+const flatResult = filter.isCorrelated(
+  'EURUSD',
+  'BUY',
+  [{
+    symbol: 'GBPUSD',
+    side: 'BUY',
+    volume: 0.1,
+    entry: 1,
+    sl: 0.99,
+    tp: 1.02,
+    status: 'open',
+    openedAt: Date.now(),
+  } as any],
+  { EURUSD: flat, GBPUSD: flat },
+);
+assert(flatResult.blocked, 'zero-variance correlation must fail closed');
+
+console.log('Result: 3 passed, 0 failed');
