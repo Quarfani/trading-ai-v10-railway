@@ -126,11 +126,32 @@ class BaseModel(ABC):
         """Predict class with probabilities and latency."""
         import time
         t0    = time.perf_counter()
+        X = np.asarray(X, dtype="float32")
+        if X.ndim != 2 or X.shape[1] != len(FEATURE_COLS):
+            raise ValueError(
+                f"Invalid inference feature shape: {X.shape}; expected (*,{len(FEATURE_COLS)})"
+            )
+        if not np.isfinite(X).all():
+            raise ValueError("Inference feature matrix contains NaN or infinite values")
+
         proba = self.predict_proba(X)
         ms    = (time.perf_counter() - t0) * 1000
 
         if proba.ndim == 1:
             proba = proba.reshape(1, -1)
+
+        if (
+            proba.shape[0] < 1 or
+            proba.shape[1] != 3 or
+            not np.isfinite(proba).all() or
+            np.any(proba < 0) or
+            np.any(proba > 1)
+        ):
+            raise ValueError("Model returned invalid probability matrix")
+
+        row_sum = float(proba[0].sum())
+        if abs(row_sum - 1.0) > 0.02:
+            raise ValueError(f"Model probabilities are not normalized: sum={row_sum:.6f}")
 
         p = proba[0]
         # Order: [P(-1), P(0), P(+1)]
@@ -147,8 +168,10 @@ class BaseModel(ABC):
 
     def predict_from_df(self, df: pd.DataFrame) -> PredictResult:
         """Predict from a feature DataFrame row."""
-        X=df.reindex(columns=FEATURE_COLS,fill_value=0.0).values.astype('float32')
-        X=np.nan_to_num(X,nan=0.0,posinf=1.0,neginf=-1.0)
+        missing = [c for c in FEATURE_COLS if c not in df.columns]
+        if missing:
+            raise ValueError(f"Missing required inference features: {missing}")
+        X = df[FEATURE_COLS].values.astype('float32')
         return self.predict(X)
 
     # ─── Evaluation ───────────────────────────────────────────────────────────
@@ -250,12 +273,18 @@ class BaseModel(ABC):
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Extract X (features) and y (labels) from labeled DataFrame."""
         cols = feature_cols or FEATURE_COLS
-        cols = [c for c in cols if c in df.columns]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"Missing required training features: {missing}")
+        if LABEL_COL not in df.columns:
+            raise ValueError(f"Missing required training label: {LABEL_COL}")
 
         X = df[cols].values.astype("float32")
         y = df[LABEL_COL].values.astype("int32")
 
-        # Replace any remaining NaN/inf
-        X = np.nan_to_num(X, nan=0.0, posinf=1.0, neginf=-1.0)
+        if not np.isfinite(X).all():
+            raise ValueError("Training feature matrix contains NaN or infinite values")
+        if not np.isin(y, [-1, 0, 1]).all():
+            raise ValueError("Training labels must be -1, 0, or 1")
 
         return X, y
