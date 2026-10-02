@@ -195,8 +195,18 @@ export class TelegramCommands {
       let closed = 0, failed = 0;
       for (const t of targets) {
         try {
-          const candles=await scanner.fetchCandles(t.symbol,'M1',2).catch(()=>[]);
-          const price=candles.length?candles[candles.length-1].close:t.entry;
+          const candles=await scanner.fetchCandles(
+            t.symbol,
+            (t.timeframe ?? 'M1') as any,
+            3,
+          ).catch(() => []);
+          const price = candles.length
+            ? Number(candles[candles.length - 1].close)
+            : Number.NaN;
+          if (!(price > 0) || !Number.isFinite(price)) {
+            failed++;
+            continue;
+          }
           const result=await exec.closeAtMarket(t,price,'MANUAL');
           if(result.ok) closed++; else failed++;
         } catch { failed++; }
