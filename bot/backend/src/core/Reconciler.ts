@@ -677,15 +677,12 @@ export class Reconciler {
         return;
       }
 
-      // External/manual partial reduction may still be reflected in local size,
-      // but it does not resolve an UNKNOWN execution unless its exact broker
-      // operation and authoritative fills are matched.
-      this.logger.info(
-        `[${t.symbol}] Binance partial: ${remaining} remaining`,
+      // A broker-side reduction without an attributable UNKNOWN operation
+      // is ambiguous. Never rewrite local state to make broker and DB appear
+      // consistent; require explicit manual reconciliation instead.
+      throw new Error(
+        `Binance position volume is lower than local trade volume for ${t.symbol} (${t.volume} -> ${remaining}) without an attributable partial-close execution; manual reconciliation is required`,
       );
-      this.db.raw()
-        .prepare('UPDATE trades SET volume=? WHERE id=? AND status=\\'open\\'')
-        .run(remaining, t.id!);
     }
   }
 
