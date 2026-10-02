@@ -448,11 +448,19 @@ class LSTMModel(BaseModel):
         if keras_path.exists():
             try:
                 from tensorflow import keras
-                self._model   = keras.models.load_model(str(keras_path))
-                self._trained = True
+                self._model = keras.models.load_model(str(keras_path))
                 self.framework = "tensorflow"
+                if not self.validate_loaded_metadata():
+                    logger.error(
+                        f"Rejected LSTM artifact metadata/checksum mismatch for "
+                        f"{self.symbol}/{self.timeframe}"
+                    )
+                    self._model = None
+                    return False
+                self._trained = True
                 return True
             except Exception as e:
+                self._model = None
                 logger.error(f"Keras load failed: {e}")
 
         if torch_path.exists():
