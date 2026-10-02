@@ -46,6 +46,11 @@ async function main() {
   const reconciler = new StartupReconciler(config, db, telegram);
   await reconciler.run();
 
+  // Manual operator emergency stops are intentionally sticky across process
+  // restarts. Automatic HealthMonitor stops remain process-local so a transient
+  // infrastructure fault does not become a permanent lockout without review.
+  await engine.restoreManualEmergencyStop();
+
   // External modules not created by TradingEngine
   const mlPipeline = new MLTrainingPipeline(db);
   const discovery  = new AutoSymbolDiscovery(engine['scanner'] as any, db);
