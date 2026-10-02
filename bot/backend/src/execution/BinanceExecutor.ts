@@ -1314,11 +1314,9 @@ export class BinanceExecutor {
           );
         }
         if (pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+          throw new Error(
+            `Binance position ${symbol} is already flat; ownership of a prior close cannot be inferred safely`,
+          );
         }
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
