@@ -801,41 +801,18 @@ export class StartupReconciler {
           (expectedByBase.get(base) ?? 0) + Number(t.volume),
         );
 
-        const openOperation = this.db.raw().prepare(`
-          SELECT executionId, operationKey, requestJson, tradeId
-          FROM execution_ledger
-          WHERE action='OPEN'
-            AND status='EXECUTED'
-            AND (tradeId=? OR (tradeId IS NULL AND symbol=?))
-          ORDER BY updatedAt DESC, executionId DESC
-          LIMIT 50
-        `).all(t.id, t.symbol) as Array<{
-          executionId: string;
-          operationKey: string;
-          requestJson?: string | null;
-          tradeId?: number | null;
-        }>;
-
-        let operationKey: string | null = null;
-        for (const row of openOperation) {
-          if (Number(row.tradeId) === Number(t.id)) {
-            operationKey = String(row.operationKey);
-            break;
-          }
-          if (!row.requestJson) continue;
-          try {
-            if (Number(JSON.parse(row.requestJson)?.tradeId) === Number(t.id)) {
-              operationKey = String(row.operationKey);
-              break;
-            }
-          } catch {}
-        }
-
-        if (!operationKey) {
+        const openOperation =
+          this.db.getLatestExecutedOpenOperationForTrade(t.id);
+        if (!openOperation || openOperation.conflict) {
           throw new Error(
-            `Binance Spot trade id=${t.id} lacks an authoritative OPEN operation key; manual reconciliation is required.`,
+            openOperation?.conflict
+              ? `Conflicting Binance Spot OPEN operation identities for trade id=${t.id}; manual reconciliation is required.`
+              : `Binance Spot trade id=${t.id} lacks an authoritative OPEN operation key; manual reconciliation is required.`,
           );
         }
+
+        const operationKey = String(openOperation.operationKey);
+
 
         const list = await exec.recoverBinanceSpotOco(
           t.symbol,
