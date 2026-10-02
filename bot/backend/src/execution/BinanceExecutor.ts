@@ -306,6 +306,42 @@ export class BinanceExecutor {
       throw new Error(`TP placement failed: ${e.response?.data?.msg ?? e.message}`);
     }
 
+    if (
+      !Number.isFinite(ids.slOrderId) ||
+      !Number.isFinite(ids.tpOrderId)
+    ) {
+      const createdIds = [ids.slOrderId, ids.tpOrderId].filter(
+        (id): id is number => Number.isFinite(id),
+      );
+      await Promise.all(
+        createdIds.map(orderId =>
+          this.signedDelete('/fapi/v1/order', {
+            symbol: signal.symbol,
+            orderId,
+          }).catch(() => {}),
+        ),
+      );
+      throw new Error('Binance protective order response missing valid order ids');
+    }
+
+    try {
+      const openOrders = await this.getOpenOrders(signal.symbol);
+      const openIds = new Set(openOrders.map((order: any) => Number(order.orderId)));
+      if (!openIds.has(ids.slOrderId) || !openIds.has(ids.tpOrderId)) {
+        throw new Error('Binance SL/TP order acceptance could not be verified');
+      }
+    } catch (verificationError) {
+      await Promise.all(
+        [ids.slOrderId, ids.tpOrderId].map(orderId =>
+          this.signedDelete('/fapi/v1/order', {
+            symbol: signal.symbol,
+            orderId,
+          }).catch(() => {}),
+        ),
+      );
+      throw verificationError;
+    }
+
     ids.closeSide=closeSide; ids.quantity=quantity;
     this.orderMap.set(ticket, ids);
   }
