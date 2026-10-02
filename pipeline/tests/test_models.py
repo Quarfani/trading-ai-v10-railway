@@ -437,14 +437,42 @@ class TestModelServer:
                                        "last_accuracy": 0.5, "loaded_at": ""}
 
         server.record_trade_closed("TEST", "1h", X_val[0], profit=100.0, signal=1)
-        assert len(server._buffers["TEST/1h"]) == 1
-        assert server._buffers["TEST/1h"][0]["y"] == 1   # profitable BUY → label=+1
-
         server.record_trade_closed("TEST", "1h", X_val[1], profit=-50.0, signal=1)
-        assert len(server._buffers["TEST/1h"]) == 2
-        assert server._buffers["TEST/1h"][1]["y"] == -1  # losing BUY → label=-1
+
+        # Online learning is disabled by default in unit tests, so features
+        # must not accumulate in the training buffer just for audit purposes.
+        assert len(server._buffers["TEST/1h"]) == 0
+        assert len(server._outcomes["TEST/1h"]) == 2
+        assert server._outcomes["TEST/1h"][0]["actual_label"] == 1
+        assert server._outcomes["TEST/1h"][1]["actual_label"] == -1
 
 
+    def test_record_prediction_outcome_tracks_true_accuracy_and_deduplicates(self):
+        from src.serving.model_server import ModelServer
+
+        server = ModelServer()
+        server._buffers["TEST/1h"] = []
+        server._outcomes["TEST/1h"] = []
+        server._stats["TEST/1h"] = {
+            "predictions": 0,
+            "last_accuracy": None,
+            "online_updates": 0,
+            "loaded_at": "",
+        }
+
+        server.record_prediction_outcome(
+            "TEST", "1h", "pred-1", predicted_signal=1, actual_label=1, profit=10.0
+        )
+        server.record_prediction_outcome(
+            "TEST", "1h", "pred-1", predicted_signal=1, actual_label=1, profit=10.0
+        )
+        server.record_prediction_outcome(
+            "TEST", "1h", "pred-2", predicted_signal=-1, actual_label=1, profit=-5.0
+        )
+
+        assert len(server._outcomes["TEST/1h"]) == 2
+        assert server._outcomes["TEST/1h"][0]["correct"] is True
+        assert server._outcomes["TEST/1h"][1]["correct"] is False
 class TestTrainingReport:
 
     def test_report_to_json(self, tmp_path):
