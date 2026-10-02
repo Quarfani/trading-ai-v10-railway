@@ -56,6 +56,40 @@ export class ExecutionGateway {
   }
 
   async execute(signal: Signal, volume: number, timeframe: Timeframe): Promise<ExecutionResult> {
+    if (
+      !signal ||
+      !String(signal.symbol ?? '').trim() ||
+      (signal.side !== 'BUY' && signal.side !== 'SELL') ||
+      !Number.isFinite(signal.timestamp) ||
+      signal.timestamp <= 0 ||
+      signal.timestamp > Date.now() + 5_000 ||
+      !Number.isFinite(signal.price) ||
+      signal.price <= 0 ||
+      !Number.isFinite(signal.sl) ||
+      signal.sl <= 0 ||
+      !Number.isFinite(signal.tp) ||
+      signal.tp <= 0 ||
+      !(volume > 0) ||
+      !Number.isFinite(volume)
+    ) {
+      return {
+        success: false,
+        error: 'Invalid execution request; no broker request was sent',
+        retries: 0,
+      };
+    }
+
+    if (
+      (signal.side === 'BUY' && !(signal.sl < signal.price && signal.tp > signal.price)) ||
+      (signal.side === 'SELL' && !(signal.sl > signal.price && signal.tp < signal.price))
+    ) {
+      return {
+        success: false,
+        error: 'Invalid execution protection direction; no broker request was sent',
+        retries: 0,
+      };
+    }
+
     const operationKey = this.stableKey('OPEN', {
       account: this.config.accountName ?? 'default', mode: this.config.mode,
       symbol: signal.symbol, side: signal.side, timestamp: signal.timestamp,
@@ -250,6 +284,21 @@ export class ExecutionGateway {
   getPaperStats() { return this.config.mode === 'paper' ? this.paper.getStats() : null; }
 
   async modifySLTP(t: Trade, newSl: number, newTp: number) {
+    if (
+      !t ||
+      !t.id ||
+      !Number.isFinite(t.entry) ||
+      t.entry <= 0 ||
+      !Number.isFinite(newSl) ||
+      newSl <= 0 ||
+      !Number.isFinite(newTp) ||
+      newTp <= 0 ||
+      (t.side === 'BUY' && !(newSl < t.entry && newTp > t.entry)) ||
+      (t.side === 'SELL' && !(newSl > t.entry && newTp < t.entry))
+    ) {
+      return false;
+    }
+
     const key = this.stableKey('MOVE_SL_TP', { id: t.id, ticket: t.ticket, symbol: t.symbol, sl: newSl, tp: newTp });
     const op = this.beginDestructive(key, 'MOVE_SL_TP', t, { newSl, newTp });
     if (op.existing) return op.existing.status === 'EXECUTED';
@@ -401,6 +450,17 @@ export class ExecutionGateway {
   }
 
   async closeTrade(t: Trade) {
+    if (
+      !t ||
+      !t.id ||
+      !(t.volume > 0) ||
+      !Number.isFinite(t.volume) ||
+      !(t.ticket != null) ||
+      !Number.isFinite(Number(t.ticket))
+    ) {
+      return false;
+    }
+
     const key = this.stableKey('CLOSE', {
       id: t.id,
       ticket: t.ticket,
@@ -460,6 +520,16 @@ export class ExecutionGateway {
     exitPrice: number,
     reason: 'TP'|'SL'|'TIMEOUT'|'MANUAL' = 'MANUAL',
   ) {
+    if (
+      !t ||
+      !(t.volume > 0) ||
+      !Number.isFinite(t.volume) ||
+      !Number.isFinite(exitPrice) ||
+      exitPrice <= 0
+    ) {
+      return { ok: false };
+    }
+
     const key = this.stableKey('CLOSE_AT_MARKET', {
       id: t.id,
       ticket: t.ticket,
@@ -588,7 +658,18 @@ export class ExecutionGateway {
 
 
   async closePartial(t: Trade, volume: number, exitPrice: number, reason = 'PARTIAL'): Promise<{ok:boolean;profit:number;remainingVolume:number}> {
-    if (!(volume > 0) || volume >= t.volume) return { ok: false, profit: 0, remainingVolume: t.volume };
+    if (
+      !t ||
+      !(t.volume > 0) ||
+      !Number.isFinite(t.volume) ||
+      !(volume > 0) ||
+      !Number.isFinite(volume) ||
+      volume >= t.volume ||
+      !Number.isFinite(exitPrice) ||
+      exitPrice <= 0
+    ) {
+      return { ok: false, profit: 0, remainingVolume: Number(t?.volume ?? 0) };
+    }
 
     // A replay of the same operation is safe and must return the persisted
     // result before the short-lived in-process lock can reject it.
