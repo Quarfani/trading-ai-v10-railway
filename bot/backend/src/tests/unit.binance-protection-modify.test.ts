@@ -71,7 +71,42 @@ async function main() {
     "failed replacement must preserve the old protective orders",
   );
 
-  console.log("Result: 5 passed, 0 failed");
+  const verifyFailure = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  (verifyFailure as any).orderMap.set(9, {
+    slOrderId: 401,
+    tpOrderId: 402,
+    quantity: 1,
+  });
+  (verifyFailure as any).placeSLTP = async () => {
+    (verifyFailure as any).orderMap.set(9, {
+      slOrderId: 501,
+      tpOrderId: 502,
+      quantity: 1,
+    });
+  };
+  (verifyFailure as any).signedDelete = async () => {};
+  (verifyFailure as any).getOpenOrders = async () => {
+    throw new Error("verification unavailable");
+  };
+  const verificationUnavailable = await verifyFailure.modifyPosition(
+    9, "SOLUSDT", "BUY", 90, 110,
+  );
+  assert(
+    verificationUnavailable,
+    "new protection should remain authoritative when old-order verification is temporarily unavailable",
+  );
+  const verificationState = (verifyFailure as any).orderMap.get(9);
+  assert(
+    verificationState.slOrderId === 501 &&
+      verificationState.tpOrderId === 502 &&
+      verificationState.staleOrderIds.includes(401) &&
+      verificationState.staleOrderIds.includes(402),
+    "verification failure must preserve all prior order ids as stale cleanup targets",
+  );
+
+  console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
