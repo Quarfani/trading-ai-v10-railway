@@ -53,6 +53,7 @@ class TrainingReport:
     val_samples:        int
     test_samples:       int
     test_accuracy:      float
+    test_majority_baseline: float
     test_f1_buy:        float
     test_f1_sell:       float
     test_f1_hold:       float
@@ -151,6 +152,11 @@ class ModelTrainer:
 
         # ── 5. Test set evaluation ────────────────────────────────────────
         test_metrics = model.evaluate(X_test, y_test)
+        majority_baseline = self._majority_baseline(y_train)
+
+        logger.info(
+          f"  TEST baseline (majority): {majority_baseline:.3f}"
+        )
 
         logger.info(
             f"  TEST: acc={test_metrics['accuracy']:.3f} | "
@@ -162,6 +168,7 @@ class ModelTrainer:
         # ── 6. Deployment recommendation ──────────────────────────────────
         recommendation = self._recommend(
             test_metrics["accuracy"],
+            majority_baseline,
             wf_mean_accuracy,
             wf_std_accuracy,
         )
@@ -177,6 +184,7 @@ class ModelTrainer:
             val_samples    = len(X_val),
             test_samples   = len(X_test),
             test_accuracy  = test_metrics["accuracy"],
+            test_majority_baseline = majority_baseline,
             test_f1_buy    = test_metrics["f1"].get("1",  0.0),
             test_f1_sell   = test_metrics["f1"].get("-1", 0.0),
             test_f1_hold   = test_metrics["f1"].get("0",  0.0),
@@ -293,9 +301,10 @@ class ModelTrainer:
 
     def _recommend(
         self,
-        test_acc:    float,
-        wf_mean:     float,
-        wf_std:      float,
+        test_acc:          float,
+        majority_baseline: float,
+        wf_mean:            float,
+        wf_std:             float,
     ) -> str:
         """
         Deployment decision based only on WFO/OOS evidence.
@@ -304,7 +313,19 @@ class ModelTrainer:
         deployment selection. ``test_acc`` remains in the signature for
         report/API compatibility.
         """
-        _ = test_acc
+        if (
+            not np.isfinite(test_acc) or
+            not np.isfinite(majority_baseline) or
+            not np.isfinite(wf_mean) or
+            not np.isfinite(wf_std)
+        ):
+            return "DO_NOT_DEPLOY ❌ — invalid evaluation metrics"
+
+        # Accuracy must beat the simple majority-class baseline. This avoids
+        # treating a class-imbalanced classifier as evidence of predictive edge.
+        if test_acc < majority_baseline + 0.02:
+            return "CAUTION ⚠️ — does not clear majority baseline by 2%"
+
         if wf_mean >= 0.53 and wf_std <= 0.06:
             return "DEPLOY ✅"
         elif wf_mean >= 0.51:
@@ -313,6 +334,13 @@ class ModelTrainer:
             return "DO_NOT_DEPLOY ❌ — collect more data"
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _majority_baseline(y: np.ndarray) -> float:
+        if y.size == 0:
+            return float("nan")
+        _values, counts = np.unique(y, return_counts=True)
+        return float(np.max(counts) / y.size)
 
     def _load_labeled(
         self, market: str, symbol: str, timeframe: str
