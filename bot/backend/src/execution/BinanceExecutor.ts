@@ -455,7 +455,17 @@ export class BinanceExecutor {
       }
 
       const available=Math.abs(pos.positionAmt);
-      const qty=Math.min(volume,available);
+      const tolerance = Math.max(
+        getSymbolSpec(symbol).volumeStep,
+        available * 0.02,
+        1e-12,
+      );
+      if (volume > available + tolerance) {
+        throw new Error(
+          `Binance partial close requested volume exceeds live position: requested=${volume} available=${available}`,
+        );
+      }
+      const qty = volume;
       if(!(qty>0)) {
         return {
           ok:false,
