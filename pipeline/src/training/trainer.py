@@ -350,7 +350,38 @@ class ModelTrainer:
             logger.warning(f"No labeled data at {path}")
             return None
         df = pd.read_parquet(path, engine="pyarrow")
-        df = df.dropna(subset=["label"]).reset_index(drop=True)
+        required = {"time", "label"}
+        missing = sorted(required - set(df.columns))
+        if missing:
+            raise ValueError(
+                f"Missing required label-data columns for {symbol}/{timeframe}: {missing}"
+            )
+
+        times = pd.to_numeric(df["time"], errors="coerce")
+        if times.isna().any() or (~np.isfinite(times.to_numpy(dtype="float64"))).any():
+            raise ValueError(
+                f"Invalid timestamps in labeled data for {symbol}/{timeframe}"
+            )
+
+        df = (
+            df.assign(_time_numeric=times)
+              .sort_values(["_time_numeric"], kind="mergesort")
+              .drop(columns=["_time_numeric"])
+              .dropna(subset=["label"])
+              .reset_index(drop=True)
+        )
+
+        if df["time"].duplicated().any():
+            raise ValueError(
+                f"Duplicate timestamps in labeled data for {symbol}/{timeframe}"
+            )
+
+        numeric_time = pd.to_numeric(df["time"], errors="coerce")
+        if numeric_time.iloc[-1] > time.time() * 1000 + 86_400_000:
+            raise ValueError(
+                f"Labeled data extends materially into the future for {symbol}/{timeframe}"
+            )
+
         return df
 
     def _log_class_distribution(self, df: pd.DataFrame, symbol: str) -> None:
