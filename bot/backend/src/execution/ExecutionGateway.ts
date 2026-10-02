@@ -363,6 +363,7 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        makeBinanceClientOrderId(operationKey),
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
@@ -624,6 +625,7 @@ export class ExecutionGateway {
           t.ticket,
           t.symbol,
           volume,
+          makeBinanceClientOrderId(key),
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
