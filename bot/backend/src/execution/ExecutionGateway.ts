@@ -167,6 +167,47 @@ export class ExecutionGateway {
         mlPredictionId: signal.mlPredictionId,
       };
 
+      if (
+        this.config.mode === 'binance' &&
+        Number.isFinite(Number(trade.commission)) &&
+        Number(trade.commission) > 0
+      ) {
+        const commissionCurrency = String(
+          trade.commissionCurrency ?? '',
+        ).trim().toUpperCase();
+        if (!commissionCurrency) {
+          throw new Error(
+            'Binance entry commission currency is missing; accounting is not authoritative',
+          );
+        }
+
+        const commissionAccount = await this.convertBrokerProfitToAccount(
+          Number(trade.commission),
+          commissionCurrency,
+        );
+        if (
+          !Number.isFinite(commissionAccount) ||
+          commissionAccount < 0
+        ) {
+          throw new Error(
+            'Binance entry commission could not be converted to account currency',
+          );
+        }
+
+        trade = {
+          ...trade,
+          commission: commissionAccount,
+          commissionCurrency: String(
+            this.config.accountCurrency ?? 'USD',
+          ).trim().toUpperCase(),
+          // realizedProfit is the cumulative realized component. Seed it
+          // with the negative entry fee so final-close settlement becomes
+          // net of both entry and exit costs.
+          realizedProfit:
+            Number(trade.realizedProfit ?? 0) - commissionAccount,
+        };
+      }
+
       const id = this.db.persistExecutedOpenTrade(
         { ...trade, timeframe, account: this.config.accountName ?? 'default' },
         executionId,
