@@ -53,6 +53,55 @@ async function main() {
   );
   assert(summary.currency === "USDT", "Spot entry fee currency must be the quote asset");
 
+  const futures = new BinanceExecutor({
+    binance: {
+      apiKey: "test",
+      secret: "test",
+      env: "testnet",
+      futures: true,
+    },
+  } as any);
+
+  (futures as any).signedGet = async (path: string, params: any) => {
+    assert(path === "/fapi/v1/userTrades", "Futures entry accounting must use userTrades");
+    assert(params.orderId === 4321, "Futures entry accounting must use the exact order id");
+    return [
+      {
+        orderId: 4321,
+        price: "100",
+        qty: "0.3",
+        commission: "0.12",
+        commissionAsset: "USDT",
+      },
+      {
+        orderId: 4321,
+        price: "101",
+        qty: "0.2",
+        commission: "0.08",
+        commissionAsset: "USDT",
+      },
+    ];
+  };
+
+  const futuresSummary = await (futures as any).getFuturesOrderFillSummary(
+    "BTCUSDT",
+    4321,
+    0.5,
+  );
+  assert(futuresSummary !== null, "valid Futures fills must produce an authoritative summary");
+  assert(
+    Math.abs(futuresSummary.avgPrice - 100.4) < 1e-12,
+    "Futures entry price must be reconstructed from all fills",
+  );
+  assert(
+    Math.abs(futuresSummary.commission - 0.2) < 1e-12,
+    "Futures entry commission must equal the sum of authoritative fill commissions",
+  );
+  assert(
+    futuresSummary.currency === "USDT",
+    "Futures entry commission currency must be retained",
+  );
+
   (executor as any).signedGet = async () => [
     {
       orderId: 1234,
