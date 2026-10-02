@@ -74,7 +74,42 @@ async function main() {
   assert(!result.ok, "full close must fail closed when old protection remains");
   assert(!marketCloseSubmitted, "market close must not be submitted with stale protection");
   
-  console.log("Result: 6 passed, 0 failed");
+  const partialRecovery = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  (partialRecovery as any).findOrderByClientId = async () => ({
+    orderId: 900,
+    status: "PARTIALLY_FILLED",
+    executedQty: "0.002",
+  });
+  (partialRecovery as any).getFuturesOrderNetPnl = async () => ({
+    profit: 2,
+    currency: "USDT",
+  });
+  (partialRecovery as any).getPosition = async () => ({ positionAmt: 0.008 });
+  const stillUnknown = await partialRecovery.reconcileCloseOperation(
+    "BTCUSDT",
+    "partial-op",
+    0.004,
+    true,
+  );
+  assert(stillUnknown === null, "PARTIALLY_FILLED Binance close must remain unresolved");
+
+  (partialRecovery as any).findOrderByClientId = async () => ({
+    orderId: 901,
+    status: "FILLED",
+    executedQty: "0.004",
+  });
+  const recoveredPartial = await partialRecovery.reconcileCloseOperation(
+    "BTCUSDT",
+    "partial-op",
+    0.004,
+    true,
+  );
+  assert(recoveredPartial?.ok === true, "FILLED Binance partial close must be recoverable");
+  assert(recoveredPartial.remainingVolume === 0.008, "partial recovery must preserve broker remaining volume");
+
+  console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
