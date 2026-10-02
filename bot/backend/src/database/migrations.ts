@@ -450,6 +450,12 @@ const MIGRATIONS: Migration[] = [
         ON model_decisions(symbol, timeframe, timestamp);
     `
   },
+  {
+    version: 19, name: 'trade_commission_currency',
+    up: `
+      ALTER TABLE trades ADD COLUMN commissionCurrency TEXT;
+    `
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
