@@ -64,6 +64,55 @@ export function validateRiskReward(
   };
 }
 
+const RISK_LIMITS = {
+  maxRiskPerTrade: 0.02,
+  maxFraction: 1,
+} as const;
+
+export function validateRiskConfiguration(config: SystemConfig): string[] {
+  const errors: string[] = [];
+  const positive = (name: string, value: unknown) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) errors.push(`${name} must be a finite positive number`);
+  };
+  const bounded01 = (name: string, value: unknown) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0 || n > RISK_LIMITS.maxFraction) {
+      errors.push(`${name} must be in (0,1]`);
+    }
+  };
+  const integerPositive = (name: string, value: unknown) => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n <= 0) errors.push(`${name} must be a positive integer`);
+  };
+
+  bounded01('minConfidence', config.minConfidence ?? 0.55);
+  positive('minRR', config.minRR ?? 1.5);
+  bounded01('maxDailyLoss', config.maxDailyLoss);
+  bounded01('maxWeeklyLoss', config.maxWeeklyLoss ?? 0.05);
+  bounded01('maxDrawdown', config.maxDrawdown ?? 0.10);
+  bounded01('maxPortfolioHeat', config.maxPortfolioHeat ?? 0.06);
+  positive('maxExposure', config.maxExposure ?? 1);
+  positive('maxLeverage', config.maxLeverage ?? 3);
+  positive('riskPerTrade', config.riskPerTrade);
+  positive('maxSlippagePct', config.maxSlippagePct ?? 0.005);
+  positive('maxSlippagePips', config.maxSlippagePips ?? 3);
+  positive('dailyProfitTarget', config.dailyProfitTarget);
+
+  if (Number(config.riskPerTrade) > RISK_LIMITS.maxRiskPerTrade) {
+    errors.push('riskPerTrade must not exceed the hard 2% per-trade risk cap');
+  }
+  integerPositive('maxOpenTrades', config.maxOpenTrades);
+  integerPositive('consecutiveLossLimit', config.consecutiveLossLimit);
+
+  const cooldown = Number(config.cooldownMinutes);
+  if (!Number.isFinite(cooldown) || cooldown < 0) {
+    errors.push('cooldownMinutes must be a finite non-negative number');
+  }
+
+  return errors;
+}
+
 export class RiskManager {
   private logger = new Logger('RiskManager');
   private breaker: CircuitBreaker;
@@ -111,6 +160,11 @@ export class RiskManager {
     candleMap?: Record<string, Candle[]>,
   ): Promise<RiskResult> {
     const reasons: string[] = [];
+
+    const configurationErrors = validateRiskConfiguration(this.config);
+    if (configurationErrors.length > 0) {
+      return this.block('invalid_risk_configuration', configurationErrors);
+    }
 
     if (this.emergency.isActive()) {
       return this.block('emergency_stop', [
