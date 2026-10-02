@@ -174,6 +174,66 @@ async function main() {
   assert(recoveredPartialResult.remainingVolume === 0.6, "historical partial recovery must use live position");
   assert(recoveredPartialResult.realizedProfit === 7, "historical partial recovery must return net PnL");
 
+  const noIdDb = new DatabaseManager(":memory:");
+  await noIdDb.initialize();
+  const noIdGateway = new ExecutionGateway(config(), noIdDb);
+  let noIdCloseCalls = 0;
+  (noIdGateway as any).binance.closePosition = async () => {
+    noIdCloseCalls += 1;
+    return { ok: true, realizedProfit: 1, realizedProfitCurrency: "USD" };
+  };
+  const noIdTrade = {
+    ticket: 9101, symbol: "BTCUSDT", timeframe: "H1", side: "BUY",
+    volume: 1, entry: 50_000, sl: 49_000, tp: 52_000, status: "open",
+    openedAt: Date.now(), source: "NO_DURABLE_ID",
+  } as any;
+  assert(
+    await noIdGateway.closeTrade(noIdTrade) === false,
+    "live close without durable trade id must fail closed",
+  );
+  assert(noIdCloseCalls === 0, "live close without durable trade id must not contact Binance");
+  noIdDb.raw().close();
+
+  const noIdPartialDb = new DatabaseManager(":memory:");
+  await noIdPartialDb.initialize();
+  const noIdPartialGateway = new ExecutionGateway(config(), noIdPartialDb);
+  let noIdPartialCalls = 0;
+  (noIdPartialGateway as any).binance.closePartialPosition = async () => {
+    noIdPartialCalls += 1;
+    return { ok: true, remainingVolume: 0.6, realizedProfit: 1, realizedProfitCurrency: "USD" };
+  };
+  assert(
+    (await noIdPartialGateway.closePartial(
+      noIdTrade,
+      0.4,
+      51_000,
+      "PARTIAL",
+    )).ok === false,
+    "live partial close without durable trade id must fail closed",
+  );
+  assert(noIdPartialCalls === 0, "live partial close without durable trade id must not contact Binance");
+  noIdPartialDb.raw().close();
+
+  const overRequest = new BinanceExecutor(config());
+  (overRequest as any).getPosition = async () => ({
+    positionAmt: 0.5,
+    entryPrice: 50_000,
+    unrealizedProfit: 0,
+  });
+  let overRequestCalls = 0;
+  (overRequest as any).signedPost = async () => {
+    overRequestCalls += 1;
+    return { orderId: 9010 };
+  };
+  const overResult = await overRequest.closePartialPosition(103, "BTCUSDT", 0.8, clientOrderId);
+  assert(overResult.ok === false, "Binance partial close larger than live position must fail closed");
+  assert(overRequestCalls === 0, "oversized Binance partial close must not send an order");
+  (overRequest as any).getPosition = async () => ({
+    positionAmt: 0.5,
+    entryPrice: 50_000,
+    unrealizedProfit: 0,
+  });
+
   const db = new DatabaseManager(":memory:");
   await db.initialize();
   const tradeId = db.insertTrade({
