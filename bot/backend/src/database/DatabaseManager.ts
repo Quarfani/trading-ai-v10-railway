@@ -301,6 +301,7 @@ export class DatabaseManager {
     operationKey: string;
     requestJson: string | null;
     resultJson: string | null;
+    conflict?: boolean;
   } | null {
     const rows = this.db.prepare(`
       SELECT executionId, operationKey, requestJson, resultJson, tradeId
@@ -309,7 +310,7 @@ export class DatabaseManager {
         AND status='EXECUTED'
         AND (tradeId=? OR tradeId IS NULL)
       ORDER BY updatedAt DESC, executionId DESC
-      LIMIT 50
+      LIMIT 100
     `).all(tradeId) as Array<{
       executionId: string;
       operationKey: string;
@@ -318,20 +319,25 @@ export class DatabaseManager {
       tradeId: number | null;
     }>;
 
-    for (const row of rows) {
-      if (Number(row.tradeId) === tradeId) return row;
-
-      if (!row.requestJson) continue;
+    const matches = rows.filter(row => {
+      if (Number(row.tradeId) === tradeId) return true;
+      if (!row.requestJson) return false;
       try {
-        if (Number(JSON.parse(row.requestJson)?.tradeId) === tradeId) {
-          return row;
-        }
+        return Number(JSON.parse(row.requestJson)?.tradeId) === tradeId;
       } catch {
-        // malformed legacy row is not authoritative
+        return false;
       }
+    });
+
+    const uniqueKeys = new Set(matches.map(row => row.operationKey));
+    if (uniqueKeys.size > 1) {
+      return {
+        ...matches[0],
+        conflict: true,
+      };
     }
 
-    return null;
+    return matches[0] ?? null;
   }
 
   getExecutionByOperationKey(operationKey: string): any | null {
