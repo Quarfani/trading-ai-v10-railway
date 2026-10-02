@@ -378,7 +378,7 @@ async def record_trade(body: dict):
             raise HTTPException(status_code=422, detail="Invalid actual_label")
 
     if prediction_id and predicted_signal is not None and actual_label is not None:
-        server.record_prediction_outcome(
+        recorded = server.record_prediction_outcome(
             symbol=symbol,
             timeframe=timeframe,
             prediction_id=prediction_id,
@@ -386,6 +386,11 @@ async def record_trade(body: dict):
             actual_label=actual_label,
             profit=profit,
         )
+        if not recorded:
+            raise HTTPException(
+                status_code=409,
+                detail="Conflicting prediction outcome for prediction_id",
+            )
         return {"ok": True, "recorded": "prediction_outcome"}
 
     candles = body.get("entry_candles", [])
