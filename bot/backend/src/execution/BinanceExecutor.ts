@@ -243,7 +243,12 @@ export class BinanceExecutor {
 
   // ─── Place Order with SL/TP ────────────────────────────────────────────
 
-  async placeMarketOrder(signal: Signal, quantity: number, clientOrderId?: string): Promise<Trade | null> {
+  async placeMarketOrder(
+    signal: Signal,
+    quantity: number,
+    clientOrderId?: string,
+    protectionOperationKey?: string,
+  ): Promise<Trade | null> {
     const spec = getSymbolSpec(signal.symbol);
     if (!this.isFutures && signal.side === 'SELL') {
       this.logger.error(`[Binance Spot] SELL/short semantics are unsupported by this executor; trade blocked`);
@@ -279,7 +284,13 @@ export class BinanceExecutor {
       //    immediate market close so we never knowingly continue unprotected.
       try {
         if (this.isFutures) {
-          await this.placeSLTP(signal, executedQty, ticket, spec);
+          await this.placeSLTP(
+            signal,
+            executedQty,
+            ticket,
+            spec,
+            protectionOperationKey,
+          );
         } else {
           await this.placeOCO(signal, executedQty, ticket, spec);
         }
@@ -320,7 +331,15 @@ export class BinanceExecutor {
           }
           this.logger.warn(`[Binance] Recovered ambiguous order ${clientOrderId} as ticket=${recoveredTicket}`);
           try {
-            if (this.isFutures) await this.placeSLTP(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
+            if (this.isFutures) {
+              await this.placeSLTP(
+                signal,
+                executedQtyRecovered,
+                recoveredTicket,
+                getSymbolSpec(signal.symbol),
+                protectionOperationKey,
+              );
+            }
             else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
           } catch (protectionError: any) {
             const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
