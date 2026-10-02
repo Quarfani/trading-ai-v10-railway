@@ -772,38 +772,158 @@ export class StartupReconciler {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
 
-    // Futures exposes position identity directly. Spot does not: an asset
-    // balance has no built-in link to a bot ticket and may include holdings
-    // that predate the bot. Never pretend that a raw Spot balance proves which
-    // trade owns the units.
+    // Spot has no broker ticket/position identity. Startup therefore requires
+    // exact operation-keyed OCO protection for every local open trade plus
+    // aggregate inventory consistent with local quantities.
     if (!this.config.binance.futures) {
       const openTrades = this.db.getOpenTrades();
-      if (openTrades.length > 0) {
-        throw new Error(
-          'Binance Spot restart reconciliation is ambiguous for open bot trades: ' +
-          'Spot balances do not preserve per-trade ownership. Manual reconciliation is required.',
-        );
-      }
-
       const balances = await exec.getAllSpotBalancesForConfiguredSymbols();
+
       const byAsset = new Map(
         (balances as any[]).map(balance => [
           String(balance.asset).toUpperCase(),
           Number(balance.free) + Number(balance.locked),
         ]),
       );
+      const expectedByBase = new Map<string, number>();
 
-      for (const symbol of this.config.symbols ?? []) {
-        const raw = String(symbol).trim().toUpperCase();
+      for (const t of openTrades) {
+        const raw = String(t.symbol).trim().toUpperCase();
         const quote = ['USDT', 'USDC', 'BUSD'].find(q => raw.endsWith(q));
-        if (!quote) continue;
-        const base = raw.slice(0, -quote.length);
-        const inventory = Number(byAsset.get(base) ?? 0);
-        if (Number.isFinite(inventory) && inventory > 1e-8) {
+        if (!quote) {
           throw new Error(
-            `Binance Spot startup found non-zero ${base} inventory for ${raw} ` +
-            'without an attributable open bot trade; manual reconciliation is required.',
+            `Unsupported Binance Spot quote asset for ${raw}; manual reconciliation is required.`,
           );
+        }
+        const base = raw.slice(0, -quote.length);
+        expectedByBase.set(
+          base,
+          (expectedByBase.get(base) ?? 0) + Number(t.volume),
+        );
+
+        const openOperation = this.db.raw().prepare(`
+          SELECT executionId, operationKey, requestJson, tradeId
+          FROM execution_ledger
+          WHERE action='OPEN'
+            AND status='EXECUTED'
+            AND (tradeId=? OR (tradeId IS NULL AND symbol=?))
+          ORDER BY updatedAt DESC, executionId DESC
+          LIMIT 50
+        `).all(t.id, t.symbol) as Array<{
+          executionId: string;
+          operationKey: string;
+          requestJson?: string | null;
+          tradeId?: number | null;
+        }>;
+
+        let operationKey: string | null = null;
+        for (const row of openOperation) {
+          if (Number(row.tradeId) === Number(t.id)) {
+            operationKey = String(row.operationKey);
+            break;
+          }
+          if (!row.requestJson) continue;
+          try {
+            if (Number(JSON.parse(row.requestJson)?.tradeId) === Number(t.id)) {
+              operationKey = String(row.operationKey);
+              break;
+            }
+          } catch {}
+        }
+
+        if (!operationKey) {
+          throw new Error(
+            `Binance Spot trade id=${t.id} lacks an authoritative OPEN operation key; manual reconciliation is required.`,
+          );
+        }
+
+        const list = await exec.recoverBinanceSpotOco(
+          t.symbol,
+          operationKey,
+        );
+        if (!list) {
+          throw new Error(
+            `Binance Spot OCO could not be recovered for trade id=${t.id} symbol=${t.symbol}`,
+          );
+        }
+
+        const status = String(list.listStatusType).toUpperCase();
+        const listStatus = String(list.listOrderStatus).toUpperCase();
+        if (
+          !['EXEC_STARTED', 'EXECUTING'].includes(status) &&
+          !['EXECUTING'].includes(listStatus)
+        ) {
+          throw new Error(
+            `Binance Spot OCO is not active for trade id=${t.id}: ${status}/${listStatus}`,
+          );
+        }
+
+        const listOrders = Array.isArray(list.orders) ? list.orders : [];
+        if (listOrders.length !== 2) {
+          throw new Error(
+            `Binance Spot OCO has invalid leg count for trade id=${t.id}`,
+          );
+        }
+
+        const openOrders = await exec.getBinanceOpenOrders(t.symbol);
+        const byId = new Map(
+          openOrders.map((order: any) => [Number(order.orderId), order]),
+        );
+        const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
+        const tpTolerance = Math.max(1e-8, Math.abs(t.tp) * 1e-6);
+        const slTolerance = Math.max(1e-8, Math.abs(t.sl) * 1e-6);
+        const liveLegs = listOrders
+          .map((order: any) => byId.get(Number(order.orderId)))
+          .filter(Boolean);
+        if (liveLegs.length !== 2) {
+          throw new Error(
+            `Binance Spot OCO legs are not both open for trade id=${t.id}`,
+          );
+        }
+        const tp = liveLegs.find((order: any) =>
+          String(order.side).toUpperCase() === closeSide &&
+          String(order.type).toUpperCase().includes('LIMIT') &&
+          String(order.status).toUpperCase() === 'NEW' &&
+          Math.abs(Number(order.price) - Number(t.tp)) <= tpTolerance,
+        );
+        const sl = liveLegs.find((order: any) =>
+          String(order.side).toUpperCase() === closeSide &&
+          String(order.type).toUpperCase().includes('STOP') &&
+          String(order.status).toUpperCase() === 'NEW' &&
+          Math.abs(Number(order.stopPrice) - Number(t.sl)) <= slTolerance,
+        );
+        if (!tp || !sl) {
+          throw new Error(
+            `Binance Spot OCO prices/side do not match trade id=${t.id}`,
+          );
+        }
+      }
+
+      for (const [base, expected] of expectedByBase) {
+        if (!(expected > 0) || !Number.isFinite(expected)) {
+          throw new Error(`Invalid local Spot inventory expectation for ${base}`);
+        }
+        const inventory = Number(byAsset.get(base) ?? 0);
+        const tolerance = Math.max(1e-8, expected * 0.0001);
+        if (!Number.isFinite(inventory) || Math.abs(inventory - expected) > tolerance) {
+          throw new Error(
+            `Binance Spot inventory mismatch for ${base}: local=${expected} broker=${inventory}; manual reconciliation is required.`,
+          );
+        }
+      }
+
+      if (openTrades.length === 0) {
+        for (const symbol of this.config.symbols ?? []) {
+          const raw = String(symbol).trim().toUpperCase();
+          const quote = ['USDT', 'USDC', 'BUSD'].find(q => raw.endsWith(q));
+          if (!quote) continue;
+          const base = raw.slice(0, -quote.length);
+          const inventory = Number(byAsset.get(base) ?? 0);
+          if (Number.isFinite(inventory) && inventory > 1e-8) {
+            throw new Error(
+              `Binance Spot startup found non-zero ${base} inventory for ${raw} without an attributable open bot trade; manual reconciliation is required.`,
+            );
+          }
         }
       }
 
