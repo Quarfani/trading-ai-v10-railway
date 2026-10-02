@@ -19,6 +19,7 @@ export interface DataQualityResult {
   imputedCount: number;
   staleCount: number;
   futureTimestampCount: number;
+  invalidTimestampCount: number;
   invalidSequenceCount: number;
   hardFailures: string[];
   warnings: string[];
@@ -46,17 +47,28 @@ export function evaluateMarketDataQuality(
   const total = candles.length;
   const interval = TIMEFRAME_MS[timeframe];
 
-  const maxGapBars = Math.max(0, options.maxGapBars ?? 1);
-  const maxMissingRatio = Math.max(
-    0,
-    Math.min(1, options.maxMissingRatio ?? 0.01),
-  );
+  const rawMaxGapBars = options.maxGapBars ?? 1;
+  const rawMaxMissingRatio = options.maxMissingRatio ?? 0.01;
+  const rawMaxLatencyMs = options.maxLatencyMs;
+
+  const maxGapBars =
+    Number.isFinite(rawMaxGapBars) && rawMaxGapBars >= 0
+      ? rawMaxGapBars
+      : 0;
+  const maxMissingRatio =
+    Number.isFinite(rawMaxMissingRatio) &&
+    rawMaxMissingRatio >= 0 &&
+    rawMaxMissingRatio <= 1
+      ? rawMaxMissingRatio
+      : 0;
   const allowSynthetic = options.allowSynthetic ?? false;
   const allowImputed = options.allowImputed ?? false;
   const maxLatencyMs =
-    options.maxLatencyMs == null
+    rawMaxLatencyMs == null
       ? Infinity
-      : Math.max(0, options.maxLatencyMs);
+      : Number.isFinite(rawMaxLatencyMs) && rawMaxLatencyMs >= 0
+        ? rawMaxLatencyMs
+        : 0;
   const allowScheduledSessionGaps = options.allowScheduledSessionGaps ?? false;
   const scheduledGapMinMs = Math.max(
     interval * 2,
@@ -66,6 +78,18 @@ export function evaluateMarketDataQuality(
   const hardFailures: string[] = [];
   const warnings: string[] = [];
 
+  if (
+    !Number.isFinite(rawMaxGapBars) ||
+    rawMaxGapBars < 0 ||
+    !Number.isFinite(rawMaxMissingRatio) ||
+    rawMaxMissingRatio < 0 ||
+    rawMaxMissingRatio > 1 ||
+    (rawMaxLatencyMs != null &&
+      (!Number.isFinite(rawMaxLatencyMs) || rawMaxLatencyMs < 0))
+  ) {
+    hardFailures.push('Invalid data-quality threshold configuration');
+  }
+
   let duplicateCount = 0;
   let outOfOrderCount = 0;
   let gapBars = 0;
@@ -74,6 +98,7 @@ export function evaluateMarketDataQuality(
   let imputedCount = 0;
   let staleCount = 0;
   let futureTimestampCount = 0;
+  let invalidTimestampCount = 0;
   let invalidSequenceCount = 0;
 
   let previousTime = -Infinity;
@@ -139,7 +164,9 @@ export function evaluateMarketDataQuality(
       imputedCount++;
     }
 
-    if (candle.time > Date.now() + 5_000) {
+    if (!Number.isFinite(candle.time) || candle.time <= 0) {
+      invalidTimestampCount++;
+    } else if (candle.time > Date.now() + 5_000) {
       futureTimestampCount++;
     }
 
@@ -173,6 +200,9 @@ export function evaluateMarketDataQuality(
   }
   if (invalidOhlcCount > 0) {
     hardFailures.push(`Invalid OHLC candles: ${invalidOhlcCount}`);
+  }
+  if (invalidTimestampCount > 0) {
+    hardFailures.push(`Invalid candle timestamps: ${invalidTimestampCount}`);
   }
   if (futureTimestampCount > 0) {
     hardFailures.push(`Future candle timestamps: ${futureTimestampCount}`);
@@ -229,6 +259,7 @@ export function evaluateMarketDataQuality(
     imputedCount,
     staleCount,
     futureTimestampCount,
+    invalidTimestampCount,
     invalidSequenceCount,
     hardFailures,
     warnings,
