@@ -702,6 +702,20 @@ export class ExecutionGateway {
     );
   }
 
+  async reconcileBinanceOpenOperation(
+    symbol: string,
+    operationKey: string,
+    side: 'BUY' | 'SELL',
+    expectedVolume: number,
+  ) {
+    return this.binance.reconcileOpenOperation(
+      symbol,
+      operationKey,
+      side,
+      expectedVolume,
+    );
+  }
+
   async reconcileBinanceCloseOperation(
     symbol: string,
     operationKey: string,
