@@ -252,7 +252,34 @@ export interface OrderFlowResult {
 
 export class OrderFlowEngine {
   analyze(candles: Candle[], lookback = 20): OrderFlowResult {
-    const slice = candles.slice(-lookback);
+    const slice = Array.isArray(candles)
+      ? candles
+          .filter(c =>
+            c &&
+            [c.open, c.high, c.low, c.close, c.volume, c.time].every(Number.isFinite) &&
+            c.open > 0 &&
+            c.high > 0 &&
+            c.low > 0 &&
+            c.close > 0 &&
+            c.volume >= 0
+          )
+          .slice(-Math.max(1, Math.floor(lookback)))
+      : [];
+
+    if (slice.length < 5) {
+      return {
+        buyVolume: 0,
+        sellVolume: 0,
+        delta: 0,
+        deltaRatio: 0,
+        poc: 0,
+        pocVolume: 0,
+        absorption: false,
+        absorptionBias: null,
+        bias: 'NEUTRAL',
+        strength: 0,
+      };
+    }
 
     let buyVolume  = 0;
     let sellVolume = 0;
@@ -273,7 +300,10 @@ export class OrderFlowEngine {
 
     const totalVolume = buyVolume + sellVolume;
     const delta       = buyVolume - sellVolume;
-    const deltaRatio  = totalVolume > 0 ? delta / totalVolume : 0;
+    const deltaRatio =
+      totalVolume > 0 && Number.isFinite(totalVolume)
+        ? delta / totalVolume
+        : 0;
 
     // Point of Control: price with most volume
     let pocPrice = 0, pocVol = 0;
@@ -300,7 +330,9 @@ export class OrderFlowEngine {
     const bias: OrderFlowResult['bias'] =
       deltaRatio >  0.15 ? 'BUY'  :
       deltaRatio < -0.15 ? 'SELL' : 'NEUTRAL';
-    const strength = Math.min(1, Math.abs(deltaRatio) * 4);
+    const strength = Number.isFinite(deltaRatio)
+      ? Math.min(1, Math.abs(deltaRatio) * 4)
+      : 0;
 
     return {
       buyVolume: +buyVolume.toFixed(2), sellVolume: +sellVolume.toFixed(2),
