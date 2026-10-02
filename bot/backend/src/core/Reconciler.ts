@@ -396,6 +396,10 @@ export class Reconciler {
       t.id!,
       ['PARTIAL_CLOSE'],
     );
+    const unresolvedModify = this.db.getLatestUnresolvedExecutionForTrade(
+      t.id!,
+      ['MOVE_SL_TP'],
+    );
 
     if (!pos || Math.abs(pos.positionAmt) < 0.0001) {
       if (unresolvedPartial) {
@@ -449,6 +453,62 @@ export class Reconciler {
       throw new Error(
         `Binance position ${t.symbol} remains open while a full-close operation is unresolved; manual reconciliation is required`,
       );
+    }
+
+    if (unresolvedModify) {
+      let request: any = null;
+      try {
+        request = unresolvedModify.requestJson
+          ? JSON.parse(unresolvedModify.requestJson)
+          : null;
+      } catch {
+        request = null;
+      }
+      const desiredSl = Number(request?.newSl);
+      const desiredTp = Number(request?.newTp);
+      if (!Number.isFinite(desiredSl) || !Number.isFinite(desiredTp)) {
+        throw new Error(
+          `Binance unresolved protection modify ${unresolvedModify.executionId} has invalid requested levels`,
+        );
+      }
+
+      const recoveredProtection = await this.exec.reconcileBinanceProtectionModify(
+        t.symbol,
+        String(unresolvedModify.operationKey),
+        desiredSl,
+        desiredTp,
+      );
+      if (!recoveredProtection) {
+        throw new Error(
+          `Binance protection modify operation ${unresolvedModify.operationKey} is not provably applied; manual reconciliation is required`,
+        );
+      }
+
+      const resolved = this.db.resolveReconciledProtectionModify(
+        t.id!,
+        String(unresolvedModify.executionId),
+        recoveredProtection.slOrderId === recoveredProtection.slOrderId
+          ? desiredSl
+          : desiredSl,
+        recoveredProtection.tpOrderId === recoveredProtection.tpOrderId
+          ? desiredTp
+          : desiredTp,
+        {
+          broker: 'binance',
+          symbol: t.symbol,
+          sl: desiredSl,
+          tp: desiredTp,
+          slOrderId: recoveredProtection.slOrderId,
+          tpOrderId: recoveredProtection.tpOrderId,
+          runtimeReconciliation: true,
+        },
+        recoveredProtection.slOrderId,
+      );
+      if (!resolved) {
+        throw new Error(
+          `Could not atomically reconcile Binance protection operation=${unresolvedModify.executionId}`,
+        );
+      }
     }
 
     const remaining = Math.abs(pos.positionAmt);
