@@ -251,6 +251,106 @@ export class StartupReconciler {
     }
   }
 
+  private async resolveAuthoritativeMT5ModifyLedgers(
+    positions: any[],
+  ): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, requestJson
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action='MOVE_SL_TP'
+      ORDER BY createdAt ASC, updatedAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      operationKey: string;
+      requestJson?: string | null;
+    }>;
+
+    const byTrade = new Map<number, typeof rows>();
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      try {
+        const tradeId = Number(JSON.parse(row.requestJson)?.tradeId);
+        if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+        const existing = byTrade.get(tradeId) ?? [];
+        existing.push(row);
+        byTrade.set(tradeId, existing);
+      } catch {
+        // malformed request JSON remains unresolved and blocks startup
+      }
+    }
+
+    const byTicket = new Map<number, any>(
+      positions.map(position => [Number(position.ticket), position]),
+    );
+
+    for (const [tradeId, tradeRows] of byTrade) {
+      // Without a broker-side operation identifier, two unknown modifications
+      // cannot be safely attributed to the current SL/TP state.
+      if (tradeRows.length !== 1) {
+        this.logger.warn(
+          `[MT5] Multiple unresolved MOVE_SL_TP operations for trade id=${tradeId}; leaving all unresolved`,
+        );
+        continue;
+      }
+
+      const row = tradeRows[0];
+      let request: any;
+      try { request = JSON.parse(row.requestJson!); }
+      catch { continue; }
+
+      const trade = this.db.raw()
+        .prepare('SELECT * FROM trades WHERE id=? LIMIT 1')
+        .get(tradeId) as any;
+      if (!trade?.ticket || String(trade.status) !== 'open') continue;
+
+      const live = byTicket.get(Number(trade.ticket));
+      if (!live) continue;
+
+      const newSl = Number(request?.newSl);
+      const newTp = Number(request?.newTp);
+      const liveSl = Number(live.sl);
+      const liveTp = Number(live.tp);
+      if (
+        !Number.isFinite(newSl) || !Number.isFinite(newTp) ||
+        !Number.isFinite(liveSl) || !Number.isFinite(liveTp) ||
+        newSl <= 0 || newTp <= 0 || liveSl <= 0 || liveTp <= 0
+      ) continue;
+
+      const tolerance = (target: number) =>
+        Math.max(1e-8, Math.abs(target) * 1e-6);
+      if (
+        Math.abs(liveSl - newSl) > tolerance(newSl) ||
+        Math.abs(liveTp - newTp) > tolerance(newTp)
+      ) continue;
+
+      if (
+        (trade.side === 'BUY' && !(newSl < trade.entry && newTp > trade.entry)) ||
+        (trade.side === 'SELL' && !(newSl > trade.entry && newTp < trade.entry))
+      ) continue;
+
+      const resolved = this.db.resolveReconciledSLTP(
+        tradeId,
+        String(row.executionId),
+        newSl,
+        newTp,
+        {
+          broker: 'mt5',
+          ticket: Number(trade.ticket),
+          newSl,
+          newTp,
+          startupReconciliation: true,
+        },
+        Number(trade.ticket),
+      );
+      if (resolved) {
+        this.logger.info(
+          `[MT5] startup-resolved protective-order operation=${row.operationKey}`,
+        );
+      }
+    }
+  }
+
   private async reconcileMT5(): Promise<unknown> {
     const r = await axios.get(`${this.config.mt5.bridgeUrl}/positions`, {
       timeout: 5_000, headers: { 'X-Api-Key': this.config.mt5.bridgeApiKey },
@@ -314,6 +414,7 @@ export class StartupReconciler {
 
     await this.resolveAuthoritativeMT5CloseLedgers();
     await this.resolveAuthoritativeMT5PartialLedgers(positions);
+    await this.resolveAuthoritativeMT5ModifyLedgers(positions);
     return positions;
   }
 
