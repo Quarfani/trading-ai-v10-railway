@@ -227,12 +227,13 @@ class ModelServer:
         label = self._profit_to_label(profit_value, signal)
 
         with self._lock:
-            self._buffers[key].append({
-                "X":     arr,
-                "y":     label,
-                "profit": profit_value,
-                "ts":    time.time(),
-            })
+            if ONLINE_LEARNING_ENABLED:
+                self._buffers[key].append({
+                    "X":     arr,
+                    "y":     label,
+                    "profit": profit_value,
+                    "ts":    time.time(),
+                })
             self._outcomes[key].append({
                 "prediction_id": prediction_id,
                 "predicted_label": predicted_signal,
@@ -245,17 +246,16 @@ class ModelServer:
                 ),
                 "ts":           time.time(),
             })
+            self._outcomes[key] = self._outcomes[key][-5000:]
 
         logger.debug(
-            f"[{symbol}] Trade recorded: profit={profit:.2f} → label={label} "
+            f"[{symbol}] Trade recorded: profit={profit_value:.2f} → label={label} "
             f"(buffer={len(self._buffers[key])}/{ONLINE_BUFFER_SIZE})"
         )
 
         # Trigger online update only when explicitly enabled.
         if ONLINE_LEARNING_ENABLED and len(self._buffers[key]) >= ONLINE_BUFFER_SIZE:
             self._trigger_online_update(symbol, timeframe)
-        elif not ONLINE_LEARNING_ENABLED:
-            logger.debug(f"[{symbol}/{timeframe}] Online learning disabled; buffer retained for audit only")
 
         # Check for model degradation
         self._check_degradation(symbol, timeframe)
@@ -319,6 +319,7 @@ class ModelServer:
                 "correct": predicted_signal == actual_label,
                 "ts": time.time(),
             })
+            self._outcomes[key] = outcomes[-5000:]
 
         self._check_degradation(symbol, timeframe)
 
