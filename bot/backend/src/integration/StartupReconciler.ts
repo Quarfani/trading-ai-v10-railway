@@ -4,6 +4,8 @@ import { DatabaseManager } from '../database/DatabaseManager';
 import { BinanceExecutor } from '../execution/BinanceExecutor';
 import { TelegramBot } from '../notifications/TelegramBot';
 import { Logger } from '../utils/Logger';
+import { MarketScanner } from '../core/MarketScanner';
+import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 
 /**
  * Startup reconciliation is a trading gate, not a best-effort diagnostic.
@@ -353,6 +355,190 @@ export class StartupReconciler {
       closeTimeMsc: history.closeTimeMsc,
     };
   }
+  private async resolveAuthoritativeBinanceLedgers(
+    exec: BinanceExecutor,
+    positions: any[],
+  ): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, action, symbol, volume, requestJson, createdAt
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action IN ('CLOSE','CLOSE_AT_MARKET','PARTIAL_CLOSE')
+      ORDER BY createdAt ASC, updatedAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      operationKey: string;
+      action: string;
+      symbol?: string | null;
+      volume?: number | null;
+      requestJson?: string | null;
+      createdAt: number;
+    }>;
+
+    const selectedByTrade = new Map<number, string>();
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      try {
+        const request = JSON.parse(row.requestJson);
+        const tradeId = Number(request?.tradeId);
+        if (
+          Number.isInteger(tradeId) &&
+          tradeId > 0 &&
+          !selectedByTrade.has(tradeId)
+        ) {
+          selectedByTrade.set(tradeId, String(row.executionId));
+        }
+      } catch {
+        // malformed request JSON remains unresolved and blocks startup
+      }
+    }
+
+    const bySymbol = new Map<string, any>(
+      positions.map(position => [String(position.symbol).toUpperCase(), position]),
+    );
+    const fx = new CurrencyConversionProvider(
+      new MarketScanner(this.config),
+      this.config.accountCurrency ?? 'USD',
+    );
+
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+
+      let request: any;
+      try {
+        request = JSON.parse(row.requestJson);
+      } catch {
+        continue;
+      }
+
+      const tradeId = Number(request?.tradeId);
+      if (
+        !Number.isInteger(tradeId) ||
+        tradeId <= 0 ||
+        selectedByTrade.get(tradeId) !== String(row.executionId)
+      ) {
+        continue;
+      }
+
+      const trade = this.db.raw()
+        .prepare('SELECT * FROM trades WHERE id=? LIMIT 1')
+        .get(tradeId) as any;
+      if (!trade?.ticket || String(trade.status) !== 'open') continue;
+
+      const recovered = await exec.recoverOperation(
+        String(trade.symbol),
+        String(row.operationKey),
+      );
+      if (!recovered || recovered.status !== 'FILLED') continue;
+      if (!(recovered.executedQty > 0) || !Number.isFinite(recovered.executedQty)) continue;
+
+      const expectedVolume = row.action === 'PARTIAL_CLOSE'
+        ? Number(request?.volume ?? row.volume)
+        : Number(row.volume ?? trade.volume);
+      if (
+        !(expectedVolume > 0) ||
+        Math.abs(recovered.executedQty - expectedVolume) >
+          Math.max(1e-8, expectedVolume * 0.0001)
+      ) {
+        continue;
+      }
+
+      if (
+        recovered.realizedProfit == null ||
+        !Number.isFinite(recovered.realizedProfit)
+      ) {
+        continue;
+      }
+
+      const profitCurrency = recovered.realizedProfitCurrency;
+      let accountProfit = Number(recovered.realizedProfit);
+      if (!Number.isFinite(accountProfit)) continue;
+      const accountCurrency = (this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+      const currency = String(profitCurrency ?? '').trim().toUpperCase();
+      if (currency && currency !== accountCurrency &&
+          !(accountCurrency === 'USD' && ['USDT','USDC','BUSD'].includes(currency))) {
+        const rate = await fx.getRate(currency);
+        if (!(rate != null && rate > 0 && Number.isFinite(rate))) continue;
+        accountProfit *= rate;
+      }
+      if (!Number.isFinite(accountProfit)) continue;
+
+      const live = bySymbol.get(String(trade.symbol).toUpperCase());
+      if (row.action === 'PARTIAL_CLOSE') {
+        if (!live) continue;
+        const remaining = Math.abs(Number(live.positionAmt));
+        if (!(remaining > 0) || !Number.isFinite(remaining)) continue;
+        if (
+          Math.abs(remaining - (Number(trade.volume) - recovered.executedQty)) >
+          Math.max(1e-8, Number(trade.volume) * 0.0001)
+        ) {
+          continue;
+        }
+
+        const cumulative = Number(trade.realizedProfit ?? 0) + accountProfit;
+        if (!Number.isFinite(cumulative)) continue;
+
+        const resolved = this.db.resolveReconciledPartialClose(
+          tradeId,
+          String(row.executionId),
+          +remaining.toFixed(8),
+          cumulative,
+          {
+            broker: 'binance',
+            ticket: Number(trade.ticket),
+            brokerOrderId: recovered.orderId,
+            closedVolume: recovered.executedQty,
+            remainingVolume: +remaining.toFixed(8),
+            profit: accountProfit,
+            cumulativeRealizedProfit: cumulative,
+            startupReconciliation: true,
+          },
+          recovered.orderId,
+        );
+        if (resolved) {
+          this.logger.info(
+            `[Binance] startup-resolved partial operation=${row.operationKey}`,
+          );
+        }
+        continue;
+      }
+
+      const positionRemaining = live ? Math.abs(Number(live.positionAmt)) : 0;
+      if (live && positionRemaining >= 0.0001) continue;
+
+      const exitPrice = Number(recovered.avgPrice);
+      if (!(exitPrice > 0) || !Number.isFinite(exitPrice)) continue;
+
+      const requestedReason = String(request?.reason ?? 'MANUAL').toUpperCase();
+      const reason = ['TP','SL','TIMEOUT','MANUAL'].includes(requestedReason)
+        ? requestedReason
+        : 'MANUAL';
+
+      const resolved = this.db.resolveReconciledFullClose(
+        tradeId,
+        String(row.executionId),
+        accountProfit,
+        Date.now(),
+        reason,
+        {
+          broker: 'binance',
+          ticket: Number(trade.ticket),
+          brokerOrderId: recovered.orderId,
+          executedQty: recovered.executedQty,
+          realizedProfit: accountProfit,
+          avgPrice: exitPrice,
+          startupReconciliation: true,
+        },
+        recovered.orderId,
+      );
+      if (resolved) {
+        this.logger.info(
+          `[Binance] startup-resolved close operation=${row.operationKey}`,
+        );
+      }
+    }
+  }
+
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
@@ -396,6 +582,7 @@ export class StartupReconciler {
     }
 
     const positions = await exec.getAllPositions();
+    await this.resolveAuthoritativeBinanceLedgers(exec, positions);
     const openTrades = this.db.getOpenTrades();
     const bySymbol = new Map<string, any>(
       positions.map(p => [p.symbol, p]),
