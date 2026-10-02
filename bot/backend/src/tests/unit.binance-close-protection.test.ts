@@ -16,12 +16,14 @@ async function main() {
   });
 
   let marketCloseSubmitted = false;
+  let closeClientOrderId = "";
   (executor as any).signedDelete = async () => ({});
   (executor as any).getOpenOrders = async () => [
     { orderId: 702, type: "TAKE_PROFIT_MARKET" },
   ];
-  (executor as any).signedPost = async () => {
+  (executor as any).signedPost = async (_path: string, payload: any) => {
     marketCloseSubmitted = true;
+    closeClientOrderId = String(payload?.newClientOrderId ?? "");
     return { orderId: 999, status: "FILLED", executedQty: "1" };
   };
 
@@ -29,7 +31,32 @@ async function main() {
   assert(!result.ok, "full close must fail closed when old protection remains");
   assert(!marketCloseSubmitted, "market close must not be submitted with stale protection");
   
-  console.log("Result: 2 passed, 0 failed");
+  assert(
+    closeClientOrderId === "",
+    "blocked full close must not submit a Binance clientOrderId before stale protection is cleared",
+  );
+
+  (executor as any).getOpenOrders = async () => [];
+  (executor as any).getPosition = async () => ({
+    positionAmt: 0,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  (executor as any).signedGet = async () => [
+    { realizedPnl: "10", commission: "0.10", commissionAsset: "USDT" },
+  ];
+
+  const reopened = await executor.closePosition(
+    42,
+    "BTCUSDT",
+    1,
+    "BUY",
+    "ta_full_test",
+  );
+  assert(reopened.ok, "full close should succeed after stale protection is cleared");
+  assert(closeClientOrderId === "ta_full_test", "full close must forward the durable Binance clientOrderId");
+
+  console.log("Result: 4 passed, 0 failed");
 }
 
 main().catch(error => {
