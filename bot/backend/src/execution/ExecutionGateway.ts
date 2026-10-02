@@ -844,6 +844,21 @@ export class ExecutionGateway {
     return this.binance.recoverProtectionByOperation(symbol, operationKey);
   }
 
+  async recoverBinanceSpotOco(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{
+    orderListId: number;
+    listStatusType: string;
+    listOrderStatus: string;
+    orders: any[];
+  } | null> {
+    return this.binance.recoverSpotOcoByOperation(
+      symbol,
+      operationKey,
+    );
+  }
+
   async recoverBinanceExecution(
     symbol: string,
     operationKey: string,
