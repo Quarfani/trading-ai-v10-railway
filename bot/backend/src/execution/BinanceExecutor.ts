@@ -471,6 +471,7 @@ export class BinanceExecutor {
     ticket:number,
     symbol:string,
     volume:number,
+    clientOrderId?: string,
   ):Promise<{
     ok:boolean;
     remainingVolume:number;
