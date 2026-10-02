@@ -613,13 +613,13 @@ export class DatabaseManager {
   getOpenPartialRealizedPnlSince(since: number): number {
     if (!Number.isFinite(since)) return 0;
     const rows = this.db.prepare(`
-      SELECT requestJson, resultJson
+      SELECT requestJson, resultJson, createdAt
       FROM execution_ledger
       WHERE action='PARTIAL_CLOSE'
         AND status='EXECUTED'
-        AND updatedAt > ?
-      ORDER BY updatedAt ASC
-    `).all(since) as Array<{ requestJson?: string | null; resultJson?: string | null }>;
+        AND createdAt > ?
+      ORDER BY createdAt ASC
+    `).all(since) as Array<{ requestJson?: string | null; resultJson?: string | null; createdAt?: number }>;
 
     let total = 0;
     for (const row of rows) {
