@@ -26,6 +26,8 @@ export class MLEnhancer {
   private readonly apiKey: string;
   private readonly enabled: boolean;
   private readonly required: boolean;
+  private outcomeFlushTimer: NodeJS.Timeout | null = null;
+  private outcomeFlushRunning = false;
 
   constructor(private config: SystemConfig, private db: DatabaseManager) {
     this.url = process.env.ML_SERVER_URL ?? 'http://localhost:5001';
@@ -35,6 +37,12 @@ export class MLEnhancer {
     if (this.enabled) {
       void this.checkHealth();
       setInterval(() => void this.checkHealth(), 60_000).unref?.();
+      this.outcomeFlushTimer = setInterval(
+        () => void this.flushPendingOutcomes(),
+        30_000,
+      );
+      this.outcomeFlushTimer.unref?.();
+      void this.flushPendingOutcomes();
     }
     if (this.required && !this.apiKey && process.env.ML_SERVER_ALLOW_ANONYMOUS !== 'true') {
       this.logger.warn('ML_REQUIRED=true without ML_SERVER_API_KEY and anonymous access disabled; trading will remain blocked');
@@ -156,6 +164,82 @@ export class MLEnhancer {
     }
   }
 
+  private async flushPendingOutcomes(): Promise<void> {
+    if (
+      !this.enabled ||
+      !this.available ||
+      this.outcomeFlushRunning
+    ) {
+      return;
+    }
+
+    this.outcomeFlushRunning = true;
+    try {
+      const pending = this.db.getPendingModelOutcomes(50);
+
+      for (const row of pending) {
+        const predictionId = String(row.predictionId ?? '').trim();
+        const symbol = String(row.symbol ?? '').trim().toUpperCase();
+        const timeframe = String(row.timeframe ?? '').trim();
+        const profit = Number(row.outcomeProfit);
+        const predictedSignal = Number(row.predictedLabel);
+        const actualLabel = Number(row.outcomeLabel);
+
+        if (
+          !predictionId ||
+          !symbol ||
+          !timeframe ||
+          !Number.isFinite(profit) ||
+          ![-1, 0, 1].includes(predictedSignal) ||
+          ![-1, 0, 1].includes(actualLabel)
+        ) {
+          this.logger.error(
+            `Invalid ML outcome outbox row; leaving unsent prediction=${predictionId}`,
+          );
+          continue;
+        }
+
+        try {
+          const response = await axios.post(
+            `${this.url}/record_trade`,
+            {
+              symbol,
+              timeframe,
+              profit,
+              // The outbox already contains the authoritative realized label.
+              // Do not re-derive it from profit + side a second time.
+              signal: actualLabel,
+              actual_label: actualLabel,
+              predicted_signal: predictedSignal,
+              prediction_id: predictionId,
+            },
+            {
+              timeout: 2_000,
+              headers: this.apiKey
+                ? { Authorization: `Bearer ${this.apiKey}` }
+                : {},
+            },
+          );
+
+          if (response.data?.ok !== true) {
+            throw new Error(
+              `ML server rejected outcome: ${JSON.stringify(response.data)}`,
+            );
+          }
+
+          this.db.markModelOutcomeSent(predictionId);
+        } catch (e: any) {
+          this.logger.warn(
+            `ML outcome outbox send failed for ${predictionId}: ${e?.message ?? e}`,
+          );
+          break;
+        }
+      }
+    } finally {
+      this.outcomeFlushRunning = false;
+    }
+  }
+
   private async checkHealth(): Promise<void> {
     try {
       const r = await axios.get(`${this.url}/health`, {
@@ -163,6 +247,9 @@ export class MLEnhancer {
         headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {},
       });
       this.available = r.data?.ok === true;
+      if (this.available) {
+        void this.flushPendingOutcomes();
+      }
     } catch {
       this.available = false;
     }
