@@ -154,7 +154,32 @@ async function main() {
     "Spot market close must only be submitted after OCO cancellation",
   );
 
-  console.log("Result: 10 passed, 0 failed");
+  (executor as any).orderMap.clear();
+  (executor as any).getProtectiveOrderIds = async () => [];
+  (executor as any).getOpenOrders = async () => [];
+  (executor as any).getPosition = async () => ({
+    positionAmt: 0,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  let flatRejected = false;
+  try {
+    await executor.closePosition(
+      1001,
+      "BTCUSDT",
+      1,
+      "BUY",
+      "flat-position-new-operation",
+    );
+  } catch {
+    flatRejected = true;
+  }
+  assert(
+    flatRejected,
+    "a new Binance close operation must not infer success from an already-flat position",
+  );
+
+  console.log("Result: 11 passed, 0 failed");
 
 }
 
