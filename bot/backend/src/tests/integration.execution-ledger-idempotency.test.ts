@@ -1,6 +1,7 @@
 import axios from "axios";
 import { DatabaseManager } from "../database/DatabaseManager";
 import { ExecutionGateway } from "../execution/ExecutionGateway";
+import { BinanceExecutor, makeBinanceClientOrderId } from "../execution/BinanceExecutor";
 import { PaperTrader } from "../integration/PaperTrader";
 import { SystemConfig, Signal } from "../types/trading.types";
 import { clearBrokerContracts, registerBrokerContract } from "../market/MarketCatalog";
@@ -560,7 +561,7 @@ async function main() {
   );
   corruptDb.raw().close();
 
-  const closeIdentityExecutor = new (require("../execution/BinanceExecutor").BinanceExecutor)(baseConfig("binance")) as any;
+  const closeIdentityExecutor = new BinanceExecutor(baseConfig("binance")) as any;
   const closePosts: any[] = [];
   closeIdentityExecutor.getPosition = async () => ({
     positionAmt: 0.01,
