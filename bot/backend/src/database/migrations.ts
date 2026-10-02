@@ -442,6 +442,14 @@ const MIGRATIONS: Migration[] = [
         ON model_decisions(outcomeRecordedAt, outcomeSentAt, predictionId);
     `
   },
+  {
+    version: 18, name: 'ml_prediction_timeframe',
+    up: `
+      ALTER TABLE model_decisions ADD COLUMN timeframe TEXT;
+      CREATE INDEX IF NOT EXISTS idx_model_decisions_prediction_scope
+        ON model_decisions(symbol, timeframe, timestamp);
+    `
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
