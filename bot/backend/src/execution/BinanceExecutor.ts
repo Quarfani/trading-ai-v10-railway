@@ -83,6 +83,24 @@ export class BinanceExecutor {
       );
     }
 
+    if (this.isFutures) {
+      const after = await this.getPosition(signal.symbol);
+      if (!after) {
+        throw new Error(
+          `Emergency close executed but post-close position state is unavailable for ${signal.symbol}`,
+        );
+      }
+      const remaining = Math.abs(Number(after.positionAmt));
+      if (
+        !Number.isFinite(remaining) ||
+        remaining > Math.max(spec.volumeStep, quantity * 0.0001)
+      ) {
+        throw new Error(
+          `Emergency close executed but residual position remains for ${signal.symbol}: ${remaining}`,
+        );
+      }
+    }
+
     this.logger.error(
       `[Binance] Emergency close filled after protection failure: ${signal.symbol} qty=${executed}`,
     );
