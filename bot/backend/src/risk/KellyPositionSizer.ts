@@ -77,17 +77,52 @@ export class KellyPositionSizer {
       this.logger.warn(`[${symbol}] Missing/invalid market economics — sizing blocked`);
       return { volume: 0, stats: this.fixedStats(config.riskPerTrade) };
     }
-    const base = currentEquity && config.compounding.enabled
-      ? currentEquity
-      : config.accountBalance;
+    const base = currentEquity != null && config.compounding.enabled
+      ? Number(currentEquity)
+      : Number(config.accountBalance);
+
+    if (
+      !(base > 0) ||
+      !Number.isFinite(base) ||
+      !(Number.isFinite(entry) && entry > 0) ||
+      !(Number.isFinite(sl) && sl > 0) ||
+      !Number.isFinite(qualityScore) ||
+      qualityScore < 0 ||
+      qualityScore > 100 ||
+      !(Number.isFinite(config.riskPerTrade) && config.riskPerTrade > 0)
+    ) {
+      this.logger.warn(`[${symbol}] Invalid Kelly sizing inputs — sizing blocked`);
+      return {
+        volume: 0,
+        stats: this.fixedStats(
+          Number.isFinite(config.riskPerTrade) && config.riskPerTrade > 0
+            ? config.riskPerTrade
+            : 0,
+        ),
+      };
+    }
 
     const slDist = Math.abs(entry - sl);
-    if (slDist === 0) {
-      return { volume: resolvedEconomics.minVolume, stats: this.fixedStats(config.riskPerTrade) };
+    if (!(slDist > 0) || !Number.isFinite(slDist)) {
+      return {
+        volume: 0,
+        stats: this.fixedStats(config.riskPerTrade),
+      };
     }
 
     // ── Kelly computation ────────────────────────────────────────────────
     const stats = this.computeKelly(symbolStats, config.riskPerTrade);
+    if (
+      !Number.isFinite(stats.fraction) ||
+      stats.fraction < 0 ||
+      !Number.isFinite(stats.kelly) ||
+      !Number.isFinite(stats.winRate) ||
+      !Number.isFinite(stats.avgWin) ||
+      !Number.isFinite(stats.avgLoss)
+    ) {
+      this.logger.warn(`[${symbol}] Invalid Kelly statistics — sizing blocked`);
+      return { volume: 0, stats };
+    }
 
     // ── Quality adjustment ───────────────────────────────────────────────
     // Quality 80+ → full size. Quality 50 → 85%. Quality 30 → 70%.
