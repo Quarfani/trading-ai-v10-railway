@@ -138,7 +138,10 @@ export class SentimentEngine {
   private async fetchFearGreed(): Promise<void> {
     try {
       const r = await axios.get('https://api.alternative.me/fng/', { timeout: 5_000 });
-      this.fearGreed = Number(r.data?.data?.[0]?.value ?? 50);
+      const value = Number(r.data?.data?.[0]?.value);
+      if (Number.isFinite(value) && value >= 0 && value <= 100) {
+        this.fearGreed = value;
+      }
     } catch { /* keep last value */ }
   }
 
@@ -169,8 +172,17 @@ export class SentimentEngine {
   }
 
   private getCurrencies(symbol: string): string[] {
-    if (symbol.length >= 6) return [symbol.slice(0, 3), symbol.slice(3, 6)];
-    return [symbol];
+    const normalized = String(symbol ?? '').toUpperCase().trim();
+    const quoteSuffixes = ['USDT', 'USDC', 'BUSD', 'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'];
+    const quote = quoteSuffixes.find(q => normalized.endsWith(q));
+    if (quote && normalized.length > quote.length) {
+      const base = normalized.slice(0, -quote.length);
+      return [base, quote];
+    }
+    if (normalized.length >= 6) {
+      return [normalized.slice(0, 3), normalized.slice(3, 6)];
+    }
+    return [normalized];
   }
 
   private fearGreedLabel(): string {
