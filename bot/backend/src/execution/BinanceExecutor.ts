@@ -694,7 +694,6 @@ export class BinanceExecutor {
           let fillPriceRecovered = Number(
             recovered.avgPrice ?? recovered.fills?.[0]?.price ?? 0,
           );
-          );
           let entryCommissionRecovered = 0;
           let entryCommissionCurrencyRecovered: string | undefined;
           if (!this.isFutures) {
