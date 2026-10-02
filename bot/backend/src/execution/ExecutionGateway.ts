@@ -399,6 +399,12 @@ export class ExecutionGateway {
 
   private getOpenOperationKeyForTrade(tradeId: number): string | undefined {
     const row = this.db.getLatestExecutedOpenOperationForTrade(tradeId);
+    if (row?.conflict) {
+      this.logger.error(
+        `Conflicting executed OPEN identities for trade id=${tradeId}; broker close blocked`,
+      );
+      return undefined;
+    }
     return row?.operationKey ? String(row.operationKey) : undefined;
   }
 
@@ -434,13 +440,22 @@ export class ExecutionGateway {
     if (this.config.mode === 'binance') {
       if (!t.ticket) throw new Error('Trade has no broker ticket');
 
+      const openOperationKey = t.id
+        ? this.getOpenOperationKeyForTrade(t.id)
+        : undefined;
+      if (t.id && !openOperationKey) {
+        throw new Error(
+          `Binance close blocked because authoritative OPEN operation identity is unavailable for trade id=${t.id}`,
+        );
+      }
+
       const result = await this.binance.closePosition(
         t.ticket,
         t.symbol,
         t.volume,
         t.side,
         this.makeClientOrderId(operationKey),
-        t.id ? this.getOpenOperationKeyForTrade(t.id) : undefined,
+        openOperationKey,
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
