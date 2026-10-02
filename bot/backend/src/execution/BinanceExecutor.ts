@@ -28,6 +28,7 @@ import { Logger }                      from '../utils/Logger';
 interface OpenOrderIds {
   slOrderId?: number;
   tpOrderId?: number;
+  orderListId?: number;
   closeSide?: 'BUY'|'SELL';
   quantity?: number;
 }
@@ -289,6 +290,32 @@ export class BinanceExecutor {
     return id;
   }
 
+  private makeOcoClientOrderId(
+    operationKey: string,
+    kind: 'LIST' | 'ABOVE' | 'BELOW',
+  ): string {
+    const digest = crypto
+      .createHash('sha256')
+      .update(`SPOT_OCO:${kind}:${operationKey}`)
+      .digest('hex')
+      .slice(0, 27);
+    const id = `tao${kind === 'LIST' ? 'l' : kind === 'ABOVE' ? 'a' : 'b'}_${digest}`;
+    if (id.length > 32) {
+      throw new Error(`Generated Binance Spot OCO clientOrderId exceeds 32 chars: ${id.length}`);
+    }
+    return id;
+  }
+
+  private async getSpotOcoByClientId(
+    symbol: string,
+    listClientOrderId: string,
+  ): Promise<any | null> {
+    return this.signedGet('/api/v3/orderList', {
+      symbol,
+      origClientOrderId: listClientOrderId,
+    });
+  }
+
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
     try {
       return await this.signedGet(
@@ -357,7 +384,13 @@ export class BinanceExecutor {
         if (this.isFutures) {
           await this.placeSLTP(signal, executedQty, ticket, spec, clientOrderId);
         } else {
-          await this.placeOCO(signal, executedQty, ticket, spec);
+          await this.placeOCO(
+            signal,
+            executedQty,
+            ticket,
+            spec,
+            clientOrderId,
+          );
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
@@ -407,7 +440,13 @@ export class BinanceExecutor {
               getSymbolSpec(signal.symbol),
               clientOrderId,
             );
-            else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
+            else await this.placeOCO(
+              signal,
+              executedQtyRecovered,
+              recoveredTicket,
+              getSymbolSpec(signal.symbol),
+              clientOrderId,
+            );
           } catch (protectionError: any) {
             const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
@@ -493,49 +532,187 @@ export class BinanceExecutor {
   // ─── Spot OCO (SL + TP combined) ─────────────────────────────────────
 
   private async placeOCO(
-    signal:   Signal,
-    quantity: number,
-    ticket:   number,
-    spec:     ReturnType<typeof getSymbolSpec>,
+    signal:       Signal,
+    quantity:     number,
+    ticket:       number,
+    spec:         ReturnType<typeof getSymbolSpec>,
+    protectionKey?: string,
   ): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
 
-    // OCO: price=TP (limit), stopPrice=SL (stop-limit trigger), stopLimitPrice=SL-buffer
-    const tpPrice   = this.formatPrice(signal.tp, spec.pip);
-    const slPrice   = this.formatPrice(signal.sl, spec.pip);
-    const slLimit   = signal.side === 'BUY'
-      ? this.formatPrice(signal.sl * 0.9995, spec.pip)  // small buffer
+    const tpPrice = this.formatPrice(signal.tp, spec.pip);
+    const slPrice = this.formatPrice(signal.sl, spec.pip);
+    const slLimit = signal.side === 'BUY'
+      ? this.formatPrice(signal.sl * 0.9995, spec.pip)
       : this.formatPrice(signal.sl * 1.0005, spec.pip);
 
-    // Binance's current Spot REST API uses the order-list OCO endpoint; the legacy /api/v3/order/oco route is deprecated.
-    const baseId = `ta${ticket}`.slice(0, 12);
-    const oco = await this.signedPost('/api/v3/orderList/oco', {
-      symbol:            signal.symbol,
-      side:              closeSide,
-      quantity:          this.formatQty(quantity, spec.volumeStep),
-      listClientOrderId: `${baseId}l`,
-      aboveClientOrderId: `${baseId}a`,
-      belowClientOrderId: `${baseId}b`,
-      aboveType:         'LIMIT_MAKER',
-      abovePrice:        tpPrice,
-      belowType:         'STOP_LOSS_LIMIT',
-      belowStopPrice:    slPrice,
-      belowPrice:        slLimit,
-      belowTimeInForce:  'GTC',
+    const listClientOrderId = protectionKey
+      ? this.makeOcoClientOrderId(protectionKey, 'LIST')
+      : `tao_${ticket}`;
+    const aboveClientOrderId = protectionKey
+      ? this.makeOcoClientOrderId(protectionKey, 'ABOVE')
+      : `taa_${ticket}`;
+    const belowClientOrderId = protectionKey
+      ? this.makeOcoClientOrderId(protectionKey, 'BELOW')
+      : `tab_${ticket}`;
+
+    const validateOco = (oco: any): {
+      listId: number;
+      slOrderId: number;
+      tpOrderId: number;
+    } => {
+      const status = String(oco?.listStatusType ?? '').toUpperCase();
+      const listStatus = String(oco?.listOrderStatus ?? '').toUpperCase();
+      if (
+        !['EXEC_STARTED', 'EXECUTING', 'ALL_DONE'].includes(status) &&
+        !['EXECUTING', 'ALL_DONE'].includes(listStatus)
+      ) {
+        throw new Error(
+          `Binance Spot OCO list is not in a known lifecycle state: status=${status} listStatus=${listStatus}`,
+        );
+      }
+
+      const returnedListId = String(oco?.listClientOrderId ?? '');
+      if (returnedListId !== listClientOrderId) {
+        throw new Error(
+          `Binance Spot OCO identity mismatch: expected=${listClientOrderId} got=${returnedListId}`,
+        );
+      }
+
+      const reports = Array.isArray(oco?.orderReports)
+        ? oco.orderReports
+        : [];
+      if (reports.length < 2) {
+        throw new Error('Binance Spot OCO requires two authoritative order reports');
+      }
+
+      const tpReport = reports.find(
+        (r: any) =>
+          Number(r.orderId) > 0 &&
+          (String(r.clientOrderId ?? '') === aboveClientOrderId ||
+            String(r.type ?? '').toUpperCase().includes('LIMIT')),
+      );
+      const slReport = reports.find(
+        (r: any) =>
+          Number(r.orderId) > 0 &&
+          (String(r.clientOrderId ?? '') === belowClientOrderId ||
+            String(r.type ?? '').toUpperCase().includes('STOP')),
+      );
+      if (!tpReport || !slReport) {
+        throw new Error('Binance Spot OCO legs could not be identified authoritatively');
+      }
+
+      const tpId = Number(tpReport.orderId);
+      const slId = Number(slReport.orderId);
+      const listId = Number(oco.orderListId);
+      if (
+        !(tpId > 0) ||
+        !(slId > 0) ||
+        !(listId > 0) ||
+        !Number.isFinite(tpId) ||
+        !Number.isFinite(slId) ||
+        !Number.isFinite(listId)
+      ) {
+        throw new Error('Binance Spot OCO returned invalid order/list identities');
+      }
+
+      return {
+        listId,
+        tpOrderId: tpId,
+        slOrderId: slId,
+      };
+    };
+
+    // After a timeout, the OCO request may have reached Binance even when the
+    // client never received the response. Recover the exact list before
+    // creating anything new.
+    if (protectionKey) {
+      const recovered = await this.getSpotOcoByClientId(
+        signal.symbol,
+        listClientOrderId,
+      ).catch(() => null);
+      if (recovered) {
+        const ids = validateOco(recovered);
+        this.orderMap.set(ticket, {
+          slOrderId: ids.slOrderId,
+          tpOrderId: ids.tpOrderId,
+          orderListId: ids.listId,
+          closeSide,
+          quantity,
+        });
+        return;
+      }
+    }
+
+    let oco: any;
+    try {
+      oco = await this.signedPost('/api/v3/orderList/oco', {
+        symbol:             signal.symbol,
+        side:               closeSide,
+        quantity:           this.formatQty(quantity, spec.volumeStep),
+        listClientOrderId,
+        aboveClientOrderId,
+        belowClientOrderId,
+        aboveType:           'LIMIT_MAKER',
+        abovePrice:          tpPrice,
+        belowType:           'STOP_LOSS_LIMIT',
+        belowStopPrice:      slPrice,
+        belowPrice:          slLimit,
+        belowTimeInForce:    'GTC',
+      });
+    } catch (e: any) {
+      if (protectionKey) {
+        const recovered = await this.getSpotOcoByClientId(
+          signal.symbol,
+          listClientOrderId,
+        ).catch(() => null);
+        if (recovered) {
+          const ids = validateOco(recovered);
+          this.orderMap.set(ticket, {
+            slOrderId: ids.slOrderId,
+            tpOrderId: ids.tpOrderId,
+            orderListId: ids.listId,
+            closeSide,
+            quantity,
+          });
+          return;
+        }
+      }
+      throw new Error(
+        `Binance Spot OCO placement failed: ${e?.response?.data?.msg ?? e?.message ?? e}`,
+      );
+    }
+
+    let ids: { listId: number; slOrderId: number; tpOrderId: number };
+    try {
+      ids = validateOco(oco);
+    } catch (validationError) {
+      if (protectionKey) {
+        const recovered = await this.getSpotOcoByClientId(
+          signal.symbol,
+          listClientOrderId,
+        ).catch(() => null);
+        if (recovered) {
+          ids = validateOco(recovered);
+        } else {
+          throw validationError;
+        }
+      } else {
+        throw validationError;
+      }
+    }
+
+    this.orderMap.set(ticket, {
+      slOrderId: ids.slOrderId,
+      tpOrderId: ids.tpOrderId,
+      orderListId: ids.listId,
+      closeSide,
+      quantity,
     });
 
-    const reports = Array.isArray(oco.orderReports) ? oco.orderReports : [];
-    if (reports.length < 2) throw new Error('Binance Spot OCO accepted without two order reports');
     this.logger.info(
-      `[Binance Spot] OCO placed: ${signal.symbol} TP=${tpPrice} SL=${slPrice}`
+      `[Binance Spot] OCO placed/recovered: ${signal.symbol} TP=${tpPrice} SL=${slPrice} list=${ids.listId}`,
     );
-    const tpReport = reports.find((r: any) => String(r.type).includes('LIMIT') || r.clientOrderId === `${baseId}a`);
-    const slReport = reports.find((r: any) => String(r.type).includes('STOP') || r.clientOrderId === `${baseId}b`);
-    this.orderMap.set(ticket, {
-      slOrderId: slReport?.orderId,
-      tpOrderId: tpReport?.orderId,
-      closeSide, quantity,
-    });
   }
 
   // ─── Modify SL/TP ─────────────────────────────────────────────────────
