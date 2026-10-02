@@ -419,6 +419,17 @@ const MIGRATIONS: Migration[] = [
         ON execution_ledger(tradeId, status, updatedAt);
     `
   },
+  {
+    version: 16, name: 'ml_prediction_identity',
+    up: `
+      ALTER TABLE trades ADD COLUMN mlPredictionId TEXT;
+      ALTER TABLE model_decisions ADD COLUMN predictionId TEXT;
+      CREATE INDEX IF NOT EXISTS idx_trades_ml_prediction
+        ON trades(mlPredictionId);
+      CREATE INDEX IF NOT EXISTS idx_model_decisions_prediction
+        ON model_decisions(predictionId);
+    `
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
