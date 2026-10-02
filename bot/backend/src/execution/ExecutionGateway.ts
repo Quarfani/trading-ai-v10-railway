@@ -512,19 +512,16 @@ export class ExecutionGateway {
         return true;
       }
 
-      const cumulativeProfit = this.config.mode === 'binance'
-        ? Number(t.realizedProfit ?? 0) + Number(brokerResult.realizedProfit)
-        : Number(brokerResult.realizedProfit);
-      if (!Number.isFinite(cumulativeProfit)) {
+      if (!Number.isFinite(Number(brokerResult.realizedProfit))) {
         throw new Error(
-          'Cumulative broker realized PnL is not finite',
+          'Broker incremental realized PnL is not finite',
         );
       }
 
       const changed = this.db.resolveReconciledFullClose(
         t.id,
         op.executionId,
-        cumulativeProfit,
+        Number(brokerResult.realizedProfit),
         Date.now(),
         'MANUAL',
         brokerResult,
@@ -609,7 +606,7 @@ export class ExecutionGateway {
           const changed = this.db.resolveReconciledFullClose(
             t.id,
             op.executionId,
-            result.profit,
+            Number(result.profit) - Number(t.realizedProfit ?? 0),
             Date.now(),
             reason,
             {
@@ -655,7 +652,7 @@ export class ExecutionGateway {
       const changed = this.db.resolveReconciledFullClose(
         t.id,
         op.executionId,
-        brokerResult.realizedProfit,
+        Number(brokerResult.realizedProfit),
         Date.now(),
         reason,
         brokerResult,
