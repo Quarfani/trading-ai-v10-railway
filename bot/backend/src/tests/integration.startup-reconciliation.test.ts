@@ -505,6 +505,7 @@ async function main() {
 
   const originalModifyGetAllPositions = (BinanceExecutor.prototype as any).getAllPositions;
   const originalModifyGetOpenOrders = (BinanceExecutor.prototype as any).getOpenOrders;
+  const originalModifyRecoverProtection = (BinanceExecutor.prototype as any).recoverProtectionByOperation;
   try {
     (BinanceExecutor.prototype as any).getAllPositions = async () => [{
       symbol: 'BTCUSDT',
@@ -512,12 +513,13 @@ async function main() {
       entryPrice: 100,
       unrealizedProfit: 0,
     }];
-    (BinanceExecutor.prototype as any).getOpenOrders = async (symbol: string) => {
+    (BinanceExecutor.prototype as any).recoverProtectionByOperation = async (symbol: string, operationKey: string) => {
       assert(symbol === 'BTCUSDT', 'startup protection recovery must use the trade symbol');
-      return [
-        { orderId: 9921, side: 'SELL', type: 'STOP_MARKET', stopPrice: '95' },
-        { orderId: 9922, side: 'SELL', type: 'TAKE_PROFIT_MARKET', stopPrice: '110' },
-      ];
+      assert(operationKey === 'binance-startup-modify-op', 'startup protection recovery must use the exact operation key');
+      return {
+        sl: { orderId: 9921, side: 'SELL', type: 'STOP_MARKET', stopPrice: '95', status: 'NEW' },
+        tp: { orderId: 9922, side: 'SELL', type: 'TAKE_PROFIT_MARKET', stopPrice: '110', status: 'NEW' },
+      };
     };
     await new StartupReconciler(
       futuresCfg,
@@ -535,6 +537,7 @@ async function main() {
   } finally {
     (BinanceExecutor.prototype as any).getAllPositions = originalModifyGetAllPositions;
     (BinanceExecutor.prototype as any).getOpenOrders = originalModifyGetOpenOrders;
+    (BinanceExecutor.prototype as any).recoverProtectionByOperation = originalModifyRecoverProtection;
     binanceModifyDb.raw().close();
   }
 
