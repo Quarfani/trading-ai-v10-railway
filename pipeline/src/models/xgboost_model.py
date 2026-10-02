@@ -161,7 +161,11 @@ class XGBoostModel(BaseModel):
             params={k:v for k,v in self.params.items() if k!='n_estimators'}; params['n_estimators']=25
             updater=xgb.XGBClassifier(**params)
             updater.fit(X_s,y_xgb,sample_weight=weights,xgb_model=self._model.get_booster(),verbose=False)
-            self._model=updater; self._trained=True; self.save(); return True
+            self._model = updater
+            self._trained = True
+            self.save()
+            self.refresh_meta_checksum()
+            return True
         except Exception as e:
             logger.error(f"Online update failed: {e}"); return False
 
