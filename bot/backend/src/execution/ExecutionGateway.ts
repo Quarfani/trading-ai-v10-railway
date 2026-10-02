@@ -363,12 +363,16 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        this.makeClientOrderId(operationKey),
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
-      const realizedProfit = result.realizedProfit == null
-        ? null
-        : await this.convertBrokerProfitToAccount(
+      if (result.realizedProfit == null) {
+        throw new Error(
+          'Binance close succeeded without authoritative realized PnL; execution remains UNKNOWN',
+        );
+      }
+      const realizedProfit = await this.convertBrokerProfitToAccount(
             result.realizedProfit,
             result.realizedProfitCurrency,
           );
@@ -405,15 +409,18 @@ export class ExecutionGateway {
           );
         }
 
-        const changed = this.db.updateTradeClose(
+        const changed = this.db.resolveReconciledFullClose(
           t.id,
+          op.executionId,
           cumulativeProfit,
           Date.now(),
           'MANUAL',
+          brokerResult,
+          t.ticket,
         );
         if (!changed) {
           throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
+            `Broker close succeeded but atomic trade/ledger settlement could not be persisted for id=${t.id}`,
           );
         }
       }
@@ -511,15 +518,23 @@ export class ExecutionGateway {
         Number.isFinite(brokerResult.realizedProfit) &&
         t.id
       ) {
-        const changed = this.db.updateTradeClose(
+        if (brokerResult.realizedProfit == null) {
+          throw new Error(
+            'Broker close succeeded without authoritative realized PnL',
+          );
+        }
+        const changed = this.db.resolveReconciledFullClose(
           t.id,
+          op.executionId,
           brokerResult.realizedProfit,
           Date.now(),
           reason,
+          brokerResult,
+          t.ticket,
         );
         if (!changed) {
           throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
+            `Broker close succeeded but atomic trade/ledger settlement could not be persisted for id=${t.id}`,
           );
         }
       }
@@ -624,6 +639,7 @@ export class ExecutionGateway {
           t.ticket,
           t.symbol,
           volume,
+          this.makeClientOrderId(key),
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
@@ -639,8 +655,29 @@ export class ExecutionGateway {
         realizedProfit = result.profit;
       }
 
-      if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=COALESCE(realizedProfit,0)+?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(remaining, realizedProfit, `\npartial_volume=${volume}\npartial_pnl=${realizedProfit.toFixed(8)}`, t.id);
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result: { remainingVolume: remaining, profit: realizedProfit } });
+      if (t.id) {
+        const current = this.db.raw().prepare(
+          'SELECT realizedProfit FROM trades WHERE id=? AND status=\'open\' LIMIT 1',
+        ).get(t.id) as { realizedProfit: number } | undefined;
+        if (!current) throw new Error(`Open trade not found for partial settlement id=${t.id}`);
+        const cumulativeProfit = Number(current.realizedProfit ?? 0) + realizedProfit;
+        if (!Number.isFinite(cumulativeProfit)) {
+          throw new Error('Cumulative partial-close realized PnL is not finite');
+        }
+        const settled = this.db.resolveReconciledPartialClose(
+          t.id,
+          op.executionId,
+          remaining,
+          cumulativeProfit,
+          { remainingVolume: remaining, profit: realizedProfit },
+        );
+        if (!settled) throw new Error(`Atomic partial trade/ledger settlement failed for id=${t.id}`);
+      } else {
+        this.db.updateExecutionLedger(op.executionId, {
+          status: 'EXECUTED',
+          result: { remainingVolume: remaining, profit: realizedProfit },
+        });
+      }
       return { ok: true, profit: realizedProfit, remainingVolume: remaining };
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
