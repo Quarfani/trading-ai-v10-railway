@@ -404,10 +404,19 @@ export class BinanceExecutor {
         }
       }
       if (oldIds.length) {
-        const remaining = await this.getOpenOrders(symbol);
-        for (const order of remaining) {
-          const id=Number(order.orderId);
-          if (oldIds.includes(id)) stale.push(id);
+        try {
+          const remaining = await this.getOpenOrders(symbol);
+          for (const order of remaining) {
+            const id=Number(order.orderId);
+            if (oldIds.includes(id)) stale.push(id);
+          }
+        } catch (verificationError:any) {
+          // Verification failure means the broker may still have any old
+          // order alive. Preserve all old ids for deterministic cleanup later.
+          stale.push(...oldIds);
+          this.logger.warn(
+            `protective order cancellation verification failed; retaining all previous order ids for cleanup: ${verificationError?.message ?? verificationError}`,
+          );
         }
       }
       const uniqueStale=[...new Set(stale.filter(Number.isFinite))];
