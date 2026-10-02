@@ -717,7 +717,6 @@ export class BinanceExecutor {
           }
         }
 
-        this.orderMap.delete(ticket);
       }
 
       if (this.isFutures) {
@@ -764,6 +763,7 @@ export class BinanceExecutor {
 
         realizedProfit = realized.profit;
         realizedProfitCurrency = realized.currency;
+        this.orderMap.delete(ticket);
       } else {
         const closeSide = ids?.closeSide ?? (
           side === 'BUY'
@@ -794,6 +794,7 @@ export class BinanceExecutor {
             ? { newClientOrderId: this.closeClientOrderId(clientOrderId) }
             : {}),
         });
+        this.orderMap.delete(ticket);
       }
 
       return {
