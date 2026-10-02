@@ -513,6 +513,75 @@ export class BinanceExecutor {
 
   // ─── [FIX-1] Futures SL + TP orders ──────────────────────────────────
 
+  private validateFuturesProtectionPair(
+    signal: Signal,
+    quantity: number,
+    slPrice: string,
+    tpPrice: string,
+    recovered: { sl: any | null; tp: any | null },
+  ): { slOrderId: number; tpOrderId: number } | null {
+    const sl = recovered?.sl;
+    const tp = recovered?.tp;
+    if (!sl || !tp) return null;
+
+    const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
+    const expectedQty = Number(quantity);
+    const qtyTolerance = Math.max(
+      getSymbolSpec(signal.symbol).volumeStep,
+      Math.abs(expectedQty) * 0.0001,
+    );
+
+    const slQty = Number(sl.origQty ?? sl.quantity ?? expectedQty);
+    const tpQty = Number(tp.origQty ?? tp.quantity ?? expectedQty);
+    if (
+      !(expectedQty > 0) ||
+      !Number.isFinite(expectedQty) ||
+      !Number.isFinite(slQty) ||
+      !Number.isFinite(tpQty) ||
+      Math.abs(slQty - expectedQty) > qtyTolerance ||
+      Math.abs(tpQty - expectedQty) > qtyTolerance
+    ) {
+      return null;
+    }
+
+    if (
+      String(sl.status ?? '').toUpperCase() !== 'NEW' ||
+      String(tp.status ?? '').toUpperCase() !== 'NEW' ||
+      String(sl.side ?? '').toUpperCase() !== closeSide ||
+      String(tp.side ?? '').toUpperCase() !== closeSide ||
+      String(sl.type ?? '').toUpperCase() !== 'STOP_MARKET' ||
+      String(tp.type ?? '').toUpperCase() !== 'TAKE_PROFIT_MARKET' ||
+      String(sl.closePosition).toLowerCase() !== 'true' ||
+      String(tp.closePosition).toLowerCase() !== 'true'
+    ) {
+      return null;
+    }
+
+    const slTolerance = Math.max(1e-8, Math.abs(Number(signal.sl)) * 1e-6);
+    const tpTolerance = Math.max(1e-8, Math.abs(Number(signal.tp)) * 1e-6);
+    if (
+      !Number.isFinite(Number(sl.stopPrice)) ||
+      !Number.isFinite(Number(tp.stopPrice)) ||
+      Math.abs(Number(sl.stopPrice) - Number(signal.sl)) > slTolerance ||
+      Math.abs(Number(tp.stopPrice) - Number(signal.tp)) > tpTolerance
+    ) {
+      return null;
+    }
+
+    const slOrderId = Number(sl.orderId);
+    const tpOrderId = Number(tp.orderId);
+    if (
+      !(slOrderId > 0) ||
+      !(tpOrderId > 0) ||
+      !Number.isFinite(slOrderId) ||
+      !Number.isFinite(tpOrderId)
+    ) {
+      return null;
+    }
+
+    return { slOrderId, tpOrderId };
+  }
+
   private async placeSLTP(
     signal:   Signal,
     quantity: number,
@@ -525,6 +594,32 @@ export class BinanceExecutor {
     const slPrice   = this.formatPrice(signal.sl, spec.pip);
     const tpPrice   = this.formatPrice(signal.tp, spec.pip);
 
+    if (protectionKey) {
+      const recovered = await this.recoverProtectionByOperation(
+        signal.symbol,
+        protectionKey,
+      );
+      const recoveredIds = this.validateFuturesProtectionPair(
+        signal,
+        quantity,
+        slPrice,
+        tpPrice,
+        recovered,
+      );
+      if (recoveredIds) {
+        this.orderMap.set(ticket, {
+          slOrderId: recoveredIds.slOrderId,
+          tpOrderId: recoveredIds.tpOrderId,
+          closeSide,
+          quantity,
+        });
+        this.logger.info(
+          `[Binance] Recovered existing SL/TP before create: ${signal.symbol} ticket=${ticket}`,
+        );
+        return;
+      }
+    }
+
     const ids: OpenOrderIds = {};
     const slClientOrderId = protectionKey
       ? this.makeProtectionClientOrderId(protectionKey, 'SL')
@@ -533,7 +628,6 @@ export class BinanceExecutor {
       ? this.makeProtectionClientOrderId(protectionKey, 'TP')
       : undefined;
 
-    // Stop Loss
     try {
       const slOrder = await this.signedPost('/fapi/v1/order', {
         symbol:           signal.symbol,
@@ -545,14 +639,40 @@ export class BinanceExecutor {
         ...(slClientOrderId ? { newClientOrderId: slClientOrderId } : {}),
       });
       ids.slOrderId = Number(slOrder.orderId);
+      if (!(ids.slOrderId > 0) || !Number.isFinite(ids.slOrderId)) {
+        throw new Error('Binance SL placement returned invalid orderId');
+      }
       this.logger.info(
-        `[Binance] SL placed: ${signal.symbol} stopPrice=${slPrice} orderId=${ids.slOrderId}`
+        `[Binance] SL placed: ${signal.symbol} stopPrice=${slPrice} orderId=${ids.slOrderId}`,
       );
     } catch (e: any) {
-      throw new Error(`SL placement failed: ${e.response?.data?.msg ?? e.message}`);
+      if (protectionKey) {
+        const recovered = await this.recoverProtectionByOperation(
+          signal.symbol,
+          protectionKey,
+        );
+        const recoveredIds = this.validateFuturesProtectionPair(
+          signal,
+          quantity,
+          slPrice,
+          tpPrice,
+          recovered,
+        );
+        if (recoveredIds) {
+          this.orderMap.set(ticket, {
+            slOrderId: recoveredIds.slOrderId,
+            tpOrderId: recoveredIds.tpOrderId,
+            closeSide,
+            quantity,
+          });
+          return;
+        }
+      }
+      throw new Error(
+        `SL placement failed: ${e.response?.data?.msg ?? e.message}`,
+      );
     }
 
-    // Take Profit
     try {
       const tpOrder = await this.signedPost('/fapi/v1/order', {
         symbol:           signal.symbol,
@@ -564,15 +684,70 @@ export class BinanceExecutor {
         ...(tpClientOrderId ? { newClientOrderId: tpClientOrderId } : {}),
       });
       ids.tpOrderId = Number(tpOrder.orderId);
+      if (!(ids.tpOrderId > 0) || !Number.isFinite(ids.tpOrderId)) {
+        throw new Error('Binance TP placement returned invalid orderId');
+      }
       this.logger.info(
-        `[Binance] TP placed: ${signal.symbol} stopPrice=${tpPrice} orderId=${ids.tpOrderId}`
+        `[Binance] TP placed: ${signal.symbol} stopPrice=${tpPrice} orderId=${ids.tpOrderId}`,
       );
     } catch (e: any) {
-      if (ids.slOrderId) await this.signedDelete('/fapi/v1/order', {symbol: signal.symbol, orderId: ids.slOrderId}).catch(() => {});
-      throw new Error(`TP placement failed: ${e.response?.data?.msg ?? e.message}`);
+      if (protectionKey) {
+        const recovered = await this.recoverProtectionByOperation(
+          signal.symbol,
+          protectionKey,
+        );
+        const recoveredIds = this.validateFuturesProtectionPair(
+          signal,
+          quantity,
+          slPrice,
+          tpPrice,
+          recovered,
+        );
+        if (recoveredIds) {
+          this.orderMap.set(ticket, {
+            slOrderId: recoveredIds.slOrderId,
+            tpOrderId: recoveredIds.tpOrderId,
+            closeSide,
+            quantity,
+          });
+          return;
+        }
+      }
+
+      if (ids.slOrderId) {
+        await this.signedDelete('/fapi/v1/order', {
+          symbol: signal.symbol,
+          orderId: ids.slOrderId,
+        }).catch(() => {});
+      }
+      throw new Error(
+        `TP placement failed: ${e.response?.data?.msg ?? e.message}`,
+      );
     }
 
-    ids.closeSide=closeSide; ids.quantity=quantity;
+    if (protectionKey) {
+      const confirmed = await this.recoverProtectionByOperation(
+        signal.symbol,
+        protectionKey,
+      );
+      const confirmedIds = this.validateFuturesProtectionPair(
+        signal,
+        quantity,
+        slPrice,
+        tpPrice,
+        confirmed,
+      );
+      if (!confirmedIds) {
+        throw new Error(
+          `Binance SL/TP created but final protection state could not be verified for ${signal.symbol}`,
+        );
+      }
+      ids.slOrderId = confirmedIds.slOrderId;
+      ids.tpOrderId = confirmedIds.tpOrderId;
+    }
+
+    ids.closeSide = closeSide;
+    ids.quantity = quantity;
     this.orderMap.set(ticket, ids);
   }
 
