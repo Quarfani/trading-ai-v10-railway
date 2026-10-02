@@ -107,7 +107,12 @@ export class NvidiaAI {
       return mul;
 
     } catch (e: any) {
-      this.logger.warn(`NvidiaAI fallback (${e.message})`);
+      this.logger.warn(`NvidiaAI request/validation failed: ${e?.message ?? e}`);
+      if (this.config.mode !== 'paper' || this.config.mlRequired) {
+        throw new Error(
+          `NVIDIA_AI fail-closed: ${e?.message ?? e}`,
+        );
+      }
       return 1.0;
     }
   }
