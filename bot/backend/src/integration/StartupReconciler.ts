@@ -374,6 +374,19 @@ export class StartupReconciler {
     const bySymbol = new Map<string, any>(
       positions.map(position => [String(position.symbol).toUpperCase(), position]),
     );
+    const selectedByTrade = new Map<number, string>();
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+      try {
+        const tradeId = Number(JSON.parse(row.requestJson)?.tradeId);
+        if (Number.isInteger(tradeId) && tradeId > 0 && !selectedByTrade.has(tradeId)) {
+          selectedByTrade.set(tradeId, String(row.executionId));
+        }
+      } catch {
+        // malformed request JSON stays unresolved and blocks startup
+      }
+    }
+
     for (const row of rows) {
       if (!row.requestJson) continue;
 
@@ -382,7 +395,11 @@ export class StartupReconciler {
       catch { continue; }
 
       const tradeId = Number(request?.tradeId);
-      if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+      if (
+        !Number.isInteger(tradeId) ||
+        tradeId <= 0 ||
+        selectedByTrade.get(tradeId) !== String(row.executionId)
+      ) continue;
 
       const trade = this.db.raw()
         .prepare('SELECT * FROM trades WHERE id=? LIMIT 1')
@@ -401,30 +418,46 @@ export class StartupReconciler {
         !Number.isFinite(newTp)
       ) continue;
 
-      const openOrders = await exec.getOpenOrders(String(trade.symbol));
-      const closeSide = String(trade.side).toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
-      const matching = openOrders.filter(
-        (order: any) => String(order.side).toUpperCase() === closeSide,
+      const recovered = await exec.recoverProtectionByOperation(
+        String(trade.symbol),
+        String(row.operationKey),
       );
-      const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
-
-      const sl = matching.find((order: any) => {
-        const type = String(order.type ?? '').toUpperCase();
-        const stop = Number(order.stopPrice);
-        return /STOP_MARKET|STOP_LOSS/.test(type) &&
-          Number.isFinite(stop) &&
-          Math.abs(stop - newSl) <= tolerance(newSl);
-      });
-      const tp = matching.find((order: any) => {
-        const type = String(order.type ?? '').toUpperCase();
-        const stop = Number(order.stopPrice);
-        const price = Number(order.price);
-        return /TAKE_PROFIT_MARKET|TAKE_PROFIT/.test(type) &&
-          ((Number.isFinite(stop) && Math.abs(stop - newTp) <= tolerance(newTp)) ||
-           (Number.isFinite(price) && Math.abs(price - newTp) <= tolerance(newTp)));
-      });
-
+      const sl = recovered?.sl;
+      const tp = recovered?.tp;
       if (!sl || !tp) continue;
+
+      const slStatus = String(sl.status ?? '').toUpperCase();
+      const tpStatus = String(tp.status ?? '').toUpperCase();
+      if (
+        (slStatus && slStatus !== 'NEW') ||
+        (tpStatus && tpStatus !== 'NEW')
+      ) continue;
+
+      const closeSide = String(trade.side).toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
+      if (
+        String(sl.side ?? '').toUpperCase() !== closeSide ||
+        String(tp.side ?? '').toUpperCase() !== closeSide
+      ) continue;
+
+      const tolerance = (target: number) =>
+        Math.max(1e-8, Math.abs(target) * 1e-6);
+      const slStop = Number(sl.stopPrice);
+      const tpStop = Number(tp.stopPrice);
+      const tpPrice = Number(tp.price);
+
+      if (
+        !/STOP_MARKET|STOP_LOSS/.test(String(sl.type ?? '').toUpperCase()) ||
+        !Number.isFinite(slStop) ||
+        Math.abs(slStop - newSl) > tolerance(newSl)
+      ) continue;
+
+      if (
+        !/TAKE_PROFIT_MARKET|TAKE_PROFIT/.test(String(tp.type ?? '').toUpperCase()) ||
+        !(
+          (Number.isFinite(tpStop) && Math.abs(tpStop - newTp) <= tolerance(newTp)) ||
+          (Number.isFinite(tpPrice) && Math.abs(tpPrice - newTp) <= tolerance(newTp))
+        )
+      ) continue;
 
       const resolved = this.db.resolveExecutionLedger(
         String(row.executionId),
