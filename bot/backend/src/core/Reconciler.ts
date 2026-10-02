@@ -506,6 +506,133 @@ export class Reconciler {
 
   // ─── Binance ────────────────────────────────────────────────────────
 
+  private getLatestBinanceOpenOperation(t: Trade): {
+    executionId: string;
+    operationKey: string;
+  } | null {
+    if (!t.id) return null;
+
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, requestJson, tradeId, updatedAt
+      FROM execution_ledger
+      WHERE action='OPEN'
+        AND status='EXECUTED'
+        AND (tradeId=? OR (tradeId IS NULL AND symbol=?))
+      ORDER BY updatedAt DESC, executionId DESC
+      LIMIT 50
+    `).all(
+      t.id,
+      t.symbol,
+    ) as Array<{
+      executionId: string;
+      operationKey: string;
+      requestJson?: string | null;
+      tradeId?: number | null;
+      updatedAt: number;
+    }>;
+
+    for (const row of rows) {
+      if (Number(row.tradeId) === t.id) {
+        return {
+          executionId: String(row.executionId),
+          operationKey: String(row.operationKey),
+        };
+      }
+
+      if (!row.requestJson) continue;
+      try {
+        if (Number(JSON.parse(row.requestJson)?.tradeId) === t.id) {
+          return {
+            executionId: String(row.executionId),
+            operationKey: String(row.operationKey),
+          };
+        }
+      } catch {
+        // Legacy malformed rows remain unusable for exact recovery.
+      }
+    }
+
+    return null;
+  }
+
+  private async verifyBinanceSpotProtection(t: Trade): Promise<void> {
+    const openOperation = this.getLatestBinanceOpenOperation(t);
+    if (!openOperation) {
+      throw new Error(
+        `No authoritative OPEN operation identity is available for Binance Spot trade id=${t.id}`,
+      );
+    }
+
+    const list = await this.exec.recoverBinanceSpotOco(
+      t.symbol,
+      openOperation.operationKey,
+    );
+    if (!list) {
+      throw new Error(
+        `Binance Spot OCO protection could not be recovered for ${t.symbol}`,
+      );
+    }
+
+    const listStatus = String(list.listStatusType).toUpperCase();
+    const orderStatus = String(list.listOrderStatus).toUpperCase();
+    if (
+      !['EXEC_STARTED', 'EXECUTING'].includes(listStatus) &&
+      !['EXECUTING'].includes(orderStatus)
+    ) {
+      throw new Error(
+        `Binance Spot OCO protection is not active for ${t.symbol}: ${listStatus}/${orderStatus}`,
+      );
+    }
+
+    const orders = Array.isArray(list.orders) ? list.orders : [];
+    if (orders.length < 2) {
+      throw new Error(
+        `Binance Spot OCO protection has fewer than two legs for ${t.symbol}`,
+      );
+    }
+
+    const openOrders = await this.exec.getBinanceOpenOrders(t.symbol);
+    const byId = new Map(
+      openOrders.map((order: any) => [Number(order.orderId), order]),
+    );
+    const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
+
+    const legOrders = orders
+      .map((order: any) => byId.get(Number(order.orderId)))
+      .filter(Boolean);
+
+    if (legOrders.length !== 2) {
+      throw new Error(
+        `Binance Spot OCO legs are not both open for ${t.symbol}`,
+      );
+    }
+
+    const tpTolerance = Math.max(1e-8, Math.abs(t.tp) * 1e-6);
+    const slTolerance = Math.max(1e-8, Math.abs(t.sl) * 1e-6);
+    const tpLeg = legOrders.find(
+      (order: any) =>
+        String(order.side).toUpperCase() === closeSide &&
+        String(order.type).toUpperCase().includes('LIMIT') &&
+        Number(order.origQty ?? order.quantity) > 0 &&
+        Math.abs(Number(order.price) - t.tp) <= tpTolerance &&
+        String(order.status).toUpperCase() === 'NEW',
+    );
+    const slLeg = legOrders.find(
+      (order: any) =>
+        String(order.side).toUpperCase() === closeSide &&
+        String(order.type).toUpperCase().includes('STOP') &&
+        Number(order.origQty ?? order.quantity) > 0 &&
+        Math.abs(Number(order.stopPrice) - t.sl) <= slTolerance &&
+        String(order.status).toUpperCase() === 'NEW',
+    );
+
+    if (!tpLeg || !slLeg) {
+      throw new Error(
+        `Binance Spot OCO protection prices/side do not match local trade id=${t.id}`,
+      );
+    }
+  }
+
   private async reconcileBinance(t: Trade): Promise<void> {
     if (!t.ticket) return;
 
@@ -529,6 +656,15 @@ export class Reconciler {
           ['MOVE_SL_TP'],
         )
       : null;
+
+    if (
+      this.config.mode === 'binance' &&
+      !this.config.binance.futures &&
+      pos &&
+      remaining > 0.0001
+    ) {
+      await this.verifyBinanceSpotProtection(t);
+    }
 
     if (!pos || remaining < 0.0001) {
       if (
