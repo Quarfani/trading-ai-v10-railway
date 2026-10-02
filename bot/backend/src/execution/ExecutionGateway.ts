@@ -673,6 +673,20 @@ export class ExecutionGateway {
   }
 
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
+  async reconcileBinanceProtectionModify(
+    symbol: string,
+    operationKey: string,
+    desiredSl: number,
+    desiredTp: number,
+  ) {
+    return this.binance.reconcileProtectionModify(
+      symbol,
+      operationKey,
+      desiredSl,
+      desiredTp,
+    );
+  }
+
   async reconcileBinanceCloseOperation(
     symbol: string,
     operationKey: string,
