@@ -48,6 +48,22 @@ async function main() {
       },
     });
 
+    let missingKeyBlocked = false;
+    const missingKeyLive = new NvidiaAI({
+      mode: 'binance',
+      mlRequired: false,
+      nvidia: { apiKey: '' },
+    } as any);
+    try {
+      await missingKeyLive.scoreSignal(signal as any);
+    } catch {
+      missingKeyBlocked = true;
+    }
+    assert(
+      missingKeyBlocked,
+      'missing NVIDIA API key must block live trading',
+    );
+
     let liveBlocked = false;
     const liveAi = new NvidiaAI({
       ...config,
@@ -95,7 +111,7 @@ async function main() {
     (axios as any).post = originalPost;
   }
 
-  console.log('Result: 4 passed, 0 failed');
+  console.log('Result: 5 passed, 0 failed');
 }
 
 main().catch(error => {
