@@ -47,6 +47,13 @@ registerBrokerContract({
   verified: true,
 });
 
+const invalidConfig = { ...config, maxDailyLoss: Number.NaN } as any;
+const invalidGuard = new DailyLossGuard(invalidConfig, db, telegram);
+assert(
+  !(await invalidGuard.canTrade({ "EURUSD.a": 2.0 })),
+  "invalid MAX_DAILY_LOSS must fail closed",
+);
+
 const guard = new DailyLossGuard(config, db, telegram);
 const floating = (guard as any).calcFloating({
   "EURUSD.a": 1,
@@ -92,7 +99,7 @@ assert(
 
 
 clearBrokerContracts();
-console.log("Result: 7 passed, 0 failed");
+console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
