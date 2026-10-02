@@ -839,6 +839,8 @@ def trade():
         cached = _idempotency_lookup(idempotency_key)
         if cached:
             _, cached_status, cached_payload = cached
+            if cached_status == "CONFLICT":
+                return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
                 return jsonify(cached_payload)
             if cached_status == "UNKNOWN":
@@ -1132,6 +1134,8 @@ def modify():
         cached = _idempotency_lookup(idempotency_key)
         if cached:
             _, cached_status, cached_payload = cached
+            if cached_status == "CONFLICT":
+                return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
                 return jsonify(cached_payload)
             if cached_status == "UNKNOWN":
@@ -1308,6 +1312,8 @@ def close():
         cached = _idempotency_lookup(idempotency_key)
         if cached:
             _, cached_status, cached_payload = cached
+            if cached_status == "CONFLICT":
+                return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
                 return jsonify(cached_payload)
             if cached_status == "UNKNOWN":
@@ -1488,6 +1494,8 @@ def close_partial():
         cached = _idempotency_lookup(idempotency_key)
         if cached:
             _, cached_status, cached_payload = cached
+            if cached_status == "CONFLICT":
+                return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
                 return jsonify(cached_payload)
             if cached_status == "UNKNOWN":
