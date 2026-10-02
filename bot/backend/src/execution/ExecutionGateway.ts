@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as crypto from 'crypto';
 import { SystemConfig, Signal, Trade, Timeframe } from '../types/trading.types';
 import { DatabaseManager } from '../database/DatabaseManager';
-import { BinanceExecutor } from './BinanceExecutor';
+import { BinanceExecutor, makeBinanceClientOrderId } from './BinanceExecutor';
 import { PaperTrader } from '../integration/PaperTrader';
 import { Logger } from '../utils/Logger';
 import { getBrokerMarketDefinition, getMarketDefinition } from '../market/MarketCatalog';
@@ -363,6 +363,7 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        makeBinanceClientOrderId(operationKey),
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
@@ -506,31 +507,47 @@ export class ExecutionGateway {
 
       const brokerResult = await this.closeBrokerTrade(t, key);
 
-      if (
-        brokerResult.realizedProfit != null &&
-        Number.isFinite(brokerResult.realizedProfit) &&
-        t.id
-      ) {
-        const changed = this.db.updateTradeClose(
-          t.id,
-          brokerResult.realizedProfit,
-          Date.now(),
-          reason,
-        );
-        if (!changed) {
-          throw new Error(
-            `Broker close succeeded but trade settlement could not be persisted for id=${t.id}`,
-          );
-        }
+      if (brokerResult.realizedProfit == null || !Number.isFinite(brokerResult.realizedProfit)) {
+        throw new Error('Broker close succeeded without authoritative realized PnL');
       }
 
-      this.db.updateExecutionLedger(
-        op.executionId,
-        { status: 'EXECUTED', result: brokerResult },
-      );
+      let cumulativeProfit = brokerResult.realizedProfit;
+      if (this.config.mode === 'binance' && t.id) {
+        const persisted = this.db.raw().prepare(
+          'SELECT realizedProfit FROM trades WHERE id=? LIMIT 1',
+        ).get(t.id) as { realizedProfit?: number } | undefined;
+        const priorRealized = Number(persisted?.realizedProfit ?? 0);
+        if (!Number.isFinite(priorRealized)) {
+          throw new Error(`Persisted realized PnL is invalid for trade id=${t.id}`);
+        }
+        cumulativeProfit += priorRealized;
+      }
+
+      if (t.id) {
+        const resolved = this.db.resolveReconciledFullClose(
+          t.id,
+          String(op.executionId),
+          cumulativeProfit,
+          Date.now(),
+          reason,
+          { ...brokerResult, cumulativeRealizedProfit: cumulativeProfit },
+        );
+        if (!resolved) {
+          throw new Error(
+            `Broker close could not be atomically settled for trade id=${t.id}`,
+          );
+        }
+      } else {
+        const updated = this.db.updateExecutionLedger(
+          op.executionId,
+          { status: 'EXECUTED', result: { ...brokerResult, cumulativeRealizedProfit: cumulativeProfit } },
+        );
+        if (!updated) throw new Error('Broker close ledger could not be marked EXECUTED');
+      }
+
       return {
         ok: true,
-        profit: brokerResult.realizedProfit ?? undefined,
+        profit: cumulativeProfit,
       };
     } catch (e: any) {
       this.db.updateExecutionLedger(
@@ -624,6 +641,7 @@ export class ExecutionGateway {
           t.ticket,
           t.symbol,
           volume,
+          makeBinanceClientOrderId(key),
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
@@ -639,8 +657,34 @@ export class ExecutionGateway {
         realizedProfit = result.profit;
       }
 
-      if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=COALESCE(realizedProfit,0)+?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(remaining, realizedProfit, `\npartial_volume=${volume}\npartial_pnl=${realizedProfit.toFixed(8)}`, t.id);
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result: { remainingVolume: remaining, profit: realizedProfit } });
+      const resultPayload = { remainingVolume: remaining, profit: realizedProfit };
+      if (t.id) {
+        const persisted = this.db.raw().prepare(
+          'SELECT realizedProfit FROM trades WHERE id=? LIMIT 1',
+        ).get(t.id) as { realizedProfit?: number } | undefined;
+        const priorRealized = Number(persisted?.realizedProfit ?? 0);
+        if (!Number.isFinite(priorRealized)) {
+          throw new Error(`Persisted realized PnL is invalid for trade id=${t.id}`);
+        }
+
+        const cumulativeRealized = priorRealized + realizedProfit;
+        const resolved = this.db.resolveReconciledPartialClose(
+          t.id,
+          String(op.executionId),
+          remaining,
+          cumulativeRealized,
+          { ...resultPayload, cumulativeRealizedProfit: cumulativeRealized },
+        );
+        if (!resolved) {
+          throw new Error(`Partial close could not be atomically settled for trade id=${t.id}`);
+        }
+      } else {
+        const updated = this.db.updateExecutionLedger(
+          op.executionId,
+          { status: 'EXECUTED', result: resultPayload },
+        );
+        if (!updated) throw new Error('Partial close ledger could not be marked EXECUTED');
+      }
       return { ok: true, profit: realizedProfit, remainingVolume: remaining };
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
