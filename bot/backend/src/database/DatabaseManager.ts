@@ -296,6 +296,44 @@ export class DatabaseManager {
     return tx();
   }
 
+  getLatestExecutedOpenOperationForTrade(tradeId: number): {
+    executionId: string;
+    operationKey: string;
+    requestJson: string | null;
+    resultJson: string | null;
+  } | null {
+    const rows = this.db.prepare(`
+      SELECT executionId, operationKey, requestJson, resultJson, tradeId
+      FROM execution_ledger
+      WHERE action='OPEN'
+        AND status='EXECUTED'
+        AND (tradeId=? OR tradeId IS NULL)
+      ORDER BY updatedAt DESC, executionId DESC
+      LIMIT 50
+    `).all(tradeId) as Array<{
+      executionId: string;
+      operationKey: string;
+      requestJson: string | null;
+      resultJson: string | null;
+      tradeId: number | null;
+    }>;
+
+    for (const row of rows) {
+      if (Number(row.tradeId) === tradeId) return row;
+
+      if (!row.requestJson) continue;
+      try {
+        if (Number(JSON.parse(row.requestJson)?.tradeId) === tradeId) {
+          return row;
+        }
+      } catch {
+        // malformed legacy row is not authoritative
+      }
+    }
+
+    return null;
+  }
+
   getExecutionByOperationKey(operationKey: string): any | null {
     return this.db.prepare(`SELECT * FROM execution_ledger WHERE operationKey=?`).get(operationKey) ?? null;
   }
