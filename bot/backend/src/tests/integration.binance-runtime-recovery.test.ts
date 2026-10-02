@@ -155,6 +155,62 @@ async function main() {
   );
   assert(partialWithoutPosition.ok === false, "partial-close recovery must fail without post-fill position state");
 
+  // Partial recovery must also verify the broker-reported executed quantity.
+  const partialDb = new DatabaseManager(":memory:");
+  await partialDb.initialize();
+  const partialTradeId = partialDb.insertTrade({
+    ...trade({ ticket: 8003, volume: 1 }),
+  } as any);
+  partialDb.createExecutionLedger({
+    executionId: "reconcile-partial-1",
+    operationKey: "reconcile-partial-op-1",
+    action: "PARTIAL_CLOSE",
+    status: "UNKNOWN",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 0.4,
+    request: { tradeId: partialTradeId, volume: 0.4 },
+  });
+  const partialExec = {
+    getBinancePosition: async () => ({ positionAmt: 0.6 }),
+    reconcileBinancePartialClose: async () => ({
+      ok: true,
+      orderId: 31_002,
+      executedQty: 0.2,
+      remainingVolume: 0.6,
+      realizedProfit: 2.5,
+    }),
+  };
+  const partialReconciler = new Reconciler(
+    cfg,
+    partialDb,
+    partialExec as any,
+    new TelegramBot(cfg),
+    tracker as PerformanceTracker,
+    {} as any,
+    {} as any,
+    new EmergencyStop(new TelegramBot(cfg)),
+    () => {},
+  );
+  let partialBlocked = false;
+  try {
+    await (partialReconciler as any).reconcileBinance({
+      ...trade({ id: partialTradeId, ticket: 8003, volume: 1 }),
+    });
+  } catch {
+    partialBlocked = true;
+  }
+  assert(partialBlocked, "partial recovery must block when executed quantity disagrees with the requested close");
+  assert(
+    partialDb.getExecutionByOperationKey("reconcile-partial-op-1").status === "UNKNOWN",
+    "quantity-mismatched partial recovery must remain UNKNOWN",
+  );
+  assert(
+    partialDb.getOpenTrades()[0].volume === 1,
+    "quantity-mismatched partial recovery must not mutate trade volume",
+  );
+  partialDb.raw().close();
+
   // End-to-end Reconciler full-close recovery.
   const db = new DatabaseManager(":memory:");
   await db.initialize();
