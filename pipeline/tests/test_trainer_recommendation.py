@@ -32,3 +32,36 @@ def test_recommendation_requires_baseline_clearance_even_with_strong_wfo():
 
     assert trainer._recommend(0.56, 0.55, 0.58, 0.02).startswith("CAUTION")
     assert trainer._recommend(0.58, 0.55, 0.58, 0.02) == "DEPLOY ✅"
+
+
+
+def test_load_labeled_sorts_and_rejects_duplicate_or_future_times(tmp_path):
+    import pandas as pd
+    import pytest
+    from src.training import trainer as trainer_module
+
+    trainer = ModelTrainer()
+    original_dir = trainer_module.LABEL_DIR
+    market_dir = tmp_path / "labels" / "binance" / "TEST" / "1h"
+    market_dir.mkdir(parents=True)
+
+    frame = pd.DataFrame({
+        "time": [3000, 1000, 2000],
+        "label": [1, -1, 0],
+    })
+    frame.to_parquet(market_dir / "labeled.parquet", index=False)
+
+    trainer_module.LABEL_DIR = tmp_path / "labels"
+    try:
+        loaded = trainer._load_labeled("binance", "TEST", "1h")
+        assert loaded["time"].tolist() == [1000, 2000, 3000]
+
+        duplicate = pd.DataFrame({
+            "time": [1000, 1000, 2000],
+            "label": [1, -1, 0],
+        })
+        duplicate.to_parquet(market_dir / "labeled.parquet", index=False)
+        with pytest.raises(ValueError, match="Duplicate timestamps"):
+            trainer._load_labeled("binance", "TEST", "1h")
+    finally:
+        trainer_module.LABEL_DIR = original_dir
