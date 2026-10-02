@@ -317,6 +317,45 @@ class TestXGBoostModel:
         assert meta.get("checksum") == model._model_checksum()
 
 
+class TestEnsembleSafety:
+
+    def test_ensemble_predict_holds_when_all_submodels_fail(self):
+        from src.models.ensemble_model import EnsembleModel
+
+        ensemble = EnsembleModel("TEST", "1h", use_lstm=False)
+        ensemble._trained = True
+        ensemble._trained_models = ["xgboost"]
+        ensemble._weights = {"xgboost": 1.0}
+
+        def fail_predict(_X):
+            raise ValueError("corrupt probability output")
+
+        ensemble.xgb.predict_proba = fail_predict
+
+        X = np.zeros((1, len(FEATURE_COLS)), dtype="float32")
+        result = ensemble.predict(X)
+
+        assert result.label == 0
+        assert result.hold_prob == 1.0
+        assert result.confidence == 1.0
+
+    def test_ensemble_predict_ignores_invalid_submodel_and_uses_valid_one(self):
+        from src.models.ensemble_model import EnsembleModel
+
+        ensemble = EnsembleModel("TEST", "1h", use_lstm=False)
+        ensemble._trained = True
+        ensemble._trained_models = ["xgboost"]
+        ensemble._weights = {"xgboost": 1.0}
+        ensemble.xgb.predict_proba = lambda _X: np.asarray([[0.1, 0.2, 0.7]])
+
+        X = np.zeros((1, len(FEATURE_COLS)), dtype="float32")
+        result = ensemble.predict(X)
+
+        assert result.label == 1
+        assert abs(result.buy_prob - 0.7) < 1e-12
+        assert abs(result.confidence - 0.7) < 1e-12
+
+
 class TestModelServer:
 
     def test_server_singleton(self):
