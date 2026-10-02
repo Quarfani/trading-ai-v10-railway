@@ -180,7 +180,7 @@ export class DatabaseManager {
   getPendingModelOutcomes(limit = 100): any[] {
     if (!(limit > 0) || !Number.isFinite(limit)) return [];
     return this.db.prepare(
-      `SELECT predictionId, symbol, modelName, modelVersion,
+      `SELECT predictionId, symbol, timeframe, modelName, modelVersion,
               predictedLabel, outcomeLabel, outcomeProfit, outcomeRecordedAt
        FROM model_decisions
        WHERE predictionId IS NOT NULL
