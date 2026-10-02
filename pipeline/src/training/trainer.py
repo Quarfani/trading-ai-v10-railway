@@ -133,7 +133,7 @@ class ModelTrainer:
             f"(folds: {[f'{a:.3f}' for a in wf_accs]})"
         )
 
-        # ── 3. Final train on 85%, test on last 15% ───────────────────────
+        # ── 3. Final purged train/validation/test split (70/15/15) ─────
         train_df, val_df, test_df = self.labeler.train_val_test_split(
             df, train_pct=0.70, val_pct=0.15, test_pct=0.15
         )
