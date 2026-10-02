@@ -114,7 +114,66 @@ async function main() {
   assert(ambiguousDb.getExecutionByOperationKey("binance-ambiguous-op").status === "UNKNOWN", "ambiguous close must remain UNKNOWN");
   ambiguousDb.raw().close();
 
-  console.log("Result: 3 passed, 0 failed");
+  const modifyDb = new DatabaseManager(":memory:");
+  await modifyDb.initialize();
+  const modifyTradeId = modifyDb.insertTrade({
+    ticket: 9004, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "BINANCE_RECON_MODIFY",
+  } as any);
+  modifyDb.createExecutionLedger({
+    executionId: "binance-modify-unknown", operationKey: "binance-modify-op",
+    action: "MOVE_SL_TP", status: "UNKNOWN", symbol: "BTCUSDT", side: "BUY", volume: 0.01,
+    request: { tradeId: modifyTradeId, newSl: 49_500, newTp: 51_500 },
+  });
+  let modifyRecoveryCalls = 0;
+  const modifyExec = {
+    getBinancePosition: async () => ({ positionAmt: 0.01, entryPrice: 50_000, unrealizedProfit: 0 }),
+    reconcileBinanceProtectionModify: async () => {
+      modifyRecoveryCalls += 1;
+      return { slOrderId: 13001, tpOrderId: 13002 };
+    },
+  };
+  const modifyReconciler = makeReconciler(modifyDb, modifyExec, () => {});
+  await (modifyReconciler as any).reconcileOne(modifyDb.getOpenTrades()[0]);
+  assert(modifyRecoveryCalls === 1, "Binance protection recovery must query broker state exactly once");
+  const modifyLedger = modifyDb.getExecutionByOperationKey("binance-modify-op");
+  const modified = modifyDb.getOpenTrades()[0] as any;
+  assert(modifyLedger.status === "EXECUTED", "broker-confirmed Binance protection state must resolve UNKNOWN");
+  assert(modified.sl === 49_500 && modified.tp === 51_500, "Binance protection recovery must persist broker levels");
+  modifyDb.raw().close();
+
+  const mismatchDb = new DatabaseManager(":memory:");
+  await mismatchDb.initialize();
+  const mismatchTradeId = mismatchDb.insertTrade({
+    ticket: 9005, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "BINANCE_RECON_MODIFY_MISMATCH",
+  } as any);
+  mismatchDb.createExecutionLedger({
+    executionId: "binance-modify-mismatch", operationKey: "binance-modify-mismatch-op",
+    action: "MOVE_SL_TP", status: "UNKNOWN", symbol: "BTCUSDT", side: "BUY", volume: 0.01,
+    request: { tradeId: mismatchTradeId, newSl: 49_500, newTp: 51_500 },
+  });
+  const mismatchExec = {
+    getBinancePosition: async () => ({ positionAmt: 0.01, entryPrice: 50_000, unrealizedProfit: 0 }),
+    reconcileBinanceProtectionModify: async () => null,
+  };
+  const mismatchReconciler = makeReconciler(mismatchDb, mismatchExec, () => {});
+  let mismatchBlocked = false;
+  try {
+    await (mismatchReconciler as any).reconcileOne(mismatchDb.getOpenTrades()[0]);
+  } catch {
+    mismatchBlocked = true;
+  }
+  assert(mismatchBlocked, "ambiguous Binance protection recovery must stay blocked");
+  assert(
+    mismatchDb.getExecutionByOperationKey("binance-modify-mismatch-op").status === "UNKNOWN",
+    "ambiguous protection modify must remain UNKNOWN",
+  );
+  mismatchDb.raw().close();
+
+  console.log("Result: 5 passed, 0 failed");
 }
 
 main().catch(error => {
