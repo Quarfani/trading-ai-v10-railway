@@ -127,6 +127,54 @@ export class BinanceExecutor {
   }
 
 
+  async recoverOrderByClientId(
+    symbol: string,
+    clientOrderId: string,
+  ): Promise<{
+    orderId: number;
+    status: string;
+    executedQty: number;
+    avgPrice: number;
+    realizedProfit: number | null;
+    realizedProfitCurrency: string | null;
+  } | null> {
+    try {
+      const order = await this.findOrderByClientId(symbol, clientOrderId);
+      if (!order) return null;
+      const orderId = Number(order.orderId);
+      const executedQty = Number(order.executedQty ?? order.cumQty ?? 0);
+      const avgPrice = Number(order.avgPrice ?? 0);
+      if (!(orderId > 0) || !Number.isFinite(orderId)) return null;
+      if (!(executedQty >= 0) || !Number.isFinite(executedQty)) return null;
+
+      if (!this.isFutures) {
+        return {
+          orderId,
+          status: String(order.status ?? '').toUpperCase(),
+          executedQty,
+          avgPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
+          realizedProfit: null,
+          realizedProfitCurrency: null,
+        };
+      }
+
+      const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+      return {
+        orderId,
+        status: String(order.status ?? '').toUpperCase(),
+        executedQty,
+        avgPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
+        realizedProfit: realized?.profit ?? null,
+        realizedProfitCurrency: realized?.currency ?? null,
+      };
+    } catch (e: any) {
+      this.logger.warn(
+        `[Binance] recoverOrderByClientId failed: ${e?.message ?? e}`,
+      );
+      return null;
+    }
+  }
+
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
     try {
       return await this.signedGet(
@@ -466,6 +514,7 @@ export class BinanceExecutor {
         type:'MARKET',
         quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
         reduceOnly:'true',
+        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
       });
 
       const orderId=Number(order?.orderId);
@@ -511,6 +560,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -570,6 +620,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
