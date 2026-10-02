@@ -463,6 +463,99 @@ async function main() {
   );
   atomicFullDb.raw().close();
 
+  const atomicOpenDb = new DatabaseManager(":memory:");
+  await atomicOpenDb.initialize();
+  atomicOpenDb.createExecutionLedger({
+    executionId: "atomic-open-fail",
+    operationKey: "atomic-open-fail-op",
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.1,
+    request: { volume: 0.1 },
+  });
+  atomicOpenDb.raw().exec(
+    "CREATE TRIGGER fail_atomic_open_ledger " +
+    "BEFORE UPDATE OF status ON execution_ledger " +
+    "WHEN NEW.executionId='atomic-open-fail' AND NEW.status='EXECUTED' " +
+    "BEGIN SELECT RAISE(ABORT, 'forced open ledger failure'); END;",
+  );
+  let atomicOpenFailed = false;
+  try {
+    atomicOpenDb.persistExecutedOpenTrade(
+      {
+        ticket: 1201,
+        symbol: "EURUSD",
+        timeframe: "H1",
+        side: "BUY",
+        volume: 0.1,
+        entry: 1.1,
+        sl: 1.09,
+        tp: 1.12,
+        status: "open",
+        openedAt: Date.now(),
+        source: "ATOMIC_OPEN_TEST",
+      } as any,
+      "atomic-open-fail",
+      1201,
+      { ticket: 1201 },
+    );
+  } catch {
+    atomicOpenFailed = true;
+  }
+  assert(atomicOpenFailed, "forced OPEN ledger failure must abort the transaction");
+  assert(
+    atomicOpenDb.raw().prepare("SELECT COUNT(*) c FROM trades").get().c === 0,
+    "atomic OPEN failure must roll back the inserted trade",
+  );
+  assert(
+    atomicOpenDb.getExecutionByOperationKey("atomic-open-fail-op").status === "PENDING",
+    "atomic OPEN failure must preserve the non-terminal ledger state",
+  );
+  atomicOpenDb.raw().close();
+
+  const atomicOpenSuccessDb = new DatabaseManager(":memory:");
+  await atomicOpenSuccessDb.initialize();
+  atomicOpenSuccessDb.createExecutionLedger({
+    executionId: "atomic-open-success",
+    operationKey: "atomic-open-success-op",
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.1,
+    request: { volume: 0.1 },
+  });
+  const openId = atomicOpenSuccessDb.persistExecutedOpenTrade(
+    {
+      ticket: 1202,
+      symbol: "EURUSD",
+      timeframe: "H1",
+      side: "BUY",
+      volume: 0.1,
+      entry: 1.1,
+      sl: 1.09,
+      tp: 1.12,
+      status: "open",
+      openedAt: Date.now(),
+      source: "ATOMIC_OPEN_SUCCESS",
+    } as any,
+    "atomic-open-success",
+    1202,
+    { ticket: 1202 },
+  );
+  assert(openId > 0, "successful atomic OPEN must return the local trade id");
+  assert(
+    atomicOpenSuccessDb.getExecutionByOperationKey("atomic-open-success-op").status === "EXECUTED",
+    "successful atomic OPEN must resolve the ledger",
+  );
+  assert(
+    atomicOpenSuccessDb.getOpenTrades().length === 1,
+    "successful atomic OPEN must persist exactly one local trade",
+  );
+  atomicOpenSuccessDb.raw().close();
+
   const atomicSlTpDb = new DatabaseManager(":memory:");
   await atomicSlTpDb.initialize();
   const atomicSlTpTradeId = atomicSlTpDb.insertTrade({
@@ -681,7 +774,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 31 passed, 0 failed");
+  console.log("Result: 39 passed, 0 failed");
 }
 
 main().catch(error => {
