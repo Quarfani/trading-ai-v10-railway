@@ -63,6 +63,13 @@ class ModelServer:
         key = self._key(symbol, timeframe)
 
         with self._lock:
+            # A failed replacement must not leave a previously loaded model
+            # serving stale or unverified artifacts.
+            self._models.pop(key, None)
+            self._buffers.pop(key, None)
+            self._outcomes.pop(key, None)
+            self._stats.pop(key, None)
+
             if model_type == "ensemble":
                 model = EnsembleModel(symbol, timeframe, use_lstm=False)
             else:
@@ -271,6 +278,17 @@ class ModelServer:
     ) -> bool:
         """Record a durable prediction outcome without requiring entry features."""
         key = self._key(symbol, timeframe)
+
+        with self._lock:
+            self._stats.setdefault(
+                key,
+                {
+                    "predictions": 0,
+                    "last_accuracy": None,
+                    "online_updates": 0,
+                    "loaded_at": "",
+                },
+            )
 
         prediction_id = str(prediction_id).strip()
         if not prediction_id or len(prediction_id) > 128:
