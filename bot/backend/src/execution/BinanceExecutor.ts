@@ -201,8 +201,20 @@ export class BinanceExecutor {
         return null;
       }
 
+      if (
+        String(list.symbol ?? '').toUpperCase() !== String(symbol).toUpperCase() ||
+        String(list.listClientOrderId ?? '') !== listClientOrderId
+      ) {
+        return null;
+      }
+
       const orders = Array.isArray(list.orders) ? list.orders : [];
       if (orders.length < 2) return null;
+
+      const orderIds = orders
+        .map((order: any) => Number(order.orderId))
+        .filter((id: number) => Number.isFinite(id) && id > 0);
+      if (orderIds.length !== 2 || new Set(orderIds).size !== 2) return null;
 
       return {
         orderListId: Number(list.orderListId),
