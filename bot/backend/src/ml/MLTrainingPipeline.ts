@@ -138,8 +138,16 @@ export class MLTrainingPipeline {
     }
 
     const fArr = this.featuresToArray(features);
+    if (!fArr.every(Number.isFinite)) {
+      return { winProbability: 0.5, confidence: 0 };
+    }
+
     const predictions = this.forest.map(tree => this.predictTree(tree, fArr));
-    const avgPred     = predictions.reduce((s, v) => s + v, 0) / predictions.length;
+    if (!predictions.length || !predictions.every(Number.isFinite)) {
+      return { winProbability: 0.5, confidence: 0 };
+    }
+    const rawAvg = predictions.reduce((s, v) => s + v, 0) / predictions.length;
+    const avgPred = Math.max(0, Math.min(1, rawAvg));
     // Confidence = how spread out the predictions are (low spread = high confidence)
     const variance    = predictions.reduce((s, v) => s + Math.pow(v - avgPred, 2), 0) / predictions.length;
     const confidence  = Math.max(0, 1 - Math.sqrt(variance) * 4);
@@ -232,11 +240,30 @@ export class MLTrainingPipeline {
       SELECT profit, source, confidence, entry, sl, tp, openedAt,
              symbol, timeframe
       FROM trades WHERE status='closed' AND openedAt > ? AND profit IS NOT NULL
+      ORDER BY openedAt DESC
       LIMIT 2000
     `).all(cutoff) as any[];
 
     return rows
-      .filter(r => Number.isFinite(Number(r.openedAt)) && Number(r.openedAt) > 0)
+      .filter(r => {
+        const openedAt = Number(r.openedAt);
+        const profit = Number(r.profit);
+        const entry = Number(r.entry);
+        const sl = Number(r.sl);
+        const tp = Number(r.tp);
+        const confidence = Number(r.confidence);
+        return (
+          Number.isFinite(openedAt) && openedAt > 0 &&
+          Number.isFinite(profit) &&
+          entry > 0 && Number.isFinite(entry) &&
+          sl > 0 && Number.isFinite(sl) &&
+          tp > 0 && Number.isFinite(tp) &&
+          Math.abs(entry - sl) > 0 &&
+          Math.abs(tp - entry) > 0 &&
+          Number.isFinite(confidence) &&
+          confidence >= 0 && confidence <= 1
+        );
+      })
       .map(r => ({
       openedAt: Number(r.openedAt),
       features: {
@@ -245,7 +272,7 @@ export class MLTrainingPipeline {
         hourUTC: (new Date(r.openedAt).getUTCHours()) / 23,
         dayOfWeek: (new Date(r.openedAt).getUTCDay()) / 6,
         sessionScore: this.getSessionScore(new Date(r.openedAt).getUTCHours()) / 100,
-        confidenceRaw: r.confidence ?? 0.6,
+        confidenceRaw: Number(r.confidence),
         sourceEncoded: this.encodeSource(r.source ?? ''),
         rrRatio: Math.min(Math.abs(r.tp - r.entry) / Math.max(Math.abs(r.entry - r.sl), 0.0001) / 5, 1),
         symbolWR30d: this.getSymbolWRAsOf(r.symbol, Number(r.openedAt)),
