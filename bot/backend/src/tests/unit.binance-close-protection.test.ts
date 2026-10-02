@@ -95,7 +95,67 @@ async function main() {
     "restart close must not submit a market close without verified position state",
   );
 
-  console.log("Result: 7 passed, 0 failed");
+  const spot = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
+  } as any);
+  const canceledSpot: number[] = [];
+  let spotPostSubmitted = false;
+  (spot as any).recoverSpotOcoByOperation = async (symbol: string, operationKey: string) => {
+    assert(symbol === "BTCUSDT", "Spot close recovery must use the trade symbol");
+    assert(operationKey === "open-spot-operation", "Spot close recovery must use the exact OPEN operation key");
+    return {
+      orderListId: 555,
+      listStatusType: "EXEC_STARTED",
+      listOrderStatus: "EXECUTING",
+      orders: [
+        { orderId: 8801, clientOrderId: "tp" },
+        { orderId: 8802, clientOrderId: "sl" },
+      ],
+    };
+  };
+  (spot as any).signedDelete = async (_path: string, params: any) => {
+    canceledSpot.push(Number(params.orderId));
+    return {};
+  };
+  (spot as any).getOpenOrders = async () => [];
+  let spotPositionCalls = 0;
+  (spot as any).getPosition = async () => {
+    spotPositionCalls += 1;
+    return spotPositionCalls === 1
+      ? { positionAmt: 0.1, entryPrice: 0, unrealizedProfit: 0 }
+      : { positionAmt: 0, entryPrice: 0, unrealizedProfit: 0 };
+  };
+  (spot as any).signedPost = async (_path: string, payload: any) => {
+    spotPostSubmitted = true;
+    assert(payload.type === "MARKET", "Spot close must use a market order");
+    return {
+      orderId: 8803,
+      status: "FILLED",
+      executedQty: "0.1",
+      fills: [{ price: "110", qty: "0.1" }],
+    };
+  };
+
+  const spotClosed = await spot.closePosition(
+    900,
+    "BTCUSDT",
+    0.1,
+    "BUY",
+    "close-spot-operation",
+    "open-spot-operation",
+  );
+  assert(spotClosed.ok, "Spot close must succeed after exact OCO recovery/cancellation");
+  assert(
+    canceledSpot.includes(8801) && canceledSpot.includes(8802),
+    "Spot close after restart must cancel both recovered OCO legs",
+  );
+  assert(
+    spotPostSubmitted,
+    "Spot market close must only be submitted after OCO cancellation",
+  );
+
+  console.log("Result: 10 passed, 0 failed");
+
 }
 
 main().catch(error => {
