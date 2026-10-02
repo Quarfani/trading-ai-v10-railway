@@ -347,6 +347,21 @@ async def record_trade(body: dict):
     ):
         raise HTTPException(status_code=422, detail="Invalid record_trade payload")
 
+    prediction_id = body.get("prediction_id")
+    if prediction_id is not None:
+        prediction_id = str(prediction_id).strip()
+        if not prediction_id or len(prediction_id) > 128:
+            raise HTTPException(status_code=422, detail="Invalid prediction_id")
+
+    predicted_signal = body.get("predicted_signal")
+    if predicted_signal is not None:
+        try:
+            predicted_signal = int(predicted_signal)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="predicted_signal must be numeric")
+        if predicted_signal not in (-1, 0, 1):
+            raise HTTPException(status_code=422, detail="Invalid predicted_signal")
+
     candles = body.get("entry_candles", [])
     if candles:
         ok, reason = _validate_candles(candles)
@@ -364,7 +379,15 @@ async def record_trade(body: dict):
                 X = df_feat[FEATURE_COLS].values[-1].astype("float32")
                 if X.shape != (len(FEATURE_COLS),) or not np.isfinite(X).all():
                     raise ValueError("Entry feature vector is invalid or contains non-finite values")
-                server.record_trade_closed(symbol, timeframe, X, profit, signal)
+                server.record_trade_closed(
+                    symbol,
+                    timeframe,
+                    X,
+                    profit,
+                    signal,
+                    prediction_id,
+                    predicted_signal,
+                )
         except Exception as e:
             logger.warning(f"record_trade feature error: {e}")
 
