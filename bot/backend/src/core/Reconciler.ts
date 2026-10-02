@@ -202,6 +202,67 @@ export class Reconciler {
           await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
         }
       } else {
+        const unresolvedModify = this.db.getLatestUnresolvedExecutionForTrade(
+          t.id!,
+          ['MOVE_SL_TP'],
+        );
+        if (unresolvedModify) {
+          let request: any = null;
+          try {
+            request = unresolvedModify.requestJson
+              ? JSON.parse(unresolvedModify.requestJson)
+              : null;
+          } catch {
+            request = null;
+          }
+          const desiredSl = Number(request?.newSl);
+          const desiredTp = Number(request?.newTp);
+          const brokerSl = Number(live.sl);
+          const brokerTp = Number(live.tp);
+          const slTolerance = Math.max(1e-10, Math.abs(desiredSl) * 1e-6);
+          const tpTolerance = Math.max(1e-10, Math.abs(desiredTp) * 1e-6);
+
+          if (
+            !Number.isFinite(desiredSl) ||
+            !Number.isFinite(desiredTp) ||
+            !Number.isFinite(brokerSl) ||
+            !Number.isFinite(brokerTp)
+          ) {
+            throw new Error(
+              `MT5 unresolved protection modify has invalid broker/request values for ticket=${t.ticket}`,
+            );
+          }
+
+          if (
+            Math.abs(brokerSl - desiredSl) > slTolerance ||
+            Math.abs(brokerTp - desiredTp) > tpTolerance
+          ) {
+            throw new Error(
+              `MT5 unresolved protection modify does not match broker state for ticket=${t.ticket}; manual reconciliation required`,
+            );
+          }
+
+          const resolved = this.db.resolveReconciledProtectionModify(
+            t.id!,
+            String(unresolvedModify.executionId),
+            brokerSl,
+            brokerTp,
+            {
+              broker: 'mt5',
+              ticket: t.ticket,
+              sl: brokerSl,
+              tp: brokerTp,
+              runtimeReconciliation: true,
+            },
+            t.ticket,
+          );
+          if (!resolved) {
+            throw new Error(
+              `Could not atomically reconcile MT5 protection modify operation=${unresolvedModify.executionId}`,
+            );
+          }
+        }
+
         // Handle partial close: volume reduced on broker side
         const brokerVolume = Number(live.volume);
         if (!Number.isFinite(brokerVolume) || brokerVolume <= 0) {
