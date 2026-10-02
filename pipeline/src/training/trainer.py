@@ -171,6 +171,7 @@ class ModelTrainer:
             majority_baseline,
             wf_mean_accuracy,
             wf_std_accuracy,
+            len(wf_folds),
         )
         logger.info(f"  Recommendation: {recommendation}")
 
@@ -303,15 +304,15 @@ class ModelTrainer:
         self,
         test_acc:          float,
         majority_baseline: float,
-        wf_mean:            float,
-        wf_std:             float,
+        wf_mean:             float,
+        wf_std:              float,
+        wf_folds:            int = 0,
     ) -> str:
         """
-        Deployment decision based only on WFO/OOS evidence.
-
-        The held-out test set is report-only and must never influence
-        deployment selection. ``test_acc`` remains in the signature for
-        report/API compatibility.
+        Deployment decision uses a final held-out safety gate plus
+        time-ordered WFO evidence. The held-out set is never used for tuning,
+        but its accuracy must clear both the configured minimum and a
+        majority-class baseline margin before deployment is considered.
         """
         if (
             not np.isfinite(test_acc) or
@@ -321,10 +322,19 @@ class ModelTrainer:
         ):
             return "DO_NOT_DEPLOY ❌ — invalid evaluation metrics"
 
+        if test_acc < self.min_test_accuracy:
+            return (
+                f"CAUTION ⚠️ — held-out accuracy {test_acc:.3f} "
+                f"< configured minimum {self.min_test_accuracy:.3f}"
+            )
+
         # Accuracy must beat the simple majority-class baseline. This avoids
         # treating a class-imbalanced classifier as evidence of predictive edge.
         if test_acc < majority_baseline + 0.02:
             return "CAUTION ⚠️ — does not clear majority baseline by 2%"
+
+        if wf_folds < 3:
+            return "CAUTION ⚠️ — insufficient independent WFO folds"
 
         if wf_mean >= 0.53 and wf_std <= 0.06:
             return "DEPLOY ✅"
