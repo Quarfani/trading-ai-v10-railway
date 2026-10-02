@@ -220,6 +220,62 @@ export class DatabaseManager {
     return result.changes === 1;
   }
 
+  resolveRecoveredOpenTrade(
+    executionId: string,
+    trade: Trade & { account?: string; timeframe?: string },
+    result: unknown,
+    brokerOrderId: string | number,
+  ): number | false {
+    const tx = this.db.transaction(() => {
+      const ledger = this.db.prepare(
+        `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
+      ).get(executionId) as { status: string } | undefined;
+      if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+
+      const duplicate = this.db.prepare(
+        `SELECT id FROM trades WHERE ticket=? AND symbol=? AND status='open' LIMIT 1`,
+      ).get(trade.ticket ?? null, trade.symbol) as { id: number } | undefined;
+      if (duplicate) {
+        const ledgerChanged = this.db.prepare(`
+          UPDATE execution_ledger
+          SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+          WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+        `).run(
+          String(brokerOrderId),
+          JSON.stringify({ ...result, recoveredTradeId: duplicate.id }),
+          Date.now(),
+          executionId,
+        ).changes;
+        if (ledgerChanged !== 1) throw new Error(`Could not resolve recovered duplicate open ledger ${executionId}`);
+        return duplicate.id;
+      }
+
+      const tradeId = this.insertTrade({
+        ...trade,
+        account: trade.account ?? 'default',
+        timeframe: trade.timeframe ?? null,
+      });
+
+      const ledgerChanged = this.db.prepare(`
+        UPDATE execution_ledger
+        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+      `).run(
+        String(brokerOrderId),
+        JSON.stringify({ ...result, recoveredTradeId: tradeId }),
+        Date.now(),
+        executionId,
+      ).changes;
+      if (ledgerChanged !== 1) {
+        throw new Error(`Could not resolve recovered open ledger ${executionId}`);
+      }
+
+      return tradeId;
+    });
+
+    return tx();
+  }
+
   getExecutionByOperationKey(operationKey: string): any | null {
     return this.db.prepare(`SELECT * FROM execution_ledger WHERE operationKey=?`).get(operationKey) ?? null;
   }
