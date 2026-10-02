@@ -363,13 +363,13 @@ export class DatabaseManager {
     const tx = this.db.transaction(() => {
       const trade = this.db.prepare(
         `SELECT status FROM trades WHERE id=? LIMIT 1`,
-      ).get(tradeId) as { status: string } | undefined;
+      ).get(tradeId) as { status: string; action: string } | undefined;
       if (!trade) return false;
 
       const ledger = this.db.prepare(
-        `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
+        `SELECT status, action FROM execution_ledger WHERE executionId=? LIMIT 1`,
       ).get(executionId) as { status: string } | undefined;
-      if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+      if (!ledger || !['CLOSE', 'CLOSE_AT_MARKET'].includes(ledger.action) || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
 
       if (trade.status === 'open') {
         const changed = this.db.prepare(
@@ -477,13 +477,13 @@ export class DatabaseManager {
     const tx = this.db.transaction(() => {
       const trade = this.db.prepare(
         `SELECT status FROM trades WHERE id=? LIMIT 1`,
-      ).get(tradeId) as { status: string } | undefined;
+      ).get(tradeId) as { status: string; action: string } | undefined;
       if (!trade || trade.status !== 'open') return false;
 
       const ledger = this.db.prepare(
-        `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
+        `SELECT status, action FROM execution_ledger WHERE executionId=? LIMIT 1`,
       ).get(executionId) as { status: string } | undefined;
-      if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+      if (!ledger || ledger.action !== 'PARTIAL_CLOSE' || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
 
       const tradeChanged = this.db.prepare(
         `UPDATE trades
