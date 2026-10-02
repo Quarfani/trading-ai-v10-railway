@@ -4,7 +4,7 @@
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
 Current head: verify refs/heads/main before resuming
-Current validated checkpoint: CI #545 passed for commit 5ceb42bd773292de9acba9dbefe014dbbb3534e8
+Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410
 
 ## TARGET
 Adaptive Quantitative Trading Decision System
@@ -59,3 +59,9 @@ B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E
 2. Check the latest CI run for the current head.
 3. Never overwrite unresolved execution-ledger entries automatically.
 4. Keep one concrete NEXT TASK only.
+
+## CURRENT MAIN CI STATUS
+- Main HEAD: caf0d9f46b61aeef66c01d8c44a4c35a6b019d27
+- Latest successful main CI: #549 (c1eb40fc08c3624691b06f3533fe43ff7e924410)
+- Main CI #550 and #551 completed as failures. Both runs finished within seconds and their job step summaries/log blobs are currently unavailable through the GitHub integration, so the exact failure cause is not verified.
+- Do not burn Actions minutes on blind reruns. First establish whether this is an Actions/billing/runner-level block; GitHub Free includes 2,000 Actions minutes/month and usage can be blocked after quota exhaustion when no valid payment method/budget is available.
