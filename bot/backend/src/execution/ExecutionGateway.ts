@@ -505,24 +505,29 @@ export class ExecutionGateway {
         if (!result.ok) throw new Error('Paper settlement rejected');
 
         if (t.id) {
-          const changed = this.db.updateTradeClose(
+          const changed = this.db.resolveReconciledFullClose(
             t.id,
+            op.executionId,
             result.profit,
             Date.now(),
             reason,
-            quoteToAccount,
+            {
+              ...result,
+              quoteToAccount,
+            },
+            t.ticket,
           );
           if (!changed) {
             throw new Error(
-              `Paper settlement could not be persisted for id=${t.id}`,
+              `Paper settlement could not be persisted atomically for id=${t.id}`,
             );
           }
-        }
-
-        this.db.updateExecutionLedger(
+        } else if (!this.db.updateExecutionLedger(
           op.executionId,
           { status: 'EXECUTED', result },
-        );
+        )) {
+          throw new Error('Paper settlement succeeded but execution ledger could not be resolved');
+        }
         return { ok: true, profit: result.profit };
       }
 
