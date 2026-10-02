@@ -643,6 +643,172 @@ def test_live_trade_order_send_exception_is_unknown(monkeypatch):
     assert cached[1] == "UNKNOWN"
 
 
+def test_live_close_done_with_remaining_position_is_unknown(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+
+    fake = types.SimpleNamespace(
+        TRADE_RETCODE_DONE=10009,
+        TRADE_RETCODE_DONE_PARTIAL=10010,
+        TRADE_ACTION_DEAL=1,
+        ORDER_TYPE_SELL=1,
+        ORDER_TIME_GTC=0,
+        ORDER_FILLING_IOC=1,
+        initialize=lambda **kwargs: True,
+        positions_get=lambda **kwargs: [
+            types.SimpleNamespace(ticket=601, symbol="EURUSD", type=0, volume=0.2)
+        ],
+        symbol_info_tick=lambda symbol: types.SimpleNamespace(bid=1.0999, ask=1.1001),
+        symbol_info=lambda symbol: info(trade_exemode=2, filling_mode=2, visible=True, point=0.00001),
+        order_check=lambda request: types.SimpleNamespace(retcode=0, comment="ok"),
+        order_send=lambda request: types.SimpleNamespace(
+            retcode=10009, deal=901, order=902, volume=0.2, price=1.0999
+        ),
+        history_deals_get=lambda **kwargs: [],
+        last_error=lambda: (500, "state still open"),
+    )
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    monkeypatch.setattr(bridge, "MT5_AVAILABLE", True)
+
+    client = bridge.app.test_client()
+    response = client.post(
+        "/close",
+        json={"ticket": 601, "idempotency_key": "close-remains-open-1"},
+    )
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "UNKNOWN"
+    cached = bridge._idempotency_lookup("close-remains-open-1")
+    assert cached is not None and cached[1] == "UNKNOWN"
+
+
+def test_live_modify_done_but_protection_not_applied_is_unknown(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+
+    position = types.SimpleNamespace(
+        ticket=602, symbol="EURUSD", type=0, volume=0.1, sl=1.09, tp=1.12
+    )
+    sym = info(
+        trade_exemode=1,
+        filling_mode=3,
+        visible=True,
+        point=0.00001,
+        trade_stops_level=0,
+    )
+    fake = types.SimpleNamespace(
+        TRADE_RETCODE_DONE=10009,
+        TRADE_ACTION_SLTP=6,
+        ORDER_TIME_GTC=0,
+        positions_get=lambda **kwargs: [position],
+        symbol_info=lambda symbol: sym,
+        symbol_info_tick=lambda symbol: types.SimpleNamespace(bid=1.1000, ask=1.1002),
+        order_check=lambda request: types.SimpleNamespace(retcode=0, comment="ok"),
+        order_send=lambda request: types.SimpleNamespace(retcode=10009, order=903, deal=0),
+        last_error=lambda: (500, "protection did not apply"),
+    )
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    monkeypatch.setattr(bridge, "MT5_AVAILABLE", True)
+
+    client = bridge.app.test_client()
+    payload = {
+        "ticket": 602,
+        "sl": 1.095,
+        "tp": 1.115,
+        "idempotency_key": "modify-unverified-1",
+    }
+    response = client.post("/modify", json=payload)
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "UNKNOWN"
+    cached = bridge._idempotency_lookup("modify-unverified-1")
+    assert cached is not None and cached[1] == "UNKNOWN"
+
+
+def test_live_trade_execution_with_unverified_protection_is_unknown(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+
+    sym_info = types.SimpleNamespace(
+        visible=True,
+        point=0.00001,
+        trade_stops_level=0,
+        volume_min=0.01,
+        volume_max=100.0,
+        volume_step=0.01,
+        volume_limit=0,
+        trade_mode=4,
+        trade_exemode=1,
+        filling_mode=3,
+    )
+    tick = types.SimpleNamespace(bid=1.0999, ask=1.1001)
+    position = types.SimpleNamespace(
+        ticket=603, symbol="EURUSD", type=0, volume=0.01,
+        sl=0.0, tp=1.12,
+    )
+    fake = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        SYMBOL_TRADE_EXECUTION_MARKET=2,
+        SYMBOL_FILLING_IOC=2,
+        SYMBOL_FILLING_FOK=1,
+        ORDER_FILLING_RETURN=2,
+        ORDER_FILLING_IOC=1,
+        ORDER_FILLING_FOK=0,
+        ORDER_TYPE_BUY=0,
+        ORDER_TYPE_SELL=1,
+        POSITION_TYPE_BUY=0,
+        TRADE_ACTION_DEAL=1,
+        ORDER_TIME_GTC=0,
+        TRADE_RETCODE_DONE=10009,
+        TRADE_RETCODE_DONE_PARTIAL=10010,
+        symbol_info=lambda symbol: sym_info,
+        symbol_info_tick=lambda symbol: tick,
+        positions_get=lambda **kwargs: [position],
+        account_info=lambda: types.SimpleNamespace(equity=1000.0, margin_free=1000.0),
+        order_check=lambda request: types.SimpleNamespace(retcode=0, comment="ok"),
+        order_send=lambda request: types.SimpleNamespace(
+            retcode=10009, deal=604, order=605, volume=0.01, price=1.1001
+        ),
+        history_deals_get=lambda **kwargs: [
+            types.SimpleNamespace(position_id=603)
+        ] if kwargs.get("ticket") == 604 else [],
+        last_error=lambda: (500, "protection mismatch"),
+    )
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    monkeypatch.setattr(bridge, "MT5_AVAILABLE", True)
+    monkeypatch.setattr(
+        bridge,
+        "calculate_order_estimates",
+        lambda *args, **kwargs: (10.0, 100.0),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "validate_trade_permissions",
+        lambda *args, **kwargs: (True, "OK"),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "validate_aggregate_volume",
+        lambda *args, **kwargs: (True, "OK"),
+    )
+
+    client = bridge.app.test_client()
+    payload = {
+        "symbol": "EURUSD",
+        "side": "BUY",
+        "volume": 0.01,
+        "sl": 1.09,
+        "tp": 1.12,
+        "idempotency_key": "trade-unverified-protection-1",
+    }
+    response = client.post("/trade", json=payload)
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "UNKNOWN"
+    cached = bridge._idempotency_lookup("trade-unverified-protection-1")
+    assert cached is not None and cached[1] == "UNKNOWN"
+
+
 def test_live_close_partial_fill_persists_unknown_and_blocks_replay(monkeypatch):
     bridge._idempotency_cache.clear()
     bridge.BRIDGE_MODE = "live"
