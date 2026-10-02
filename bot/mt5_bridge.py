@@ -1456,7 +1456,7 @@ def positions():
             return err("MT5 not connected", 503)
         pos_list = mt5.positions_get()
         if pos_list is None:
-            return jsonify({"positions": [], "count": 0})
+            return err(f"MT5 positions query failed: {mt5.last_error()}", 503)
         result = []
         for p in pos_list:
             result.append({
@@ -1584,7 +1584,10 @@ def history():
                 return err("position must be positive", 400)
             deals = mt5.history_deals_get(position=position_id)
             if deals is None:
-                return jsonify({"deals": [], "count": 0, "closed": False})
+                return err(
+                    f"MT5 position history query failed: {mt5.last_error()}",
+                    503,
+                )
             summary = summarize_position_deals(deals)
             if not summary:
                 return jsonify({"deals": [], "count": len(deals), "closed": False})
@@ -1593,7 +1596,10 @@ def history():
         utcnow = datetime.now(timezone.utc)
         deals = mt5.history_deals_get(utcnow - timedelta(days=30), utcnow)
         if deals is None:
-            return jsonify({"deals": [], "count": 0})
+            return err(
+                f"MT5 history query failed: {mt5.last_error()}",
+                503,
+            )
         result = [
             {
                 "ticket": d.ticket, "order": d.order,
