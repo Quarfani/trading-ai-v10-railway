@@ -71,8 +71,21 @@ export class SentimentEngine {
   }
 
   private computeSentiment(symbol: string): SentimentResult {
-    const sym = symbol.toUpperCase();
+    const sym = String(symbol ?? '').toUpperCase().trim();
     const currencies = this.getCurrencies(sym);
+
+    if (!sym || currencies.length === 0) {
+      return {
+        symbol,
+        sentimentScore: 0,
+        impact: 'NEUTRAL',
+        bias: 'NONE',
+        fearGreedIndex: this.fearGreed,
+        surpriseFactor: 0,
+        updatedAt: Date.now(),
+        reason: 'Invalid symbol',
+      };
+    }
 
     let score  = 0;
     let weight = 0;
@@ -131,8 +144,12 @@ export class SentimentEngine {
 
   private calcSurprise(ev: EconomicEvent): number | null {
     if (ev.actual === null || ev.forecast === null) return null;
-    const base = Math.abs(ev.forecast) || 1;
-    return (ev.actual - ev.forecast) / base;
+    const base = Math.abs(ev.forecast);
+    if (!Number.isFinite(base) || base <= 0) return null;
+    const value = (ev.actual - ev.forecast) / base;
+    return Number.isFinite(value)
+      ? Math.max(-5, Math.min(5, value))
+      : null;
   }
 
   private async fetchFearGreed(): Promise<void> {
