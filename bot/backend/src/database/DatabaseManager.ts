@@ -397,6 +397,7 @@ export class DatabaseManager {
         `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
       ).get(executionId) as { status: string } | undefined;
       if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+      if (trade.status !== 'open') return false;
 
       if (trade.status === 'open') {
         const changed = this.db.prepare(
