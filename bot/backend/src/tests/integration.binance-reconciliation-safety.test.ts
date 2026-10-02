@@ -348,6 +348,52 @@ async function main() {
   );
   spotQtyDb.raw().close();
 
+  const unattributedDb = new DatabaseManager(":memory:");
+  await unattributedDb.initialize();
+  unattributedDb.insertTrade({
+    ticket: 601,
+    symbol: "BTCUSDT",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 1,
+    entry: 100,
+    sl: 90,
+    tp: 120,
+    status: "open",
+    openedAt: Date.now(),
+    source: "UNATTRIBUTED_PARTIAL",
+  } as any);
+
+  const unattributedExec = {
+    getBinancePosition: async () => ({
+      symbol: "BTCUSDT",
+      positionAmt: 0.5,
+      entryPrice: 100,
+      unrealizedProfit: 0,
+    }),
+  };
+
+  const beforeVolume = Number(unattributedDb.getOpenTrades()[0].volume);
+  let unattributedBlocked = false;
+  try {
+    await (makeReconciler(unattributedDb, unattributedExec) as any).reconcileBinance(
+      unattributedDb.getOpenTrades()[0],
+    );
+  } catch {
+    unattributedBlocked = true;
+  }
+  const afterVolume = Number(unattributedDb.getOpenTrades()[0].volume);
+
+  assert(
+    unattributedBlocked,
+    "unattributed Binance position reduction must require manual reconciliation",
+  );
+  assert(
+    beforeVolume === afterVolume,
+    "unattributed broker reduction must not silently rewrite local trade volume",
+  );
+  unattributedDb.raw().close();
+
   const blockedDb = new DatabaseManager(":memory:");
   await blockedDb.initialize();
   const blockedTradeId = blockedDb.insertTrade({
@@ -399,7 +445,7 @@ async function main() {
   );
   blockedDb.raw().close();
 
-  console.log("Result: 24 passed, 0 failed");
+  console.log("Result: 26 passed, 0 failed");
 }
 
 main().catch(error => {
