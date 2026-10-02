@@ -449,15 +449,14 @@ export class BinanceExecutor {
       }
 
       const available=Math.abs(pos.positionAmt);
-      const qty=Math.min(volume,available);
-      if(!(qty>0)) {
-        return {
-          ok:false,
-          remainingVolume:available,
-          realizedProfit:0,
-          realizedProfitCurrency:null,
-        };
+      const step = getSymbolSpec(symbol).volumeStep;
+      const quantityTolerance = Math.max(step, 1e-12);
+      if (!(volume > 0) || Math.abs(available - volume) > quantityTolerance) {
+        throw new Error(
+          `Binance partial close quantity mismatch for ${symbol}: requested=${volume} available=${available}`,
+        );
       }
+      const qty = volume;
 
       const closeSide=pos.positionAmt>0?'SELL':'BUY';
       const order=await this.signedPost('/fapi/v1/order',{
@@ -474,7 +473,28 @@ export class BinanceExecutor {
       }
 
       const after=await this.getPosition(symbol);
-      const remainingVolume=Math.max(0,Math.abs(after?.positionAmt??0));
+      if (!after) {
+        throw new Error(
+          `Binance partial close ${symbol} executed but post-fill position verification is unavailable`,
+        );
+      }
+      const remainingVolume=Math.max(0,Math.abs(after.positionAmt));
+      const expectedRemaining=Math.max(0, available - qty);
+      const remainingTolerance=Math.max(
+        step,
+        expectedRemaining * 0.02,
+        1e-12,
+      );
+      if (Math.abs(remainingVolume - expectedRemaining) > remainingTolerance) {
+        throw new Error(
+          `Binance partial close ${symbol} post-fill quantity mismatch: remaining=${remainingVolume} expected=${expectedRemaining}`,
+        );
+      }
+      if (!(remainingVolume > 0)) {
+        throw new Error(
+          `Binance partial close ${symbol} unexpectedly removed the full position`,
+        );
+      }
 
       const realized=await this.getFuturesOrderNetPnl(symbol,orderId);
       if(realized==null) {
@@ -551,14 +571,20 @@ export class BinanceExecutor {
       if (this.isFutures) {
         const pos = await this.getPosition(symbol);
         if (!pos || pos.positionAmt === 0) {
-          return {
-            ok: true,
-            realizedProfit: 0,
-            realizedProfitCurrency: null,
-          };
+          throw new Error(
+            `Binance full close found no open position for ${symbol}; authoritative broker close cannot be assumed`,
+          );
         }
 
-        const closeQty = volume ?? Math.abs(pos.positionAmt);
+        const available = Math.abs(pos.positionAmt);
+        const closeQty = volume ?? available;
+        const step = getSymbolSpec(symbol).volumeStep;
+        const quantityTolerance = Math.max(step, 1e-12);
+        if (!(closeQty > 0) || closeQty > available + quantityTolerance) {
+          throw new Error(
+            `Binance full close requested quantity exceeds available position for ${symbol}: requested=${closeQty} available=${available}`,
+          );
+        }
         const closeSide = pos.positionAmt > 0 ? 'SELL' : 'BUY';
 
         const closeOrder = await this.signedPost('/fapi/v1/order', {
@@ -575,6 +601,18 @@ export class BinanceExecutor {
         const closeOrderId = Number(closeOrder?.orderId);
         if (!(closeOrderId > 0) || !Number.isFinite(closeOrderId)) {
           throw new Error('Binance full close returned invalid orderId');
+        }
+
+        const afterClose = await this.getPosition(symbol);
+        if (!afterClose) {
+          throw new Error(
+            `Binance full close ${symbol} executed but post-fill position verification is unavailable`,
+          );
+        }
+        if (Math.abs(afterClose.positionAmt) > Math.max(step, 1e-12)) {
+          throw new Error(
+            `Binance full close ${symbol} executed but position remains open: remaining=${afterClose.positionAmt}`,
+          );
         }
 
         const realized = await this.getFuturesOrderNetPnl(
