@@ -522,6 +522,27 @@ export class BinanceExecutor {
 
   // ─── Modify SL/TP ─────────────────────────────────────────────────────
 
+  private async getProtectiveOrderIds(
+    symbol: string,
+    side: 'BUY' | 'SELL',
+  ): Promise<number[]> {
+    const openOrders = await this.getOpenOrders(symbol);
+    const closeSide = side === 'BUY' ? 'SELL' : 'BUY';
+    return openOrders
+      .filter((order: any) => {
+        const type = String(order.type ?? '').toUpperCase();
+        const orderSide = String(order.side ?? '').toUpperCase();
+        const closePosition = String(order.closePosition).toLowerCase() === 'true';
+        return (
+          orderSide === closeSide &&
+          closePosition &&
+          (type === 'STOP_MARKET' || type === 'TAKE_PROFIT_MARKET')
+        );
+      })
+      .map((order: any) => Number(order.orderId))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+  }
+
   async modifyPosition(
     ticket:number,
     symbol:string,
@@ -533,9 +554,12 @@ export class BinanceExecutor {
     if(!this.isFutures)return false;
     try{
       const ids=this.orderMap.get(ticket);
-      const oldIds=[ids?.slOrderId,ids?.tpOrderId].filter(
+      const trackedIds=[ids?.slOrderId,ids?.tpOrderId].filter(
         (id): id is number => Number.isFinite(id),
       );
+      const oldIds = trackedIds.length
+        ? trackedIds
+        : await this.getProtectiveOrderIds(symbol, side);
 
       for(const orderId of oldIds) {
         await this.signedDelete('/fapi/v1/order',{symbol,orderId});
@@ -553,9 +577,13 @@ export class BinanceExecutor {
         }
       }
 
-      const quantity=ids?.quantity ?? Math.abs(
-        (await this.getPosition(symbol))?.positionAmt ?? 0,
-      );
+      const position = await this.getPosition(symbol);
+      if (!position) {
+        throw new Error(
+          `Binance position state unavailable while modifying ${symbol}`,
+        );
+      }
+      const quantity=ids?.quantity ?? Math.abs(position.positionAmt ?? 0);
       if(!(quantity>0)) return false;
 
       const sig={
@@ -709,36 +737,48 @@ export class BinanceExecutor {
 
     try {
       const ids = this.orderMap.get(ticket);
-      if (ids) {
-        const oldOrderIds = [ids.slOrderId, ids.tpOrderId].filter(
-          (id): id is number => Number.isFinite(id),
+      const trackedIds = [
+        ids?.slOrderId,
+        ids?.tpOrderId,
+      ].filter((id): id is number => Number.isFinite(id));
+      const oldOrderIds = trackedIds.length
+        ? trackedIds
+        : this.isFutures
+          ? await this.getProtectiveOrderIds(
+              symbol,
+              side ?? ids?.closeSide === 'SELL' ? 'BUY' : 'SELL',
+            )
+          : [];
+
+      for (const orderId of oldOrderIds) {
+        await this.signedDelete(
+          this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
+          { symbol, orderId },
         );
-
-        for (const orderId of oldOrderIds) {
-          await this.signedDelete(
-            this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
-            { symbol, orderId },
-          );
-        }
-
-        if (oldOrderIds.length) {
-          const openOrders = await this.getOpenOrders(symbol);
-          const staleProtectiveOrders = openOrders.filter((order: any) =>
-            oldOrderIds.includes(Number(order.orderId)),
-          );
-          if (staleProtectiveOrders.length > 0) {
-            throw new Error(
-              `Binance protective order cancellation could not be verified for ${symbol}`,
-            );
-          }
-        }
-
-        this.orderMap.delete(ticket);
       }
+
+      if (oldOrderIds.length) {
+        const openOrders = await this.getOpenOrders(symbol);
+        const staleProtectiveOrders = openOrders.filter((order: any) =>
+          oldOrderIds.includes(Number(order.orderId)),
+        );
+        if (staleProtectiveOrders.length > 0) {
+          throw new Error(
+            `Binance protective order cancellation could not be verified for ${symbol}`,
+          );
+        }
+      }
+
+      this.orderMap.delete(ticket);
 
       if (this.isFutures) {
         const pos = await this.getPosition(symbol);
-        if (!pos || pos.positionAmt === 0) {
+        if (!pos) {
+          throw new Error(
+            `Binance position state unavailable while closing ${symbol}`,
+          );
+        }
+        if (pos.positionAmt === 0) {
           return {
             ok: true,
             realizedProfit: 0,
