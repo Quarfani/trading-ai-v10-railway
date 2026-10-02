@@ -55,8 +55,29 @@ describe('KellyPositionSizer', () => {
     expect(volume).toBeLessThanOrEqual(maxVol + 0.01);
   });
 
-  test('zero SL distance returns minimum volume', () => {
+  test('zero SL distance fails closed', () => {
     const { volume } = sizer.size('EURUSD','BUY',1.2000,1.2000,mockConfig,goodStats,50); // SL = entry
-    expect(volume).toBeGreaterThan(0); // should return minVolume
+    expect(volume).toBe(0);
+  });
+
+  test('NaN entry fails closed', () => {
+    const { volume } = sizer.size('EURUSD','BUY',Number.NaN,1.1900,mockConfig,goodStats,50);
+    expect(volume).toBe(0);
+  });
+
+  test('NaN quality score fails closed', () => {
+    const { volume } = sizer.size('EURUSD','BUY',1.2000,1.1900,mockConfig,goodStats,Number.NaN);
+    expect(volume).toBe(0);
+  });
+
+  test('corrupt Kelly statistics fail closed', () => {
+    const corrupt = {
+      trades: 50,
+      winRate: 0.6,
+      avgWin: Number.NaN,
+      avgLoss: 100,
+    };
+    const { volume } = sizer.size('EURUSD','BUY',1.2000,1.1900,mockConfig,corrupt,50);
+    expect(volume).toBe(0);
   });
 });
