@@ -145,13 +145,7 @@ class EnsembleModel(BaseModel):
 
         ensemble_proba = np.zeros((len(X) if X.ndim > 1 else 1, 3))
 
-        for model_name in self._trained_models:
-            w = self._weights.get(model_name, 0.0)
-            if w == 0:
-                continue
-
-            successful_weight = 0.0
-
+        successful_weight = 0.0
         for model_name in self._trained_models:
             w = float(self._weights.get(model_name, 0.0))
             if not np.isfinite(w) or w <= 0:
@@ -231,41 +225,79 @@ class EnsembleModel(BaseModel):
             except Exception:
                 pass
 
-        # Compute weighted ensemble
-        ensemble_p = np.zeros(3)
+        # Compute a weighted ensemble using only models that returned
+        # validated probability vectors. Failed sub-models must not dilute
+        # the evidence from a surviving model.
+        ensemble_p = np.zeros(3, dtype="float64")
+        successful_weight = 0.0
+        validated_preds: Dict[str, np.ndarray] = {}
+
         for mname, proba in model_preds.items():
-            p = proba[0] if proba.ndim > 1 else proba
-            ensemble_p += self._weights.get(mname, 0.5) * p
+            try:
+                p = np.asarray(proba[0] if proba.ndim > 1 else proba, dtype="float64")
+                if (
+                    p.shape != (3,) or
+                    not np.all(np.isfinite(p)) or
+                    np.any(p < 0) or
+                    np.any(p > 1) or
+                    abs(float(p.sum()) - 1.0) > 0.02
+                ):
+                    continue
 
-        # Normalize
-        total = ensemble_p.sum()
-        if total > 0:
-            ensemble_p /= total
+                w = float(self._weights.get(mname, 0.0))
+                if not np.isfinite(w) or w <= 0:
+                    continue
 
-        sell_p, hold_p, buy_p = float(ensemble_p[0]), float(ensemble_p[1]), float(ensemble_p[2])
+                ensemble_p += w * p
+                successful_weight += w
+                validated_preds[mname] = p
+            except Exception:
+                continue
+
+        if successful_weight <= 0 or not np.isfinite(successful_weight):
+            ensemble_p = np.asarray([0.0, 1.0, 0.0], dtype="float64")
+            validated_preds = {}
+        else:
+            ensemble_p /= successful_weight
+            if (
+                not np.all(np.isfinite(ensemble_p)) or
+                np.any(ensemble_p < 0) or
+                np.any(ensemble_p > 1)
+            ):
+                ensemble_p = np.asarray([0.0, 1.0, 0.0], dtype="float64")
+                validated_preds = {}
+
+        sell_p, hold_p, buy_p = (
+            float(ensemble_p[0]),
+            float(ensemble_p[1]),
+            float(ensemble_p[2]),
+        )
         max_idx = int(np.argmax(ensemble_p))
-        label   = [-1, 0, 1][max_idx]
-        conf    = float(np.max(ensemble_p))
+        label = [-1, 0, 1][max_idx]
+        conf = float(np.max(ensemble_p))
 
         # ── Disagreement penalty ──────────────────────────────────────────
-        if len(model_preds) >= 2:
+        if len(validated_preds) >= 2:
             labels_each = [
-                [-1, 0, 1][int(np.argmax(p[0] if p.ndim > 1 else p))]
-                for p in model_preds.values()
+                [-1, 0, 1][int(np.argmax(p))]
+                for p in validated_preds.values()
             ]
             if len(set(labels_each)) > 1:
-                # Models disagree → penalize confidence
-                conf -= self.disagreement_penalty
+                conf = max(0.0, conf - self.disagreement_penalty)
                 logger.debug(
-                    f"[{self.symbol}] Model disagreement: {dict(zip(model_preds.keys(), labels_each))} "
+                    f"[{self.symbol}] Model disagreement: "
+                    f"{dict(zip(validated_preds.keys(), labels_each))} "
                     f"→ conf reduced to {conf:.3f}"
                 )
 
         # ── Confidence floor → HOLD ───────────────────────────────────────
         if conf < self.confidence_min:
-            label   = 0
-            hold_p += (1 - conf)
-            conf    = float(ensemble_p[1])  # hold probability
+            label = 0
+            conf = float(ensemble_p[1])
+
+        if not np.isfinite(conf) or not 0.0 <= conf <= 1.0:
+            label = 0
+            conf = 0.0
 
         ms = (time.perf_counter() - t0) * 1000
         return PredictResult(
