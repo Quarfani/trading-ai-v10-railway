@@ -53,6 +53,48 @@ class TestBaseModelInterface:
         assert X.dtype == np.float32
         assert y.dtype == np.int32
 
+    def test_evaluate_rejects_empty_dataset(self):
+        class DummyModel(BaseModel):
+            name = "dummy"
+
+            def train(self, X_train, y_train, X_val, y_val):
+                raise NotImplementedError
+
+            def predict_proba(self, X):
+                return np.tile(np.asarray([[0.2, 0.5, 0.3]]), (len(X), 1))
+
+            def save(self):
+                raise NotImplementedError
+
+            def load(self):
+                return False
+
+        model = DummyModel("TEST", "1h")
+        with pytest.raises(ValueError, match="evaluation"):
+            model.evaluate(np.empty((0, len(FEATURE_COLS))), np.empty((0,), dtype="int32"))
+
+    def test_evaluate_rejects_invalid_label(self):
+        class DummyModel(BaseModel):
+            name = "dummy2"
+
+            def train(self, X_train, y_train, X_val, y_val):
+                raise NotImplementedError
+
+            def predict_proba(self, X):
+                return np.tile(np.asarray([[0.2, 0.5, 0.3]]), (len(X), 1))
+
+            def save(self):
+                raise NotImplementedError
+
+            def load(self):
+                return False
+
+        model = DummyModel("TEST", "1h")
+        X = np.zeros((2, len(FEATURE_COLS)), dtype="float32")
+        y = np.asarray([-1, 7], dtype="int32")
+        with pytest.raises(ValueError, match="evaluation"):
+            model.evaluate(X, y)
+
     def test_predict_result_signal(self):
         r = PredictResult(
             buy_prob=0.60, sell_prob=0.25, hold_prob=0.15,
