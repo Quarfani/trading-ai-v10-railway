@@ -182,6 +182,43 @@ export class RiskManager {
       ]);
     }
 
+    const symbol = String(signal.symbol ?? '').trim();
+    if (!symbol) {
+      return this.block('invalid_signal', ['Signal symbol is missing']);
+    }
+    if (signal.side !== 'BUY' && signal.side !== 'SELL') {
+      return this.block('invalid_signal', ['Signal side must be BUY or SELL']);
+    }
+    if (
+      !Number.isFinite(signal.confidence) ||
+      signal.confidence < 0 ||
+      signal.confidence > 1
+    ) {
+      return this.block('invalid_signal', ['Signal confidence must be finite and in [0,1]']);
+    }
+    if (
+      !Number.isFinite(signal.timestamp) ||
+      signal.timestamp <= 0 ||
+      signal.timestamp > Date.now() + 5_000
+    ) {
+      return this.block('invalid_signal', ['Signal timestamp is invalid or from the future']);
+    }
+
+    const price = signal.price;
+    const sl = signal.sl;
+    const tp = signal.tp;
+
+    if (
+      ![price, sl, tp].every(Number.isFinite) ||
+      !(price > 0) ||
+      !(sl > 0) ||
+      !(tp > 0)
+    ) {
+      return this.block('invalid_prices', [
+        'Signal price/SL/TP must be finite and strictly positive',
+      ]);
+    }
+
     const minConf = this.config.minConfidence ?? 0.55;
     if (signal.confidence < minConf) {
       return this.block('low_confidence', [
@@ -198,24 +235,15 @@ export class RiskManager {
       return this.block('min_rr', [rrCheck.reason]);
     }
 
+    if (!Number.isFinite(rrCheck.rr) || rrCheck.rr < 0) {
+      return this.block('invalid_rr', ['Computed R:R is not finite and valid']);
+    }
+
     reasons.push(
       `[R:R] ${rrCheck.rr.toFixed(2)} >= ${(
         this.config.minRR ?? 1.5
       ).toFixed(2)}`,
     );
-
-    const price = signal.price;
-    const sl = signal.sl;
-    const tp = signal.tp;
-
-    if (
-      ![price, sl, tp].every(Number.isFinite) ||
-      !(price > 0)
-    ) {
-      return this.block('invalid_prices', [
-        'Signal price/SL/TP must be finite and price must be > 0',
-      ]);
-    }
 
     if (signal.side === 'BUY') {
       if (sl >= price) {
