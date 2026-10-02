@@ -106,7 +106,56 @@ async function main() {
     "verification failure must preserve all prior order ids as stale cleanup targets",
   );
 
-  console.log("Result: 8 passed, 0 failed");
+  const verificationExecutor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  const verificationPosts: any[] = [
+    { orderId: 601 },
+    { orderId: 602 },
+  ];
+  (verificationExecutor as any).signedPost = async () => verificationPosts.shift();
+  (verificationExecutor as any).signedDelete = async () => ({});
+  (verificationExecutor as any).getOpenOrders = async () => [
+    { orderId: 601 },
+    { orderId: 602 },
+  ];
+  await (verificationExecutor as any).placeSLTP(
+    {
+      symbol: "BTCUSDT", side: "BUY", price: 100, confidence: 1,
+      sl: 90, tp: 110, source: "TEST", reason: "verify", timestamp: Date.now(),
+    },
+    1,
+    10,
+    { pip: 0.1, volumeStep: 0.001 },
+  );
+  const verifiedMap = (verificationExecutor as any).orderMap.get(10);
+  assert(verifiedMap.slOrderId === 601 && verifiedMap.tpOrderId === 602, "accepted SL/TP must be broker-verified before mapping");
+
+  const incompleteExecutor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  const cleanup: number[] = [];
+  (incompleteExecutor as any).signedPost = async () => ({ orderId: cleanup.length === 0 ? 701 : 702 });
+  (incompleteExecutor as any).signedDelete = async (_path: string, params: any) => { cleanup.push(Number(params.orderId)); };
+  (incompleteExecutor as any).getOpenOrders = async () => [{ orderId: 701 }];
+  let verificationFailed = false;
+  try {
+    await (incompleteExecutor as any).placeSLTP(
+      {
+        symbol: "ETHUSDT", side: "BUY", price: 1000, confidence: 1,
+        sl: 900, tp: 1100, source: "TEST", reason: "verify", timestamp: Date.now(),
+      },
+      1,
+      11,
+      { pip: 0.1, volumeStep: 0.001 },
+    );
+  } catch {
+    verificationFailed = true;
+  }
+  assert(verificationFailed, "missing broker-visible protective order must fail closed");
+  assert(cleanup.includes(701) && cleanup.includes(702), "failed protection verification must attempt to clean created orders");
+
+  console.log("Result: 12 passed, 0 failed");
 }
 
 main().catch(error => {
