@@ -304,8 +304,10 @@ export class DatabaseManager {
       account?: string;
       timeframe?: string;
       commission?: number;
+      commissionCurrency?: string;
       entryQuoteToAccount?: number;
       exitQuoteToAccount?: number;
+      mlPredictionId?: string;
     },
     executionId: string,
     brokerOrderId?: string | number,
@@ -315,9 +317,9 @@ export class DatabaseManager {
       const inserted = this.db.prepare(`
         INSERT INTO trades
           (ticket, symbol, timeframe, side, volume, entry, sl, tp,
-           status, openedAt, source, account, commission, realizedProfit,
-           entryQuoteToAccount, exitQuoteToAccount)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           status, openedAt, source, account, commission, commissionCurrency,
+           realizedProfit, entryQuoteToAccount, exitQuoteToAccount, mlPredictionId)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
         trade.ticket ?? null,
         trade.symbol,
@@ -332,9 +334,11 @@ export class DatabaseManager {
         trade.source,
         trade.account ?? 'default',
         trade.commission ?? 0,
+        trade.commissionCurrency ?? null,
         trade.realizedProfit ?? 0,
         trade.entryQuoteToAccount ?? null,
         trade.exitQuoteToAccount ?? null,
+        trade.mlPredictionId ?? null,
       );
 
       const localTradeId = Number(inserted.lastInsertRowid);
