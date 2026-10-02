@@ -294,6 +294,60 @@ async function main() {
   );
   protectionLossDb.raw().close();
 
+  const spotQtyDb = new DatabaseManager(":memory:");
+  await spotQtyDb.initialize();
+  const spotQtyTradeId = spotQtyDb.insertTrade({
+    ticket: 507,
+    symbol: "BTCUSDT",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 1,
+    entry: 100,
+    sl: 90,
+    tp: 120,
+    status: "open",
+    openedAt: Date.now(),
+    source: "BINANCE_SPOT_QTY_BLOCK",
+  } as any);
+  spotQtyDb.createExecutionLedger({
+    executionId: "spot-qty-open",
+    operationKey: "spot-qty-open-op",
+    action: "OPEN",
+    status: "EXECUTED",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 1,
+    request: { tradeId: spotQtyTradeId, volume: 1 },
+  });
+  const spotQtyExec = {
+    recoverBinanceSpotOco: async () => ({
+      orderListId: 8001,
+      listStatusType: "EXEC_STARTED",
+      listOrderStatus: "EXECUTING",
+      orders: [
+        { orderId: 8011, clientOrderId: "tp" },
+        { orderId: 8012, clientOrderId: "sl" },
+      ],
+    }),
+    getBinanceOpenOrders: async () => [
+      { orderId: 8011, side: "SELL", type: "LIMIT_MAKER", status: "NEW", origQty: "0.5", price: "120" },
+      { orderId: 8012, side: "SELL", type: "STOP_LOSS_LIMIT", status: "NEW", origQty: "0.5", stopPrice: "90", price: "89.95" },
+    ],
+  };
+  let spotQtyBlocked = false;
+  try {
+    await (makeReconciler(spotQtyDb, spotQtyExec) as any).reconcileOne(
+      spotQtyDb.getOpenTrades()[0],
+    );
+  } catch {
+    spotQtyBlocked = true;
+  }
+  assert(
+    spotQtyBlocked,
+    "Binance Spot protection with wrong quantity must block runtime reconciliation",
+  );
+  spotQtyDb.raw().close();
+
   const blockedDb = new DatabaseManager(":memory:");
   await blockedDb.initialize();
   const blockedTradeId = blockedDb.insertTrade({
@@ -345,7 +399,7 @@ async function main() {
   );
   blockedDb.raw().close();
 
-  console.log("Result: 21 passed, 0 failed");
+  console.log("Result: 24 passed, 0 failed");
 }
 
 main().catch(error => {
