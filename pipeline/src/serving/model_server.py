@@ -267,23 +267,31 @@ class ModelServer:
         if len(outcomes) < DEGRADATION_WINDOW:
             return
 
-        # Estimate recent model accuracy from outcomes
-        recent   = outcomes[-DEGRADATION_WINDOW:]
-        # Count outcomes where label matches prediction direction
-        correct  = sum(1 for o in recent if o["profit"] > 0)
-        recent_acc = correct / len(recent)
+        # These outcomes currently record the realized trade direction,
+        # not the model's prediction at inference time. They therefore measure
+        # trading win-rate, not model accuracy. Never auto-retrain on that proxy.
+        recent = outcomes[-DEGRADATION_WINDOW:]
+        profitable = sum(1 for o in recent if float(o["profit"]) > 0)
+        recent_win_rate = profitable / len(recent)
 
-        if recent_acc < DEGRADATION_THRESHOLD:
+        logger.info(
+            f"[{symbol}/{timeframe}] Recent trading win-rate="
+            f"{recent_win_rate:.3f} over {len(recent)} closed outcomes"
+        )
+        self._stats[key]["recent_win_rate"] = recent_win_rate
+        self._stats[key]["last_accuracy"] = None
+
+        if recent_win_rate < DEGRADATION_THRESHOLD:
             logger.warning(
-                f"[{symbol}/{timeframe}] Model degradation detected: "
-                f"recent_acc={recent_acc:.3f} < threshold={DEGRADATION_THRESHOLD} "
-                f"— consider retraining"
+                f"[{symbol}/{timeframe}] Trading win-rate below monitoring threshold: "
+                f"{recent_win_rate:.3f} < {DEGRADATION_THRESHOLD}; "
+                "model retraining requires staged evaluation"
             )
-            self._stats[key]["last_accuracy"] = recent_acc
             if AUTO_RETRAIN_ENABLED:
-                self._schedule_retrain(symbol, timeframe)
-            else:
-                logger.warning(f"[{symbol}/{timeframe}] Auto-retrain is disabled; human/staged validation is required")
+                logger.warning(
+                    f"[{symbol}/{timeframe}] Auto-retrain suppressed because "
+                    "prediction-level accuracy is not available in the outcome record"
+                )
 
     def _schedule_retrain(self, symbol: str, timeframe: str) -> None:
         """Schedule async retraining (non-blocking)."""
