@@ -180,6 +180,17 @@ class BaseModel(ABC):
         """Compute accuracy, precision, recall, F1 per class."""
         from collections import defaultdict
 
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if (
+            X.ndim == 0 or
+            len(y) == 0 or
+            X.shape[0] != len(y) or
+            not np.isfinite(y).all() or
+            not np.isin(y, [-1, 0, 1]).all()
+        ):
+            raise ValueError("Invalid evaluation samples or labels")
+
         proba = self.predict_proba(X)
         preds = np.argmax(proba, axis=1) - 1  # back to -1,0,+1
 
