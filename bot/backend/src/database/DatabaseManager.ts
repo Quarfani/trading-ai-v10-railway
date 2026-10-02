@@ -133,6 +133,72 @@ export class DatabaseManager {
     ).get(predictionId) as any ?? null;
   }
 
+  claimModelDecisionOutcome(
+    predictionId: string,
+    outcomeProfit: number,
+    outcomeLabel: -1 | 0 | 1,
+  ): { predictedLabel: -1 | 0 | 1 } | null {
+    const tx = this.db.transaction(() => {
+      const row = this.db.prepare(
+        `SELECT predictedLabel
+         FROM model_decisions
+         WHERE predictionId=?
+           AND outcomeRecordedAt IS NULL
+         ORDER BY timestamp DESC
+         LIMIT 1`,
+      ).get(predictionId) as { predictedLabel?: number | null } | undefined;
+
+      if (
+        !row ||
+        row.predictedLabel == null ||
+        ![-1, 0, 1].includes(Number(row.predictedLabel)) ||
+        !Number.isFinite(outcomeProfit)
+      ) {
+        return null;
+      }
+
+      const changed = this.db.prepare(
+        `UPDATE model_decisions
+         SET outcomeLabel=?, outcomeProfit=?, outcomeRecordedAt=?
+         WHERE predictionId=? AND outcomeRecordedAt IS NULL`,
+      ).run(
+        outcomeLabel,
+        outcomeProfit,
+        Date.now(),
+        predictionId,
+      ).changes;
+
+      return changed === 1
+        ? { predictedLabel: Number(row.predictedLabel) as -1 | 0 | 1 }
+        : null;
+    })();
+
+    return tx;
+  }
+
+  getPendingModelOutcomes(limit = 100): any[] {
+    if (!(limit > 0) || !Number.isFinite(limit)) return [];
+    return this.db.prepare(
+      `SELECT predictionId, symbol, modelName, modelVersion,
+              predictedLabel, outcomeLabel, outcomeProfit, outcomeRecordedAt
+       FROM model_decisions
+       WHERE predictionId IS NOT NULL
+         AND outcomeRecordedAt IS NOT NULL
+         AND outcomeSentAt IS NULL
+       ORDER BY outcomeRecordedAt ASC
+       LIMIT ?`,
+    ).all(Math.floor(limit)) as any[];
+  }
+
+  markModelOutcomeSent(predictionId: string): boolean {
+    return this.db.prepare(
+      `UPDATE model_decisions
+       SET outcomeSentAt=?
+       WHERE predictionId=? AND outcomeRecordedAt IS NOT NULL
+         AND outcomeSentAt IS NULL`,
+    ).run(Date.now(), predictionId).changes === 1;
+  }
+
   getRecentAudits(hours = 1): any[] {
     try {
       const since = Date.now() - hours * 3_600_000;
