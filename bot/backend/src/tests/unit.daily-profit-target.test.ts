@@ -80,7 +80,7 @@ async function main() {
 
   db.raw().close();
   paperDb.raw().close();
-  console.log('Result: 7 passed, 0 failed');
+  console.log('Result: 5 passed, 0 failed');
 }
 
 main().catch(error => {
