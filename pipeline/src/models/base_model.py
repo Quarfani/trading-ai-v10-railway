@@ -241,6 +241,19 @@ class BaseModel(ABC):
         with open(meta_path, "w") as f:
             json.dump(self._meta, f, indent=2)
 
+    def refresh_meta_checksum(self) -> None:
+        meta = self.load_meta()
+        if not isinstance(meta, dict) or not meta:
+            raise ValueError("Cannot refresh metadata for an untracked model artifact")
+        checksum = self._model_checksum()
+        if not checksum:
+            raise ValueError("Cannot refresh metadata without a model artifact")
+        meta["checksum"] = checksum
+        meta["trained_at"] = datetime.utcnow().isoformat()
+        with open(self.model_dir / "meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
+        self._meta = meta
+
     def load_meta(self) -> dict:
         meta_path = self.model_dir / "meta.json"
         if meta_path.exists():
