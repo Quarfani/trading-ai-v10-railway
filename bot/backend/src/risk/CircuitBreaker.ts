@@ -77,7 +77,7 @@ export class CircuitBreaker {
     if (Date.now() >= this.trippedUntil) {
       if (this.trippedUntil > 0) {
         this.logger.info('Cooldown ended — resuming trading');
-        this.telegram.sendMessage('✅ <b>Cooldown ended</b> — استئناف التداول').catch(() => {});
+        this.telegram?.sendMessage('✅ <b>Cooldown ended</b> — استئناف التداول').catch(() => {});
         this.trippedUntil = 0;
         this.consecutiveLosses = 0;
         this.persistState();
