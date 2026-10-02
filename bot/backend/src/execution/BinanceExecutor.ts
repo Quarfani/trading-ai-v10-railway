@@ -557,9 +557,8 @@ export class BinanceExecutor {
       const trackedIds=[ids?.slOrderId,ids?.tpOrderId].filter(
         (id): id is number => Number.isFinite(id),
       );
-      const oldIds = trackedIds.length
-        ? trackedIds
-        : await this.getProtectiveOrderIds(symbol, side);
+      const brokerIds = await this.getProtectiveOrderIds(symbol, side);
+      const oldIds = [...new Set([...trackedIds, ...brokerIds])];
 
       for(const orderId of oldIds) {
         await this.signedDelete('/fapi/v1/order',{symbol,orderId});
@@ -745,11 +744,14 @@ export class BinanceExecutor {
       if (!protectionSide && ids?.closeSide) {
         protectionSide = ids.closeSide === 'SELL' ? 'BUY' : 'SELL';
       }
-      const oldOrderIds = trackedIds.length
-        ? trackedIds
-        : this.isFutures && protectionSide
+
+      const brokerProtectionIds =
+        this.isFutures && protectionSide
           ? await this.getProtectiveOrderIds(symbol, protectionSide)
           : [];
+      const oldOrderIds = [
+        ...new Set([...trackedIds, ...brokerProtectionIds]),
+      ];
 
       for (const orderId of oldOrderIds) {
         await this.signedDelete(
