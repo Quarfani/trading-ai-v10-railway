@@ -12,7 +12,7 @@ import { Logger } from '../utils/Logger';
  *
  * Once activated:
  * - No new trades are placed
- * - All pending orders are cancelled
+ * - Existing broker protective orders remain untouched
  * - System enters "safe mode"
  */
 export class EmergencyStop {
