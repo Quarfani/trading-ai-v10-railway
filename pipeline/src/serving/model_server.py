@@ -275,7 +275,7 @@ class ModelServer:
         prediction_id = str(prediction_id).strip()
         if not prediction_id or len(prediction_id) > 128:
             logger.error(f"Rejected invalid prediction_id for {symbol}/{timeframe}")
-            return
+            return False
 
         if predicted_signal not in (-1, 0, 1) or actual_label not in (-1, 0, 1):
             logger.error(
