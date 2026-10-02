@@ -495,6 +495,57 @@ def test_idempotency_loader_rejects_infinite_timestamps(tmp_path, monkeypatch):
     bridge._idempotency_load_disk()
     assert bridge._idempotency_lookup("infinite") is None
 
+def test_positions_endpoint_fails_closed_when_mt5_returns_none(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    monkeypatch.setattr(bridge, "ensure_connected", lambda: True)
+    fake = types.SimpleNamespace(
+        positions_get=lambda: None,
+        last_error=lambda: (500, "positions unavailable"),
+    )
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    client = bridge.app.test_client()
+
+    response = client.get("/positions")
+    assert response.status_code == 503
+    assert "positions query failed" in response.get_json()["error"]
+
+
+def test_position_history_endpoint_fails_closed_when_mt5_returns_none(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    monkeypatch.setattr(bridge, "ensure_connected", lambda: True)
+    fake = types.SimpleNamespace(
+        history_deals_get=lambda **kwargs: None,
+        last_error=lambda: (500, "history unavailable"),
+    )
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    client = bridge.app.test_client()
+
+    response = client.get("/history?position=123")
+    assert response.status_code == 503
+    assert "history query failed" in response.get_json()["error"]
+
+
+def test_global_history_endpoint_fails_closed_when_mt5_returns_none(monkeypatch):
+    bridge._idempotency_cache.clear()
+    bridge.BRIDGE_MODE = "live"
+    monkeypatch.setattr(bridge, "auth_check", lambda: True)
+    monkeypatch.setattr(bridge, "ensure_connected", lambda: True)
+    fake = types.SimpleNamespace(
+        history_deals_get=lambda *args, **kwargs: None,
+        last_error=lambda: (500, "global history unavailable"),
+    )
+    monkeypatch.setattr(bridge, "mt5", fake, raising=False)
+    client = bridge.app.test_client()
+
+    response = client.get("/history")
+    assert response.status_code == 503
+    assert "history query failed" in response.get_json()["error"]
+
+
 def test_simulation_tick_helper_is_independent_of_flask_request():
     bridge.BRIDGE_MODE = "simulation"
     tick = bridge.simulation_tick("EURUSD")
