@@ -35,6 +35,12 @@ export class DailyLossGuard {
     currentPrices?: Record<string, number>,
     currentEquity?: number,
   ): Promise<boolean> {
+    const maxDailyLoss = Number(this.config.maxDailyLoss);
+    if (!(maxDailyLoss > 0) || !Number.isFinite(maxDailyLoss)) {
+      this.logger.error('Daily loss guard: invalid MAX_DAILY_LOSS — trading blocked');
+      return false;
+    }
+
     const stats = this.db.getTodayStats();
     const realizedPnl = Number(stats?.pnl ?? 0);
 
@@ -75,7 +81,7 @@ export class DailyLossGuard {
 
     const lossPct = -dailyLossNumerator / denominator;
 
-    if (lossPct >= this.config.maxDailyLoss) {
+    if (lossPct >= maxDailyLoss) {
       const today = new Date().toISOString().slice(0, 10);
       if (this.warnedToday !== today) {
         this.warnedToday = today;
@@ -88,7 +94,7 @@ export class DailyLossGuard {
           `⚠️ <b>DAILY LOSS LIMIT HIT</b>\n` +
           dailyMoveMessage +
           `الخسارة اليومية: ${(lossPct * 100).toFixed(2)}% ` +
-          `(الحد: ${(this.config.maxDailyLoss * 100).toFixed(1)}%)\n` +
+          `(الحد: ${(maxDailyLoss * 100).toFixed(1)}%)\n` +
           `تم إيقاف التداول حتى منتصف الليل UTC.`;
         this.logger.error(msg);
         await this.telegram.sendMessage(msg).catch(() => {});
