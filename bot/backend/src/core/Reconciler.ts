@@ -411,6 +411,12 @@ export class Reconciler {
           ['PARTIAL_CLOSE'],
         )
       : null;
+    const unresolvedModify = t.id
+      ? this.db.getLatestUnresolvedExecutionForTrade(
+          t.id,
+          ['MOVE_SL_TP'],
+        )
+      : null;
 
     if (!pos || remaining < 0.0001) {
       if (
@@ -424,6 +430,15 @@ export class Reconciler {
       // without authoritative fill/PnL, remain unresolved and therefore blocked.
       throw new Error(
         `Binance position ${t.symbol} is absent but authoritative close execution/PnL recovery is unavailable`,
+      );
+    }
+
+    if (unresolvedModify) {
+      if (await this.reconcileBinanceModify(t, unresolvedModify)) {
+        return;
+      }
+      throw new Error(
+        `Binance protective-order state for unresolved MOVE_SL_TP is not provably safe for ${t.symbol}`,
       );
     }
 
@@ -510,6 +525,85 @@ export class Reconciler {
     );
     this.logger.info(
       `[${operation.action}] atomically recovered Binance close operation=${operation.operationKey}`,
+    );
+    return true;
+  }
+
+  private async reconcileBinanceModify(
+    t: Trade,
+    operation: any,
+  ): Promise<boolean> {
+    if (!t.id) return false;
+
+    let request: any;
+    try {
+      request = operation.requestJson
+        ? JSON.parse(operation.requestJson)
+        : null;
+    } catch {
+      return false;
+    }
+
+    const newSl = Number(request?.newSl);
+    const newTp = Number(request?.newTp);
+    if (
+      !(newSl > 0) ||
+      !(newTp > 0) ||
+      !Number.isFinite(newSl) ||
+      !Number.isFinite(newTp)
+    ) {
+      return false;
+    }
+
+    const openOrders = await this.exec.getBinanceOpenOrders(t.symbol);
+    const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
+    const matching = openOrders.filter(
+      (order: any) => String(order.side).toUpperCase() === closeSide,
+    );
+    const priceTolerance = (target: number) =>
+      Math.max(1e-8, Math.abs(target) * 1e-6);
+
+    const slOrder = matching.find((order: any) => {
+      const type = String(order.type ?? '').toUpperCase();
+      const stopPrice = Number(order.stopPrice);
+      return (
+        /STOP_MARKET|STOP_LOSS/.test(type) &&
+        Number.isFinite(stopPrice) &&
+        Math.abs(stopPrice - newSl) <= priceTolerance(newSl)
+      );
+    });
+    const tpOrder = matching.find((order: any) => {
+      const type = String(order.type ?? '').toUpperCase();
+      const stopPrice = Number(order.stopPrice);
+      const price = Number(order.price);
+      return (
+        /TAKE_PROFIT_MARKET|TAKE_PROFIT/.test(type) &&
+        (
+          (Number.isFinite(stopPrice) && Math.abs(stopPrice - newTp) <= priceTolerance(newTp)) ||
+          (Number.isFinite(price) && Math.abs(price - newTp) <= priceTolerance(newTp))
+        )
+      );
+    });
+
+    if (!slOrder || !tpOrder) return false;
+
+    const resolved = this.db.resolveExecutionLedger(
+      String(operation.executionId),
+      {
+        broker: 'binance',
+        ticket: t.ticket,
+        newSl,
+        newTp,
+        slOrderId: Number(slOrder.orderId),
+        tpOrderId: Number(tpOrder.orderId),
+        reconciliation: true,
+      },
+      Number(slOrder.orderId) > 0 ? Number(slOrder.orderId) : undefined,
+    );
+    if (!resolved) return false;
+
+    this.logger.info(
+      `[${operation.action}] reconciled Binance protective orders operation=${operation.operationKey}`,
     );
     return true;
   }
