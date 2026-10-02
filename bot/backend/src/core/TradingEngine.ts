@@ -549,6 +549,20 @@ export class TradingEngine extends EventEmitter {
     return this.isRunning;
   }
 
+  async activateEmergencyStop(reason = 'Manual operator emergency stop') {
+    await this.emergency.activate(reason);
+    this.broadcast('emergency_stop', this.emergency.getStatus());
+  }
+
+  async deactivateEmergencyStop(approverMessage = 'Manual operator resume') {
+    await this.emergency.deactivate(approverMessage);
+    this.broadcast('emergency_stop', this.emergency.getStatus());
+  }
+
+  isEmergencyStopActive(): boolean {
+    return this.emergency.isActive();
+  }
+
   private brokerContractsReady(): boolean {
     if (this.config.mode !== 'mt5') return true;
 
