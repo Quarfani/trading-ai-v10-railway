@@ -30,19 +30,20 @@ export class DatabaseManager {
 
   // ─── Trades ───────────────────────────────────────────────────────────────
 
-  insertTrade(t: Trade & { account?: string; timeframe?: string; commission?: number; entryQuoteToAccount?: number; exitQuoteToAccount?: number }): number {
+  insertTrade(t: Trade & { account?: string; timeframe?: string; commission?: number; entryQuoteToAccount?: number; exitQuoteToAccount?: number; mlPredictionId?: string }): number {
     const r = this.db.prepare(`
       INSERT INTO trades
         (ticket, symbol, timeframe, side, volume, entry, sl, tp,
          status, openedAt, source, account, commission, realizedProfit,
-         entryQuoteToAccount, exitQuoteToAccount)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         entryQuoteToAccount, exitQuoteToAccount, mlPredictionId)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       t.ticket ?? null, t.symbol, t.timeframe ?? null,
       t.side, t.volume, t.entry, t.sl, t.tp,
       t.status, t.openedAt, t.source,
       t.account ?? 'default', t.commission ?? 0, t.realizedProfit ?? 0,
       t.entryQuoteToAccount ?? null, t.exitQuoteToAccount ?? null,
+      t.mlPredictionId ?? null,
     );
     return Number(r.lastInsertRowid);
   }
@@ -124,6 +125,12 @@ export class DatabaseManager {
         this.db.prepare(`UPDATE decision_audit SET riskPassed=? WHERE auditId=?`).run(p.riskPassed ? 1 : 0, auditId);
       if (p.tradeId !== undefined)
         this.db.prepare(`UPDATE decision_audit SET tradeId=? WHERE auditId=?`).run(p.tradeId, auditId);
+  }
+
+  getModelDecisionByPredictionId(predictionId: string): any | null {
+    return this.db.prepare(
+      `SELECT * FROM model_decisions WHERE predictionId=? ORDER BY timestamp DESC LIMIT 1`,
+    ).get(predictionId) as any ?? null;
   }
 
   getRecentAudits(hours = 1): any[] {
