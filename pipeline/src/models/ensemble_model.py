@@ -150,6 +150,13 @@ class EnsembleModel(BaseModel):
             if w == 0:
                 continue
 
+            successful_weight = 0.0
+
+        for model_name in self._trained_models:
+            w = float(self._weights.get(model_name, 0.0))
+            if not np.isfinite(w) or w <= 0:
+                continue
+
             try:
                 if model_name == "xgboost":
                     proba = self.xgb.predict_proba(X)
@@ -158,17 +165,45 @@ class EnsembleModel(BaseModel):
                 else:
                     continue
 
-                # Align shape
                 if proba.ndim == 1:
                     proba = proba.reshape(1, -1)
                 if len(proba) != len(ensemble_proba):
-                    # LSTM outputs single prediction from sequence
                     proba = np.tile(proba, (len(ensemble_proba), 1))
 
+                if (
+                    proba.shape[1] != 3 or
+                    not np.all(np.isfinite(proba)) or
+                    np.any(proba < 0) or
+                    np.any(proba > 1)
+                ):
+                    raise ValueError("sub-model returned invalid probabilities")
+
+                row_sums = proba.sum(axis=1, keepdims=True)
+                if np.any(np.abs(row_sums - 1.0) > 0.02):
+                    raise ValueError("sub-model probabilities are not normalized")
+
                 ensemble_proba += w * proba
+                successful_weight += w
 
             except Exception as e:
                 logger.warning(f"Sub-model {model_name} predict failed: {e}")
+
+        if successful_weight <= 0 or not np.isfinite(successful_weight):
+            return np.tile(
+                np.asarray([0.0, 1.0, 0.0], dtype="float64"),
+                (len(ensemble_proba), 1),
+            )
+
+        ensemble_proba /= successful_weight
+        if (
+            not np.all(np.isfinite(ensemble_proba)) or
+            np.any(ensemble_proba < 0) or
+            np.any(ensemble_proba > 1)
+        ):
+            return np.tile(
+                np.asarray([0.0, 1.0, 0.0], dtype="float64"),
+                (len(ensemble_proba), 1),
+            )
 
         return ensemble_proba
 
