@@ -636,14 +636,18 @@ export class BinanceExecutor {
       const tpReport = reports.find(
         (r: any) =>
           Number(r.orderId) > 0 &&
-          (String(r.clientOrderId ?? '') === aboveClientOrderId ||
-            String(r.type ?? '').toUpperCase().includes('LIMIT')),
+          (
+            String(r.clientOrderId ?? '') === aboveClientOrderId ||
+            String(r.type ?? '').toUpperCase() === 'LIMIT_MAKER'
+          ),
       );
       const slReport = reports.find(
         (r: any) =>
           Number(r.orderId) > 0 &&
-          (String(r.clientOrderId ?? '') === belowClientOrderId ||
-            String(r.type ?? '').toUpperCase().includes('STOP')),
+          (
+            String(r.clientOrderId ?? '') === belowClientOrderId ||
+            String(r.type ?? '').toUpperCase() === 'STOP_LOSS_LIMIT'
+          ),
       );
 
       if (
@@ -1088,9 +1092,11 @@ export class BinanceExecutor {
         this.isFutures && protectionSide
           ? await this.getProtectiveOrderIds(symbol, protectionSide)
           : [];
-      const oldOrderIds = [
-        ...new Set([...trackedIds, ...brokerProtectionIds]),
-      ];
+      const oldOrderIds = this.isFutures
+        ? [...new Set([...trackedIds, ...brokerProtectionIds])]
+        : protectionOperationKey
+          ? []
+          : [...new Set(trackedIds)];
 
       for (const orderId of oldOrderIds) {
         await this.signedDelete(
