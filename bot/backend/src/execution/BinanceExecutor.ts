@@ -132,21 +132,23 @@ export class BinanceExecutor {
     );
   }
 
-  private async getSpotOrderNetPnl(
+  private async getSpotOrderFillSummary(
     symbol: string,
     orderId: number,
-    entryPrice: number,
-    entrySide: 'BUY' | 'SELL',
-    expectedExecutedQty: number,
-  ): Promise<{ profit: number; currency: string; avgPrice: number | null } | null> {
+    expectedQty: number,
+  ): Promise<{
+    currency: string;
+    avgPrice: number;
+    feeQuote: number;
+    totalQty: number;
+    grossQuote: number;
+  } | null> {
     if (
       this.isFutures ||
       !(orderId > 0) ||
       !Number.isFinite(orderId) ||
-      !(entryPrice > 0) ||
-      !Number.isFinite(entryPrice) ||
-      !(expectedExecutedQty > 0) ||
-      !Number.isFinite(expectedExecutedQty)
+      !(expectedQty > 0) ||
+      !Number.isFinite(expectedQty)
     ) {
       return null;
     }
@@ -170,10 +172,7 @@ export class BinanceExecutor {
       const price = Number(fill?.price);
       const qty = Number(fill?.qty);
       const commission = Number(fill?.commission ?? 0);
-      const commissionAsset = String(
-        fill?.commissionAsset ?? '',
-      ).toUpperCase();
-
+      const commissionAsset = String(fill?.commissionAsset ?? '').toUpperCase();
       if (
         !(price > 0) ||
         !Number.isFinite(price) ||
@@ -184,49 +183,68 @@ export class BinanceExecutor {
       ) {
         return null;
       }
-
-      if (
-        !commissionAsset ||
-        ![quote, baseAsset].includes(commissionAsset)
-      ) {
+      if (!['USDT', 'USDC', 'BUSD', baseAsset].includes(commissionAsset)) {
         return null;
       }
-
       grossQuote += price * qty;
       totalQty += qty;
-
-      if (commissionAsset === quote) {
-        feeQuote += commission;
-      } else {
-        feeQuote += commission * price;
-      }
+      if (commissionAsset === baseAsset) feeQuote += commission * price;
+      else feeQuote += commission;
     }
 
-    const qtyTolerance = Math.max(
+    const tolerance = Math.max(
       getSymbolSpec(symbol).volumeStep,
-      expectedExecutedQty * 0.0001,
+      expectedQty * 0.0001,
     );
     if (
       !(totalQty > 0) ||
       !Number.isFinite(totalQty) ||
-      Math.abs(totalQty - expectedExecutedQty) > qtyTolerance ||
+      Math.abs(totalQty - expectedQty) > tolerance ||
       !Number.isFinite(grossQuote) ||
       !Number.isFinite(feeQuote)
     ) {
       return null;
     }
 
-    const grossEntry = entryPrice * totalQty;
-    const profit = entrySide === 'BUY'
-      ? grossQuote - grossEntry - feeQuote
-      : grossEntry - grossQuote - feeQuote;
+    const avgPrice = grossQuote / totalQty;
+    if (!(avgPrice > 0) || !Number.isFinite(avgPrice)) return null;
 
+    return { currency: quote, avgPrice, feeQuote, totalQty, grossQuote };
+  }
+
+  private async getSpotOrderNetPnl(
+    symbol: string,
+    orderId: number,
+    entryPrice: number,
+    entrySide: 'BUY' | 'SELL',
+    expectedExecutedQty: number,
+  ): Promise<{ profit: number; currency: string; avgPrice: number | null } | null> {
+    if (
+      this.isFutures ||
+      !(entryPrice > 0) ||
+      !Number.isFinite(entryPrice)
+    ) {
+      return null;
+    }
+
+    const summary = await this.getSpotOrderFillSummary(
+      symbol,
+      orderId,
+      expectedExecutedQty,
+    );
+    if (!summary) return null;
+
+    const grossEntry = entryPrice * summary.totalQty;
+    const exitNetQuote = summary.grossQuote - summary.feeQuote;
+    const profit = entrySide === 'BUY'
+      ? exitNetQuote - grossEntry
+      : grossEntry - exitNetQuote;
     if (!Number.isFinite(profit)) return null;
 
     return {
       profit,
-      currency: quote,
-      avgPrice: grossQuote / totalQty,
+      currency: summary.currency,
+      avgPrice: summary.avgPrice,
     };
   }
 
