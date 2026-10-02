@@ -225,6 +225,65 @@ export class DatabaseManager {
     return result.changes === 1;
   }
 
+  persistExecutedOpenTrade(
+    trade: Trade & {
+      account?: string;
+      timeframe?: string;
+      commission?: number;
+      entryQuoteToAccount?: number;
+      exitQuoteToAccount?: number;
+    },
+    executionId: string,
+    brokerOrderId?: string | number,
+    result?: unknown,
+  ): number {
+    const tx = this.db.transaction(() => {
+      const inserted = this.db.prepare(`
+        INSERT INTO trades
+          (ticket, symbol, timeframe, side, volume, entry, sl, tp,
+           status, openedAt, source, account, commission, realizedProfit,
+           entryQuoteToAccount, exitQuoteToAccount)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        trade.ticket ?? null,
+        trade.symbol,
+        trade.timeframe ?? null,
+        trade.side,
+        trade.volume,
+        trade.entry,
+        trade.sl,
+        trade.tp,
+        trade.status,
+        trade.openedAt,
+        trade.source,
+        trade.account ?? 'default',
+        trade.commission ?? 0,
+        trade.realizedProfit ?? 0,
+        trade.entryQuoteToAccount ?? null,
+        trade.exitQuoteToAccount ?? null,
+      );
+
+      const ledgerChanged = this.db.prepare(`
+        UPDATE execution_ledger
+        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+      `).run(
+        brokerOrderId != null ? String(brokerOrderId) : null,
+        result === undefined ? null : JSON.stringify(result),
+        Date.now(),
+        executionId,
+      ).changes;
+
+      if (ledgerChanged !== 1) {
+        throw new Error(`Could not resolve executed OPEN ledger ${executionId}`);
+      }
+
+      return Number(inserted.lastInsertRowid);
+    });
+
+    return tx();
+  }
+
   getExecutionByOperationKey(operationKey: string): any | null {
     return this.db.prepare(`SELECT * FROM execution_ledger WHERE operationKey=?`).get(operationKey) ?? null;
   }
