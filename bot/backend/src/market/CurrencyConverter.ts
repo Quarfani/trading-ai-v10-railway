@@ -42,10 +42,14 @@ function resolveToUsd(currency: string, prices: Record<string, number>): number 
   if (!normalized || normalized === "USD" || USD_EQUIVALENTS.has(normalized)) return 1;
 
   const direct = readPrice(prices, normalized + "USD");
-  if (direct != null) return direct;
+  if (direct != null) {
+    return Number.isFinite(direct) && direct > 0 ? direct : null;
+  }
 
   const inverse = readPrice(prices, "USD" + normalized);
-  return inverse != null ? 1 / inverse : null;
+  if (inverse == null) return null;
+  const rate = 1 / inverse;
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
 }
 
 /** Resolve 1 unit of quote currency into account currency. */
@@ -71,8 +75,13 @@ export function resolveQuoteToAccount(
   const quoteToUsd = resolveToUsd(quote, prices);
   const accountToUsd = resolveToUsd(account, prices);
 
-  if (quoteToUsd != null && accountToUsd != null && accountToUsd > 0) {
-    return quoteToUsd / accountToUsd;
+  if (
+    quoteToUsd != null &&
+    accountToUsd != null &&
+    accountToUsd > 0
+  ) {
+    const rate = quoteToUsd / accountToUsd;
+    return Number.isFinite(rate) && rate > 0 ? rate : null;
   }
 
   return null;
