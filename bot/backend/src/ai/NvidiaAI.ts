@@ -28,6 +28,20 @@ export class NvidiaAI {
   async scoreSignal(s: Signal): Promise<number> {
     if (!this.config.nvidia?.apiKey) return 1.0;
 
+    if (
+      !s ||
+      !s.symbol?.trim() ||
+      (s.side !== 'BUY' && s.side !== 'SELL') ||
+      ![s.price, s.sl, s.tp, s.confidence].every(Number.isFinite) ||
+      !(s.price > 0) ||
+      !(s.sl > 0) ||
+      !(s.tp > 0) ||
+      s.confidence < 0 ||
+      s.confidence > 1
+    ) {
+      throw new Error('Invalid signal passed to NvidiaAI');
+    }
+
     // FIX: include sl and tp in key — different risk profiles must not share scores
     const cacheKey = [
       s.symbol,
@@ -70,10 +84,20 @@ export class NvidiaAI {
         },
       );
 
-      const txt   = (r.data.choices?.[0]?.message?.content ?? '5').trim();
-      const score = Math.max(0, Math.min(10, Number((txt.match(/\d+/) ?? ['5'])[0])));
+      const txt = String(
+        r.data?.choices?.[0]?.message?.content ?? '',
+      ).trim();
+      if (!/^(?:10|[0-9])$/.test(txt)) {
+        throw new Error(`NvidiaAI returned invalid score payload: ${txt.slice(0, 64)}`);
+      }
+
+      const score = Number(txt);
+      if (!Number.isInteger(score) || score < 0 || score > 10) {
+        throw new Error(`NvidiaAI returned out-of-range score: ${txt}`);
+      }
+
       // Map 0-10 → 0.70-1.30
-      const mul   = 0.70 + (score / 10) * 0.60;
+      const mul = 0.70 + (score / 10) * 0.60;
 
       this.cache.set(cacheKey, { mul, ts: Date.now() });
       this.logger.debug(
