@@ -26,7 +26,12 @@ export class NvidiaAI {
    * Each unique risk profile gets its own cached score.
    */
   async scoreSignal(s: Signal): Promise<number> {
-    if (!this.config.nvidia?.apiKey) return 1.0;
+    if (!this.config.nvidia?.apiKey) {
+      if (this.config.mode !== 'paper' || this.config.mlRequired) {
+        throw new Error('NVIDIA_AI fail-closed: API key is not configured');
+      }
+      return 1.0;
+    }
 
     if (
       !s ||
