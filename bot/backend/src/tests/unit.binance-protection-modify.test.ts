@@ -33,7 +33,33 @@ async function main() {
   assert(!blocked, "modify must fail closed when an old protective order remains open");
   assert(deleted.includes(101) && deleted.includes(102), "modify must attempt both old protective order cancellations");
 
-  console.log("Result: 3 passed, 0 failed");
+  let protectionKey = "";
+  (executor as any).getOpenOrders = async () => [];
+  (executor as any).placeSLTP = async (
+    _sig: any,
+    _quantity: number,
+    _ticket: number,
+    _spec: any,
+    key?: string,
+  ) => {
+    protectionKey = String(key ?? "");
+  };
+
+  const modified = await executor.modifyPosition(
+    7,
+    "BTCUSDT",
+    "BUY",
+    91,
+    111,
+    "modify-operation-identity",
+  );
+  assert(modified, "modify must succeed after old protection cancellation is verified");
+  assert(
+    protectionKey === "modify-operation-identity",
+    "modify must pass the durable operation identity into protective-order creation",
+  );
+
+  console.log("Result: 5 passed, 0 failed");
 }
 
 main().catch(error => {
