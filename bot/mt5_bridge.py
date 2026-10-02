@@ -811,7 +811,7 @@ def trade():
         return err("idempotency_key is required in live mode", 422)
     cached = _idempotency_lookup(idempotency_key)
     if cached:
-        _, cached_status, cached_payload = cached
+        _, cached_status, cached_payload, _ = cached
         if cached_status == "CONFLICT":
             return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
@@ -838,7 +838,7 @@ def trade():
     with _lock:
         cached = _idempotency_lookup(idempotency_key)
         if cached:
-            _, cached_status, cached_payload = cached
+            _, cached_status, cached_payload, _ = cached
             if cached_status == "CONFLICT":
                 return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
@@ -1106,7 +1106,7 @@ def modify():
 
     cached = _idempotency_lookup(idempotency_key)
     if cached:
-        _, cached_status, cached_payload = cached
+        _, cached_status, cached_payload, _ = cached
         if cached_status == "CONFLICT":
             return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
@@ -1133,7 +1133,7 @@ def modify():
     with _lock:
         cached = _idempotency_lookup(idempotency_key)
         if cached:
-            _, cached_status, cached_payload = cached
+            _, cached_status, cached_payload, _ = cached
             if cached_status == "CONFLICT":
                 return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
@@ -1291,7 +1291,7 @@ def close():
 
     cached = _idempotency_lookup(idempotency_key)
     if cached:
-        _, cached_status, cached_payload = cached
+        _, cached_status, cached_payload, _ = cached
         if cached_status == "CONFLICT":
             return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
@@ -1311,7 +1311,7 @@ def close():
     with _lock:
         cached = _idempotency_lookup(idempotency_key)
         if cached:
-            _, cached_status, cached_payload = cached
+            _, cached_status, cached_payload, _ = cached
             if cached_status == "CONFLICT":
                 return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
@@ -1473,7 +1473,7 @@ def close_partial():
 
     cached = _idempotency_lookup(idempotency_key)
     if cached:
-        _, cached_status, cached_payload = cached
+        _, cached_status, cached_payload, _ = cached
         if cached_status == "CONFLICT":
             return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
@@ -1493,7 +1493,7 @@ def close_partial():
     with _lock:
         cached = _idempotency_lookup(idempotency_key)
         if cached:
-            _, cached_status, cached_payload = cached
+            _, cached_status, cached_payload, _ = cached
             if cached_status == "CONFLICT":
                 return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
             if cached_status == "SUCCESS":
