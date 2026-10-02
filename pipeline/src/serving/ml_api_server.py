@@ -149,6 +149,37 @@ _start_time  = time.time()
 _total_preds = 0
 
 
+def _validate_candles(rows: Any) -> tuple[bool, str]:
+    if not isinstance(rows, list) or len(rows) < 50:
+        return False, "At least 50 OHLCV candles are required"
+    previous_time = 0.0
+    now_ms = time.time() * 1000.0
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, (list, tuple)) or len(row) != 6:
+            return False, f"Invalid candle shape at index {index}"
+
+        try:
+            t, o, h, low, close, volume = [float(v) for v in row]
+        except (TypeError, ValueError):
+            return False, f"Non-numeric candle at index {index}"
+
+        if not all(np.isfinite(v) for v in (t, o, h, low, close, volume)):
+            return False, f"Non-finite candle at index {index}"
+        if t <= 0 or t > now_ms + 5_000:
+            return False, f"Invalid/future candle timestamp at index {index}"
+        if t <= previous_time:
+            return False, f"Candle timestamps must be strictly increasing at index {index}"
+        if o <= 0 or h <= 0 or low <= 0 or close <= 0 or volume < 0:
+            return False, f"Invalid OHLCV values at index {index}"
+        if h < max(o, close) or low > min(o, close) or h < low:
+            return False, f"Invalid OHLC geometry at index {index}"
+
+        previous_time = t
+
+    return True, ""
+
+
 def get_ml_server() -> ModelServer:
     global _server
     if _server is None:
@@ -201,11 +232,20 @@ async def predict(body: CandleList):
     global _total_preds
     server = get_ml_server()
 
+    ok, reason = _validate_candles(body.candles)
+    if not ok:
+        raise HTTPException(status_code=422, detail=reason)
+
+    symbol = str(body.symbol).strip().upper()
+    timeframe = str(body.timeframe).strip()
+    if not symbol or not timeframe:
+        raise HTTPException(status_code=422, detail="symbol and timeframe are required")
+
     cols   = ["time", "open", "high", "low", "close", "volume"]
     df_raw = pd.DataFrame(body.candles, columns=cols)
 
     try:
-        df_feat = _fe.generate(df_raw, body.symbol)
+        df_feat = _fe.generate(df_raw, symbol)
     except Exception as e:
         logger.warning(f"Feature generation failed for {body.symbol}: {e}")
         return _no_trade_response(body)
@@ -213,7 +253,7 @@ async def predict(body: CandleList):
     if df_feat.empty:
         return _no_trade_response(body)
 
-    result = server.predict_signal(body.symbol, body.timeframe, df_feat.tail(1))
+    result = server.predict_signal(symbol, timeframe, df_feat.tail(1))
     _total_preds += 1
 
     if result is None:
@@ -291,13 +331,28 @@ async def trigger_retrain(body: RetrainRequest):
 async def record_trade(body: dict):
     """Record closed trade outcome for online learning."""
     server    = get_ml_server()
-    symbol    = body.get("symbol", "")
-    timeframe = body.get("timeframe", "")
-    profit    = float(body.get("profit", 0))
-    signal    = int(body.get("signal", 0))
+    symbol    = str(body.get("symbol", "")).strip().upper()
+    timeframe = str(body.get("timeframe", "")).strip()
+    try:
+        profit = float(body.get("profit"))
+        signal = int(body.get("signal"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="profit and signal must be numeric")
+
+    if (
+        not symbol or
+        not timeframe or
+        not np.isfinite(profit) or
+        signal not in (-1, 0, 1)
+    ):
+        raise HTTPException(status_code=422, detail="Invalid record_trade payload")
 
     candles = body.get("entry_candles", [])
     if candles:
+        ok, reason = _validate_candles(candles)
+        if not ok:
+            raise HTTPException(status_code=422, detail=reason)
+
         cols   = ["time", "open", "high", "low", "close", "volume"]
         df_raw = pd.DataFrame(candles, columns=cols)
         try:
