@@ -12,6 +12,16 @@ export class SpreadFilter {
     timeframe: Timeframe = 'H1',
     requireBrokerContract = false,
   ): { ok: boolean; spreadPips: number } {
+    if (
+      !Number.isFinite(bid) ||
+      !Number.isFinite(ask) ||
+      !(bid > 0) ||
+      !(ask > 0) ||
+      ask < bid
+    ) {
+      return { ok: false, spreadPips: Infinity };
+    }
+
     const market = requireBrokerContract
       ? getBrokerMarketDefinition(symbol, timeframe)
       : getMarketDefinition(symbol, timeframe);
