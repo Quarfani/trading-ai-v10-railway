@@ -3,7 +3,7 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 41bf5a64c3ea62008135a30eb8e9c3631da29760
+Current head: 694753de3b53c348eb14f10af14f75aeeb97a623
 Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410 (latest known green; post-checkpoint changes are unverified until CI is available)
 
 ## TARGET
@@ -52,7 +52,7 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 ## NEXT TASK
 1. When GitHub Actions capacity/log access is restored, run the focused backend integration test and verify the current main head.
 2. Until then, continue static/code-level hardening only; do not burn Actions minutes on blind reruns.
-3. Next high-value area: inspect reconciliation settlement paths for atomicity between broker-confirmed state and local trade updates.
+3. Next high-value area: audit Binance reconciliation settlement and partial-close accounting for the same atomicity/idempotency guarantees.
 4. Preserve UNKNOWN execution states and never auto-retry ambiguous broker operations.
 
 ## STOP/RESUME
@@ -73,5 +73,9 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 - Reconciliation lookup uses the indexed tradeId first and falls back only for pre-v15 rows.
 - Added integration assertion that tradeId is persisted.
 - Fixed a migration syntax typo before stopping.
-- Latest post-checkpoint commit: 73463b94763a62277739aaa39fca8de0bc9dd936 (migration v15 syntax correction).
-- CI has NOT been run on these changes; do not claim them verified until a green run exists.
+- Added atomic MT5 full-close reconciliation using DatabaseManager.resolveReconciledFullClose(), so broker-confirmed trade settlement and UNKNOWN-ledger resolution commit in one DB transaction.
+- Added atomic MT5 partial-close reconciliation using DatabaseManager.resolveReconciledPartialClose().
+- Preserved duplicate-operation safety: atomic partial reconciliation resolves only the selected UNKNOWN operation and deliberately leaves additional unresolved duplicate operations blocked.
+- Added reconciled-close side effects only after the atomic DB transaction succeeds.
+- New commits in this session: 824e5c4d6ff3d007a9bc2430131d5bb3b0aa0555 and 694753de3b53c348eb14f10af14f75aeeb97a623.
+- CI has NOT been run on these changes because Actions capacity is exhausted; do not claim them verified until a green run exists.
