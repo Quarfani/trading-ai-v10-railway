@@ -825,12 +825,11 @@ export class BinanceExecutor {
               ).catch(e => e);
               if (emergencyError) {
                 throw new Error(
-                  `Recovered Spot entry accounting failed and emergency close failed: ${summaryError?.message ?? summaryError}`,
+                  `Recovered Binance entry accounting failed and emergency close failed: ${summaryError?.message ?? summaryError}`,
                 );
               }
               return null;
             }
-          }
           if (!(fillPriceRecovered > 0) || !Number.isFinite(fillPriceRecovered)) {
             throw new Error('Recovered Binance order returned invalid fill price');
           }
