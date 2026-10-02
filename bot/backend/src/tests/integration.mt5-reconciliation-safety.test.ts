@@ -265,7 +265,96 @@ async function main() {
       staleDb.raw().close();
     }
 
-    console.log("Result: 10 passed, 0 failed");
+    const modifyDb = new DatabaseManager(":memory:");
+    await modifyDb.initialize();
+    const modifyTradeId = modifyDb.insertTrade({
+      ticket: 772, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 0.01,
+      entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(),
+      source: "RUNTIME_MODIFY_RECOVERY",
+    } as any);
+    modifyDb.createExecutionLedger({
+      executionId: "runtime-modify-unknown",
+      operationKey: "runtime-modify-op",
+      action: "MOVE_SL_TP",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId: modifyTradeId, newSl: 1.095, newTp: 1.115 },
+    });
+    const modifyOriginalGet = (axios as any).get;
+    (axios as any).get = async (url: string) => {
+      if (url.endsWith("/positions")) {
+        return { data: { ok: true, positions: [{
+          ticket: 772, symbol: "EURUSD", type: "BUY", volume: 0.01, sl: 1.095, tp: 1.115,
+        }] } };
+      }
+      throw new Error("unexpected URL");
+    };
+    try {
+      const modifyReconciler = new Reconciler(
+        config(), modifyDb, {} as any,
+        { sendMessage: async () => {} } as any,
+        { recordClose: () => {} } as any,
+        {} as any,
+        { activate: async () => {} } as any,
+        () => {},
+      );
+      await (modifyReconciler as any).reconcileOne(modifyDb.getOpenTrades()[0]);
+      const modifyLedger = modifyDb.getExecutionByOperationKey("runtime-modify-op");
+      const modifiedTrade = modifyDb.getOpenTrades()[0] as any;
+      assert(modifyLedger.status === "EXECUTED", "authoritative MT5 protection state must resolve UNKNOWN modify ledger");
+      assert(modifiedTrade.sl === 1.095 && modifiedTrade.tp === 1.115, "runtime modify recovery must persist broker protection levels");
+    } finally {
+      (axios as any).get = modifyOriginalGet;
+      modifyDb.raw().close();
+    }
+
+    const mismatchDb = new DatabaseManager(":memory:");
+    await mismatchDb.initialize();
+    const mismatchTradeId = mismatchDb.insertTrade({
+      ticket: 773, symbol: "EURUSD", timeframe: "H1", side: "BUY", volume: 0.01,
+      entry: 1.1, sl: 1.09, tp: 1.12, status: "open", openedAt: Date.now(),
+      source: "RUNTIME_MODIFY_MISMATCH",
+    } as any);
+    mismatchDb.createExecutionLedger({
+      executionId: "runtime-modify-mismatch",
+      operationKey: "runtime-modify-mismatch-op",
+      action: "MOVE_SL_TP",
+      status: "UNKNOWN",
+      symbol: "EURUSD",
+      side: "BUY",
+      volume: 0.01,
+      request: { tradeId: mismatchTradeId, newSl: 1.095, newTp: 1.115 },
+    });
+    (axios as any).get = async (url: string) => {
+      if (url.endsWith("/positions")) {
+        return { data: { ok: true, positions: [{
+          ticket: 773, symbol: "EURUSD", type: "BUY", volume: 0.01, sl: 1.09, tp: 1.12,
+        }] } };
+      }
+      throw new Error("unexpected URL");
+    };
+    try {
+      const mismatchReconciler = new Reconciler(
+        config(), mismatchDb, {} as any,
+        { sendMessage: async () => {} } as any,
+        { recordClose: () => {} } as any,
+        {} as any,
+        { activate: async () => {} } as any,
+        () => {},
+      );
+      let mismatchBlocked = false;
+      try { await (mismatchReconciler as any).reconcileOne(mismatchDb.getOpenTrades()[0]); }
+      catch { mismatchBlocked = true; }
+      assert(mismatchBlocked, "mismatched MT5 protection state must remain blocked");
+      assert(mismatchDb.getExecutionByOperationKey("runtime-modify-mismatch-op").status === "UNKNOWN", "mismatched modify must preserve UNKNOWN");
+    } finally {
+      (axios as any).get = originalGet;
+      mismatchDb.raw().close();
+    }
+
+    console.log("Result: 12 passed, 0 failed");
   } finally {
     (axios as any).get = originalGet;
   }
