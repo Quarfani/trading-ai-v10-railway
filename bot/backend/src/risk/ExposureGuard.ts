@@ -33,6 +33,50 @@ interface PositionLike {
   timeframe?: Timeframe;
 }
 
+export function calculatePositionNotional(
+  position: PositionLike,
+  prices: Record<string, number>,
+  accountCurrency: string,
+  requireBrokerContract = false,
+  requireMarkPrice = false,
+): { ok: true; value: number } | { ok: false; reason: string } {
+  const market = requireBrokerContract
+    ? getBrokerMarketDefinition(position.symbol, position.timeframe ?? 'H1')
+    : getMarketDefinition(position.symbol, position.timeframe ?? 'H1');
+  if (!market) return { ok: false, reason: `No market definition for ${position.symbol}` };
+
+  const quoteToAccount = resolveQuoteToAccount(
+    market.quoteCurrency,
+    accountCurrency,
+    prices,
+  );
+  if (quoteToAccount == null) {
+    return {
+      ok: false,
+      reason: `Cannot convert ${market.quoteCurrency} -> ${accountCurrency} for ${position.symbol}`,
+    };
+  }
+
+  const markPrice = requireMarkPrice
+    ? Number(prices[position.symbol])
+    : Number(position.entry);
+  if (!(markPrice > 0) || !Number.isFinite(markPrice)) {
+    return { ok: false, reason: `Current mark price unavailable for ${position.symbol}` };
+  }
+
+  const volume = Number(position.volume);
+  const contractSize = Number(market.economics.contractSize);
+  if (!(volume > 0) || !Number.isFinite(volume) || !(contractSize > 0) || !Number.isFinite(contractSize)) {
+    return { ok: false, reason: `Invalid position economics for ${position.symbol}` };
+  }
+
+  const value = markPrice * volume * contractSize * quoteToAccount;
+  if (!Number.isFinite(value) || value < 0) {
+    return { ok: false, reason: `Invalid notional for ${position.symbol}` };
+  }
+
+  return { ok: true, value };
+}
 function notional(
   position: PositionLike,
   prices: Record<string, number>,
