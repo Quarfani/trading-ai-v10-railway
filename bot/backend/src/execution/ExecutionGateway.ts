@@ -279,8 +279,24 @@ export class ExecutionGateway {
       } else {
         if (!t.ticket || !this.paper.modifyTrade(t.ticket, newSl, newTp)) throw new Error('Paper modify rejected');
       }
-      if (t.id) this.db.raw().prepare('UPDATE trades SET sl=?,tp=? WHERE id=?').run(newSl, newTp, t.id);
-      this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED' });
+
+      if (t.id) {
+        const settled = this.db.resolveReconciledSLTP(
+          t.id,
+          op.executionId,
+          newSl,
+          newTp,
+          { ticket: t.ticket, newSl, newTp },
+          t.ticket,
+        );
+        if (!settled) {
+          throw new Error(
+            `Protection was changed but atomic local/ledger settlement failed for id=${t.id}`,
+          );
+        }
+      } else if (!this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED' })) {
+        throw new Error('Protection changed but execution ledger could not be resolved');
+      }
       return true;
     } catch (e: any) {
       this.db.updateExecutionLedger(op.executionId, { status: this.config.mode === 'paper' ? 'FAILED' : 'UNKNOWN', error: e?.message ?? String(e) });
@@ -604,8 +620,31 @@ export class ExecutionGateway {
         const quoteToAccount = await this.resolvePaperQuoteToAccount(t.symbol, t.timeframe ?? 'H1');
         const result = this.paper.partialClose(t.ticket, volume, exitPrice, reason, quoteToAccount);
         if (!result.ok) throw new Error('Paper partial close rejected');
-        if (t.id) this.db.raw().prepare(`UPDATE trades SET volume=?, realizedProfit=COALESCE(realizedProfit,0)+?, notes=COALESCE(notes,'') || ? WHERE id=?`).run(result.remainingVolume, result.profit, `\npartial_pnl=${result.profit.toFixed(8)}`, t.id);
-        this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result });
+        if (t.id) {
+          const current = this.db.raw().prepare(
+            'SELECT realizedProfit FROM trades WHERE id=? AND status=\'open\' LIMIT 1',
+          ).get(t.id) as { realizedProfit: number } | undefined;
+          if (!current) throw new Error(`Open trade not found for partial settlement id=${t.id}`);
+          const cumulativeProfit = Number(current.realizedProfit ?? 0) + Number(result.profit);
+          if (!Number.isFinite(cumulativeProfit)) {
+            throw new Error('Cumulative paper partial-close PnL is not finite');
+          }
+          const settled = this.db.resolveReconciledPartialClose(
+            t.id,
+            op.executionId,
+            result.remainingVolume,
+            cumulativeProfit,
+            result,
+            t.ticket,
+          );
+          if (!settled) {
+            throw new Error(
+              `Paper partial close settlement failed atomically for id=${t.id}`,
+            );
+          }
+        } else if (!this.db.updateExecutionLedger(op.executionId, { status: 'EXECUTED', result })) {
+          throw new Error('Paper partial close could not resolve execution ledger');
+        }
         return result;
       }
       let remaining = +(t.volume - volume).toFixed(8);
@@ -673,11 +712,11 @@ export class ExecutionGateway {
           { remainingVolume: remaining, profit: realizedProfit },
         );
         if (!settled) throw new Error(`Atomic partial trade/ledger settlement failed for id=${t.id}`);
-      } else {
-        this.db.updateExecutionLedger(op.executionId, {
-          status: 'EXECUTED',
-          result: { remainingVolume: remaining, profit: realizedProfit },
-        });
+      } else if (!this.db.updateExecutionLedger(op.executionId, {
+        status: 'EXECUTED',
+        result: { remainingVolume: remaining, profit: realizedProfit },
+      })) {
+        throw new Error('Partial close broker execution succeeded but ledger could not be resolved');
       }
       return { ok: true, profit: realizedProfit, remainingVolume: remaining };
     } catch (e: any) {
