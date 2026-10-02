@@ -123,6 +123,10 @@ export class KellyPositionSizer {
       this.logger.warn(`[${symbol}] Invalid Kelly statistics — sizing blocked`);
       return { volume: 0, stats };
     }
+    if (stats.source === 'kelly' && stats.fraction <= 0) {
+      this.logger.warn(`[${symbol}] Kelly edge is non-positive — sizing blocked`);
+      return { volume: 0, stats };
+    }
 
     // ── Quality adjustment ───────────────────────────────────────────────
     // Quality 80+ → full size. Quality 50 → 85%. Quality 30 → 70%.
@@ -136,10 +140,18 @@ export class KellyPositionSizer {
     }
 
     let raw             = riskUsd / (slDist * resolvedEconomics.contractSize * quoteToAccount);
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return { volume: 0, stats };
+    }
+
+    const maxVolume = (base * config.riskPerTrade * 2) /
+      (slDist * resolvedEconomics.contractSize * quoteToAccount);
+    if (!Number.isFinite(maxVolume) || maxVolume <= 0) {
+      return { volume: 0, stats };
+    }
 
     // ── Safety clamps ────────────────────────────────────────────────────
     // Never exceed 2× the configured max risk per trade
-    const maxVolume = (base * config.riskPerTrade * 2) / (slDist * resolvedEconomics.contractSize * quoteToAccount);
     raw = Math.min(raw, maxVolume, resolvedEconomics.maxVolume);
 
     // Round to volume step
