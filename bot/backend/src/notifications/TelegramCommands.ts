@@ -60,7 +60,8 @@ export class TelegramCommands {
         `/pause SYMBOL — إيقاف مؤقت\n` +
         `/resume SYMBOL — استئناف\n` +
         `/closeall [SYMBOL] — إغلاق كل الصفقات\n` +
-        `/emergency — إيقاف التداول الجديد\n\n` +
+        `/emergency — إيقاف التداول الجديد\n` +
+        `/emergency_off — إعادة التشغيل يدويًا بعد الإيقاف الطارئ\n\n` +
         `<b>🔬 التحليل:</b>\n` +
         `/backtest SYM TF [N] — باك تست\n` +
         `/montecarlo — محاكاة مونت كارلو\n` +
