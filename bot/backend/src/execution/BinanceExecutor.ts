@@ -32,6 +32,11 @@ interface OpenOrderIds {
   quantity?: number;
 }
 
+export function makeBinanceClientOrderId(operationKey: string): string {
+  const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
+  return `ta_${digest}`;
+}
+
 export class BinanceExecutor {
   private logger = new Logger('BinanceExecutor');
   private http:  AxiosInstance;
