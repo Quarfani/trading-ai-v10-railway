@@ -1922,19 +1922,11 @@ export class TradingEngine extends EventEmitter {
     };
   }
 
-  async triggerEmergencyStop(
-    reason: string,
-  ) {
-    await this.emergency.activate(
-      reason,
-    );
+  async triggerEmergencyStop(reason: string) {
+    await this.activateEmergencyStop(reason);
   }
 
-  async resumeTrading(
-    approver: string,
-  ) {
-    await this.emergency.deactivate(
-      approver,
-    );
+  async resumeTrading(approver: string) {
+    await this.deactivateEmergencyStop(approver);
   }
 }
