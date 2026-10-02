@@ -173,7 +173,28 @@ async function main() {
   );
   mismatchDb.raw().close();
 
-  console.log("Result: 5 passed, 0 failed");
+  const driftDb = new DatabaseManager(":memory:");
+  await driftDb.initialize();
+  const driftTradeId = driftDb.insertTrade({
+    ticket: 9006, symbol: "BTCUSDT", timeframe: "H1", side: "BUY", volume: 0.01,
+    entry: 50_000, sl: 49_000, tp: 52_000, status: "open", openedAt: Date.now(),
+    source: "BINANCE_RECON_DRIFT",
+  } as any);
+  const driftExec = {
+    getBinancePosition: async () => ({ positionAmt: -0.02, entryPrice: 50_000, unrealizedProfit: 0 }),
+  };
+  const driftReconciler = makeReconciler(driftDb, driftExec, () => {});
+  let driftBlocked = false;
+  try {
+    await (driftReconciler as any).reconcileOne(driftDb.getOpenTrades()[0]);
+  } catch {
+    driftBlocked = true;
+  }
+  assert(driftBlocked, "unledgered Binance reverse/size drift must stay blocked");
+  assert(driftDb.getOpenTrades()[0].volume === 0.01, "unledgered Binance drift must not mutate local volume");
+  driftDb.raw().close();
+
+  console.log("Result: 6 passed, 0 failed");
 }
 
 main().catch(error => {
