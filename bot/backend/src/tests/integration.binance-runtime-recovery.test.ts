@@ -228,13 +228,16 @@ async function main() {
     request: { tradeId: dbTradeId, exitPrice: 51_000, reason: "MANUAL" },
   });
 
+  const authoritativeExecutedAt = Date.now() - 30_000;
   const fakeExec = {
+    __executedAt: authoritativeExecutedAt,
     getBinancePosition: async () => null,
     reconcileBinanceFullClose: async () => ({
       ok: true,
       orderId: 31_001,
       executedQty: 0.01,
       realizedProfit: 12.5,
+      executedAt: authoritativeExecutedAt,
     }),
   };
   const tracker = {
@@ -261,6 +264,11 @@ async function main() {
   ).get(dbTradeId) as any;
   const ledger = db.getExecutionByOperationKey("reconcile-full-op-1");
   assert(closed.status === "closed" && closed.profit === 12.5, "Reconciler must atomically settle an attributable full close");
+  assert(
+    Number.isFinite(Number(closed.closedAt)) &&
+    Math.abs(Number(closed.closedAt) - Number((fakeExec as any).__executedAt)) < 1_000,
+    "Reconciler must persist authoritative Binance execution time when supplied",
+  );
   assert(ledger.status === "EXECUTED", "Reconciler must resolve the attributable full-close ledger");
   assert(onCloseCalls.length === 1, "Reconciler must emit one close callback after recovery");
 
