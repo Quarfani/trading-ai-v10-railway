@@ -1069,41 +1069,90 @@ export class BinanceExecutor {
       );
     }
 
-    const orders = Array.isArray(list.orders) ? list.orders : [];
-    if (orders.length !== 2) {
-      throw new Error(`Binance Spot OCO has invalid leg count before close for ${symbol}`);
+    const listClientOrderId = this.makeOcoClientOrderId(operationKey, 'LIST');
+    const listId = Number(list.orderListId);
+    if (!(listId > 0) || !Number.isFinite(listId)) {
+      throw new Error(
+        `Binance Spot OCO has invalid orderListId before close for ${symbol}`,
+      );
     }
 
-    const ids = orders
-      .map((order: any) => Number(order.orderId))
-      .filter((id: number) => Number.isFinite(id) && id > 0);
-    if (ids.length !== 2) {
-      throw new Error(`Binance Spot OCO returned invalid leg identities before close for ${symbol}`);
+    let cancelResponse: any;
+    try {
+      cancelResponse = await this.signedDelete('/api/v3/orderList', {
+        symbol,
+        orderListId: listId,
+      });
+    } catch {
+      // A timeout can happen after Binance accepted the cancellation. Query
+      // the same order list before deciding that cancellation failed.
+      cancelResponse = null;
     }
 
-    for (const orderId of ids) {
-      try {
-        await this.signedDelete('/api/v3/order', {
-          symbol,
-          orderId,
-        });
-      } catch (e: any) {
-        this.logger.warn(
-          `[Binance Spot] OCO leg cancellation request failed for ${symbol} order=${orderId}: ${e?.message ?? e}`,
+    if (
+      cancelResponse &&
+      String(cancelResponse?.listClientOrderId ?? '') !== listClientOrderId
+    ) {
+      throw new Error(
+        `Binance Spot OCO cancellation identity mismatch for ${symbol}`,
+      );
+    }
+
+    const after = await this.getSpotOcoByClientId(
+      symbol,
+      listClientOrderId,
+    );
+    if (!after) {
+      // Some deployments do not return an order list once it is finished.
+      const openOrders = await this.getOpenOrders(symbol);
+      const liveIds = new Set(
+        (Array.isArray(list.orders) ? list.orders : [])
+          .map((order: any) => Number(order.orderId))
+          .filter((id: number) => Number.isFinite(id) && id > 0),
+      );
+      if (
+        [...liveIds].some(id =>
+          openOrders.some((order: any) => Number(order.orderId) === id),
+        )
+      ) {
+        throw new Error(
+          `Binance Spot OCO cancellation could not be verified for ${symbol}`,
         );
       }
+      return;
     }
 
-    const remaining = await this.getOpenOrders(symbol);
-    const survivors = remaining.filter((order: any) =>
-      ids.includes(Number(order.orderId)),
+    const finalStatus = String(after.listStatusType ?? '').toUpperCase();
+    const finalOrderStatus = String(after.listOrderStatus ?? '').toUpperCase();
+    if (
+      finalStatus !== 'ALL_DONE' &&
+      finalOrderStatus !== 'ALL_DONE'
+    ) {
+      throw new Error(
+        `Binance Spot OCO cancellation not complete for ${symbol}: ${finalStatus}/${finalOrderStatus}`,
+      );
+    }
+
+    const orderIds = (Array.isArray(list.orders) ? list.orders : [])
+      .map((order: any) => Number(order.orderId))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+    if (!orderIds.length) {
+      throw new Error(
+        `Binance Spot OCO had no verifiable leg identities during cancellation for ${symbol}`,
+      );
+    }
+
+    const openOrders = await this.getOpenOrders(symbol);
+    const survivors = openOrders.filter((order: any) =>
+      orderIds.includes(Number(order.orderId)),
     );
     if (survivors.length > 0) {
       throw new Error(
-        `Binance Spot OCO cancellation could not be verified for ${symbol}`,
+        `Binance Spot OCO legs are still open after cancellation for ${symbol}`,
       );
     }
   }
+
 
   private async getProtectiveOrderIds(
     symbol: string,
@@ -1533,12 +1582,15 @@ export class BinanceExecutor {
           );
         }
         const remaining = Number(after.positionAmt);
+        const expectedRemaining = available - executedQty;
         if (
           !Number.isFinite(remaining) ||
-          remaining > quantityTolerance
+          !Number.isFinite(expectedRemaining) ||
+          expectedRemaining < -quantityTolerance ||
+          Math.abs(remaining - expectedRemaining) > quantityTolerance
         ) {
           throw new Error(
-            `Binance Spot market close left residual inventory for ${symbol}: ${remaining}`,
+            `Binance Spot market close produced an unexpected inventory transition for ${symbol}: before=${available} executed=${executedQty} after=${remaining}`,
           );
         }
       }
