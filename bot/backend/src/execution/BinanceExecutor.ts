@@ -132,6 +132,59 @@ export class BinanceExecutor {
     return 'tac' + crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 32);
   }
 
+  private openClientOrderId(operationKey: string): string {
+    return 'ta_' + crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
+  }
+
+  async reconcileOpenOperation(
+    symbol: string,
+    operationKey: string,
+    expectedSide: 'BUY' | 'SELL',
+    expectedVolume: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    entryPrice: number;
+  } | null> {
+    if (!this.isFutures || !(expectedVolume > 0)) return null;
+    const clientOrderId = this.openClientOrderId(operationKey);
+    const order = await this.findOrderByClientId(symbol, clientOrderId);
+    if (!order) return null;
+
+    if (String(order.status ?? '').toUpperCase() !== 'FILLED') return null;
+    if (String(order.side ?? '').toUpperCase() !== expectedSide) return null;
+
+    const orderId = Number(order.orderId);
+    const executedQty = Number(order.executedQty ?? order.origQty ?? 0);
+    const entryPrice = Number(order.avgPrice ?? order.price ?? 0);
+    if (
+      !(orderId > 0) ||
+      !Number.isFinite(orderId) ||
+      !(executedQty > 0) ||
+      !Number.isFinite(executedQty) ||
+      !(entryPrice > 0) ||
+      !Number.isFinite(entryPrice)
+    ) return null;
+
+    const position = await this.getPosition(symbol);
+    if (!position || position.positionAmt === 0) return null;
+    const positionSide = position.positionAmt > 0 ? 'BUY' : 'SELL';
+    const positionVolume = Math.abs(position.positionAmt);
+    const tolerance = Math.max(
+      getSymbolSpec(symbol).volumeStep,
+      expectedVolume * 0.02,
+      1e-8,
+    );
+    if (
+      positionSide !== expectedSide ||
+      Math.abs(positionVolume - executedQty) > tolerance ||
+      Math.abs(executedQty - expectedVolume) > tolerance
+    ) return null;
+
+    return { ok: true, orderId, executedQty, entryPrice };
+  }
+
   private protectionClientOrderId(operationKey: string, role: 'sl' | 'tp'): string {
     return 'tap' + crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 30) + role;
   }
