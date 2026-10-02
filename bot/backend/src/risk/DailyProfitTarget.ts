@@ -38,7 +38,9 @@ export class DailyProfitTarget {
     }
 
     const targetPct = Number(this.config.dailyProfitTarget);
-    if (!Number.isFinite(targetPct) || targetPct < 0) return false;
+    if (!Number.isFinite(targetPct) || targetPct < 0) {
+      return true;
+    }
     // A zero target is an explicit "disabled" setting.
     if (targetPct === 0) return false;
     const hit = gainPct >= targetPct;
