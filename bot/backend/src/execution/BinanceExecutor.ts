@@ -132,6 +132,47 @@ export class BinanceExecutor {
     return 'tac' + crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 32);
   }
 
+  private protectionClientOrderId(operationKey: string, role: 'sl' | 'tp'): string {
+    return 'tap' + crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 30) + role;
+  }
+
+  async reconcileProtectionModify(
+    symbol: string,
+    operationKey: string,
+    desiredSl: number,
+    desiredTp: number,
+  ): Promise<{ slOrderId: number; tpOrderId: number } | null> {
+    if (!this.isFutures) return null;
+    if (!Number.isFinite(desiredSl) || !Number.isFinite(desiredTp)) return null;
+    const openOrders = await this.getOpenOrders(symbol);
+    const slClientId = this.protectionClientOrderId(operationKey, 'sl');
+    const tpClientId = this.protectionClientOrderId(operationKey, 'tp');
+    const sl = openOrders.find((order: any) =>
+      String(order.clientOrderId ?? '') === slClientId &&
+      String(order.type ?? '') === 'STOP_MARKET',
+    );
+    const tp = openOrders.find((order: any) =>
+      String(order.clientOrderId ?? '') === tpClientId &&
+      String(order.type ?? '') === 'TAKE_PROFIT_MARKET',
+    );
+    if (!sl || !tp) return null;
+
+    const slPrice = Number(sl.stopPrice);
+    const tpPrice = Number(tp.stopPrice);
+    const slTolerance = Math.max(1e-10, Math.abs(desiredSl) * 1e-6);
+    const tpTolerance = Math.max(1e-10, Math.abs(desiredTp) * 1e-6);
+    if (!Number.isFinite(slPrice) || !Number.isFinite(tpPrice) ||
+        Math.abs(slPrice - desiredSl) > slTolerance ||
+        Math.abs(tpPrice - desiredTp) > tpTolerance) {
+      return null;
+    }
+
+    const slOrderId = Number(sl.orderId);
+    const tpOrderId = Number(tp.orderId);
+    if (!(slOrderId > 0) || !(tpOrderId > 0)) return null;
+    return { slOrderId, tpOrderId };
+  }
+
   async reconcileCloseOperation(
     symbol: string,
     operationKey: string,
