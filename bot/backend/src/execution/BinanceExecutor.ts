@@ -115,14 +115,6 @@ export class BinanceExecutor {
       ) {
         return null;
       }
-      if (
-        !Number.isFinite(fillPrice) ||
-        !Number.isFinite(fillQty) ||
-        fillPrice <= 0 ||
-        fillQty <= 0
-      ) {
-        return null;
-      }
 
       if (!['USDT', 'USDC', 'BUSD'].includes(commissionAsset)) {
         return null;
@@ -132,8 +124,15 @@ export class BinanceExecutor {
       else if (currency !== commissionAsset) return null;
 
       net += realizedPnl - commission;
-      weightedPrice += fillPrice * fillQty;
-      totalQty += fillQty;
+      if (
+        Number.isFinite(fillPrice) &&
+        Number.isFinite(fillQty) &&
+        fillPrice > 0 &&
+        fillQty > 0
+      ) {
+        weightedPrice += fillPrice * fillQty;
+        totalQty += fillQty;
+      }
     }
 
     if (!currency || !Number.isFinite(net)) return null;
