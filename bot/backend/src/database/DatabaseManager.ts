@@ -30,18 +30,19 @@ export class DatabaseManager {
 
   // ─── Trades ───────────────────────────────────────────────────────────────
 
-  insertTrade(t: Trade & { account?: string; timeframe?: string; commission?: number; entryQuoteToAccount?: number; exitQuoteToAccount?: number; mlPredictionId?: string }): number {
+  insertTrade(t: Trade & { account?: string; timeframe?: string; commission?: number; commissionCurrency?: string; entryQuoteToAccount?: number; exitQuoteToAccount?: number; mlPredictionId?: string }): number {
     const r = this.db.prepare(`
       INSERT INTO trades
         (ticket, symbol, timeframe, side, volume, entry, sl, tp,
-         status, openedAt, source, account, commission, realizedProfit,
+         status, openedAt, source, account, commission, commissionCurrency, realizedProfit,
          entryQuoteToAccount, exitQuoteToAccount, mlPredictionId)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       t.ticket ?? null, t.symbol, t.timeframe ?? null,
       t.side, t.volume, t.entry, t.sl, t.tp,
       t.status, t.openedAt, t.source,
-      t.account ?? 'default', t.commission ?? 0, t.realizedProfit ?? 0,
+      t.account ?? 'default', t.commission ?? 0, t.commissionCurrency ?? null,
+      t.realizedProfit ?? 0,
       t.entryQuoteToAccount ?? null, t.exitQuoteToAccount ?? null,
       t.mlPredictionId ?? null,
     );
