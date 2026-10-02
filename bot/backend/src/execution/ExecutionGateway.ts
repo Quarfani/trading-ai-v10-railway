@@ -273,7 +273,7 @@ export class ExecutionGateway {
           );
         }
       } else if (this.config.mode === 'binance') {
-        if (!t.ticket || !(await this.binance.modifyPosition(t.ticket, t.symbol, t.side, newSl, newTp))) throw new Error('Binance modify rejected');
+        if (!t.ticket || !(await this.binance.modifyPosition(t.ticket, t.symbol, t.side, newSl, newTp, key))) throw new Error('Binance modify rejected');
       } else {
         if (!t.ticket || !this.paper.modifyTrade(t.ticket, newSl, newTp)) throw new Error('Paper modify rejected');
       }
@@ -704,6 +704,13 @@ export class ExecutionGateway {
       throw new Error(`Paper FX conversion unavailable for ${quote}->${account}`);
     }
     return rate;
+  }
+
+  async recoverBinanceProtection(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{ sl: any | null; tp: any | null }> {
+    return this.binance.recoverProtectionByOperation(symbol, operationKey);
   }
 
   async recoverBinanceExecution(
