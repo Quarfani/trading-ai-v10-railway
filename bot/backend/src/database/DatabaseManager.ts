@@ -191,6 +191,34 @@ export class DatabaseManager {
     ).all(Math.floor(limit)) as any[];
   }
 
+  getRecentModelOutcomes(
+    limit = 500,
+    since = 0,
+  ): any[] {
+    if (
+      !(limit > 0) ||
+      !Number.isFinite(limit) ||
+      !Number.isFinite(since) ||
+      since < 0
+    ) {
+      return [];
+    }
+
+    return this.db.prepare(
+      `SELECT predictionId, symbol, timeframe, predictedLabel,
+              outcomeLabel, outcomeProfit, outcomeRecordedAt
+       FROM model_decisions
+       WHERE predictionId IS NOT NULL
+         AND outcomeRecordedAt IS NOT NULL
+         AND outcomeRecordedAt >= ?
+       ORDER BY outcomeRecordedAt DESC
+       LIMIT ?`,
+    ).all(
+      since,
+      Math.floor(limit),
+    ) as any[];
+  }
+
   markModelOutcomeSent(predictionId: string): boolean {
     return this.db.prepare(
       `UPDATE model_decisions
