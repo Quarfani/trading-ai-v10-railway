@@ -32,6 +32,7 @@ import logging
 import time
 import hmac
 import math
+import hashlib
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -77,7 +78,7 @@ app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
 _lock  = threading.Lock()
 _idempotency_lock = threading.RLock()
 _IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
-_idempotency_cache: dict[str, tuple[float, str, dict]] = {}
+_idempotency_cache: dict[str, tuple[float, str, dict, str | None]] = {}
 _IDEMPOTENCY_STATE_PATH = os.getenv(
     "MT5_IDEMPOTENCY_STATE_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "mt5_idempotency.json"),
@@ -92,9 +93,13 @@ def _idempotency_load_disk():
                 return
             now = time.time()
             for key, value in raw.items():
-                if not isinstance(value, list) or len(value) != 3:
+                if not isinstance(value, list) or len(value) not in (3, 4):
                     continue
-                ts, status, payload = value
+                if len(value) == 3:
+                    ts, status, payload = value
+                    fingerprint = None
+                else:
+                    ts, status, payload, fingerprint = value
                 if (
                     isinstance(ts, (int, float))
                     and math.isfinite(float(ts))
@@ -102,7 +107,7 @@ def _idempotency_load_disk():
                     and status in ("SUCCESS", "UNKNOWN")
                     and isinstance(payload, dict)
                 ):
-                    _idempotency_cache[str(key)] = (float(ts), status, payload)
+                    _idempotency_cache[str(key)] = (float(ts), status, payload, str(fingerprint) if fingerprint is not None else None)
         except (FileNotFoundError, OSError, ValueError, TypeError, OverflowError):
             return
 
@@ -118,8 +123,8 @@ def _idempotency_persist():
     with open(tmp_path, "w", encoding="utf-8") as handle:
         json.dump(
             {
-                key: [ts, status, payload]
-                for key, (ts, status, payload) in _idempotency_cache.items()
+                key: [ts, status, payload] if fingerprint is None else [ts, status, payload, fingerprint]
+                for key, (ts, status, payload, fingerprint) in _idempotency_cache.items()
             },
             handle,
             separators=(",", ":"),
@@ -129,25 +134,63 @@ def _idempotency_persist():
     os.replace(tmp_path, _IDEMPOTENCY_STATE_PATH)
 
 
-def _idempotency_lookup(key: str):
+def _idempotency_fingerprint(operation: str, data: dict) -> str:
+    request = {
+        str(key): value
+        for key, value in data.items()
+        if str(key) != "idempotency_key"
+    }
+    canonical = json.dumps(
+        {"operation": operation, "request": request},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _idempotency_lookup(key: str, fingerprint: str | None = None):
     if not key:
         return None
     with _idempotency_lock:
         now = time.time()
         stale = [
-            k for k, (ts, _status, _payload) in _idempotency_cache.items()
+            k for k, (ts, _status, _payload, _fingerprint) in _idempotency_cache.items()
             if now - ts > _IDEMPOTENCY_TTL_SEC
         ]
         for k in stale:
             _idempotency_cache.pop(k, None)
-        return _idempotency_cache.get(key)
+        cached = _idempotency_cache.get(key)
+        if (
+            cached is not None and
+            fingerprint is not None and
+            cached[3] is not None and
+            cached[3] != fingerprint
+        ):
+            return (
+                0.0,
+                "CONFLICT",
+                {"ok": False, "error": "idempotency_key is already bound to a different request"},
+                cached[3],
+            )
+        return cached
 
 
-def _idempotency_record(key: str, status: str, payload: dict):
+def _idempotency_record(
+    key: str,
+    status: str,
+    payload: dict,
+    fingerprint: str | None = None,
+):
     if not key:
         return
     with _idempotency_lock:
-        _idempotency_cache[key] = (time.time(), status, dict(payload))
+        _idempotency_cache[key] = (
+            time.time(),
+            status,
+            dict(payload),
+            fingerprint,
+        )
         try:
             _idempotency_persist()
         except OSError as exc:
