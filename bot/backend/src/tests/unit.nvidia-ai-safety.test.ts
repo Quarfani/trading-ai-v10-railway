@@ -48,6 +48,27 @@ async function main() {
       },
     });
 
+    let liveBlocked = false;
+    const liveAi = new NvidiaAI({
+      ...config,
+      mode: 'binance',
+      mlRequired: false,
+    } as any);
+    (axios as any).post = async () => ({
+      data: {
+        choices: [{ message: { content: 'service error 999' } }],
+      },
+    });
+    try {
+      await liveAi.scoreSignal(signal as any);
+    } catch {
+      liveBlocked = true;
+    }
+    assert(
+      liveBlocked,
+      'malformed NVIDIA response must block live trading',
+    );
+
     const maxScore = await ai.scoreSignal({
       ...signal,
       timestamp: Date.now(),
@@ -74,7 +95,7 @@ async function main() {
     (axios as any).post = originalPost;
   }
 
-  console.log('Result: 3 passed, 0 failed');
+  console.log('Result: 4 passed, 0 failed');
 }
 
 main().catch(error => {
