@@ -34,6 +34,21 @@ assert(
 );
 
 assert(
+  validateRiskConfiguration(baseConfig({ maxSlippagePct: 0 })).length === 0,
+  'zero maxSlippagePct is a valid strict gate',
+);
+
+assert(
+  validateRiskConfiguration(baseConfig({ maxSlippagePips: 0 })).length === 0,
+  'zero maxSlippagePips is a valid strict gate',
+);
+
+assert(
+  validateRiskConfiguration(baseConfig({ dailyProfitTarget: 0 })).length === 0,
+  'zero dailyProfitTarget is a valid disabled setting',
+);
+
+assert(
   validateRiskConfiguration(baseConfig({ minRR: Number.NaN }))
     .some(r => r.includes('minRR')),
   'NaN minRR must be rejected',
