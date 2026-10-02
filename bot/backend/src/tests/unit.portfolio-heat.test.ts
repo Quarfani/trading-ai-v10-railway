@@ -86,4 +86,4 @@ const missingFx = new PortfolioHeat(cfg(0.06)).check(
 );
 assert(!missingFx.allowed, 'missing FX conversion must fail closed');
 
-console.log('Result: 9 passed, 0 failed');
+console.log('Result: 6 passed, 0 failed');
