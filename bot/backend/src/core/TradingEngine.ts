@@ -189,12 +189,17 @@ export class TradingEngine extends EventEmitter {
 
   public readonly telegram: TelegramBot;
   public validSymbols: string[] = [];
+  private readonly manualEmergencyKey: string;
 
   constructor(
     public readonly config: SystemConfig,
     public readonly db: DatabaseManager,
   ) {
     super();
+
+    const emergencyAccount = String(config.accountName ?? 'default')
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    this.manualEmergencyKey = `manual_emergency_stop:${emergencyAccount}`;
 
     this.telegram = new TelegramBot(config);
     this.emergency = new EmergencyStop(this.telegram);
@@ -551,12 +556,45 @@ export class TradingEngine extends EventEmitter {
 
   async activateEmergencyStop(reason = 'Manual operator emergency stop') {
     await this.emergency.activate(reason);
-    this.broadcast('emergency_stop', this.emergency.getStatus());
+    const status = this.emergency.getStatus();
+    this.db.setSetting(
+      this.manualEmergencyKey,
+      JSON.stringify({
+        active: true,
+        reason: status.reason ?? reason,
+        activatedAt: status.activatedAt ?? Date.now(),
+      }),
+    );
+    this.broadcast('emergency_stop', status);
   }
 
   async deactivateEmergencyStop(approverMessage = 'Manual operator resume') {
     await this.emergency.deactivate(approverMessage);
+    this.db.setSetting(this.manualEmergencyKey, '');
     this.broadcast('emergency_stop', this.emergency.getStatus());
+  }
+
+  async restoreManualEmergencyStop(): Promise<boolean> {
+    const raw = this.db.getSetting(this.manualEmergencyKey);
+    if (!raw) return false;
+
+    let persisted: { active?: boolean; reason?: string } | null = null;
+    try {
+      persisted = JSON.parse(raw);
+    } catch {
+      persisted = null;
+    }
+
+    if (!persisted?.active) {
+      this.db.setSetting(this.manualEmergencyKey, '');
+      return false;
+    }
+
+    await this.emergency.activate(
+      persisted.reason ?? 'Persisted manual emergency stop',
+    );
+    this.broadcast('emergency_stop', this.emergency.getStatus());
+    return true;
   }
 
   isEmergencyStopActive(): boolean {
