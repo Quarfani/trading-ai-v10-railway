@@ -561,7 +561,12 @@ export class BinanceExecutor {
       }
 
       const after=await this.getPosition(symbol);
-      const remainingVolume=Math.max(0,Math.abs(after?.positionAmt??0));
+      if (!after) {
+        throw new Error(
+          `Binance partial close ${symbol} executed but remaining position could not be verified`,
+        );
+      }
+      const remainingVolume=Math.max(0,Math.abs(after.positionAmt));
 
       const realized=await this.getFuturesOrderNetPnl(symbol,orderId);
       if(realized==null) {
@@ -687,11 +692,13 @@ export class BinanceExecutor {
         }
 
         const after = await this.getPosition(symbol);
-        const remaining = Math.abs(after?.positionAmt ?? 0);
-        if (
-          after &&
-          remaining > quantityTolerance
-        ) {
+        if (!after) {
+          throw new Error(
+            `Binance full close ${symbol} executed but zero position could not be verified`,
+          );
+        }
+        const remaining = Math.abs(after.positionAmt);
+        if (remaining > quantityTolerance) {
           throw new Error(
             `Binance full close left position open: ${symbol} remaining=${remaining}`,
           );
