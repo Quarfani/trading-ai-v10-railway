@@ -689,7 +689,39 @@ export class BinanceExecutor {
         if (recovered && !['CANCELED','REJECTED','EXPIRED'].includes(String(recovered.status ?? '').toUpperCase())) {
           const recoveredTicket = Number(recovered.orderId);
           const fillPriceRecovered = Number(recovered.avgPrice ?? recovered.fills?.[0]?.price ?? signal.price);
-          const executedQtyRecovered = Number(recovered.executedQty ?? recovered.origQty ?? quantity);
+          let fillPriceRecovered = Number(
+            recovered.avgPrice ?? recovered.fills?.[0]?.price ?? 0,
+          );
+          let entryCommissionRecovered = 0;
+          let entryCommissionCurrencyRecovered: string | undefined;
+          if (!this.isFutures) {
+            try {
+              const summary = await this.getSpotOrderFillSummary(
+                signal.symbol,
+                recoveredTicket,
+                executedQtyRecovered,
+              );
+              if (!summary) throw new Error('Spot entry fill summary unavailable');
+              fillPriceRecovered = summary.avgPrice;
+              entryCommissionRecovered = summary.feeQuote;
+              entryCommissionCurrencyRecovered = summary.currency;
+            } catch (summaryError: any) {
+              const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+                signal,
+                executedQtyRecovered,
+                clientOrderId,
+              ).catch(e => e);
+              if (emergencyError) {
+                throw new Error(
+                  `Recovered Spot entry accounting failed and emergency close failed: ${summaryError?.message ?? summaryError}`,
+                );
+              }
+              return null;
+            }
+          }
+          if (!(fillPriceRecovered > 0) || !Number.isFinite(fillPriceRecovered)) {
+            throw new Error('Recovered Binance order returned invalid fill price');
+          }
           if (!(executedQtyRecovered > 0) || !Number.isFinite(executedQtyRecovered)) {
             throw new Error('Recovered Binance order returned invalid executed quantity');
           }
@@ -722,7 +754,24 @@ export class BinanceExecutor {
             }
             return null;
           }
-          return {ticket: recoveredTicket, symbol: signal.symbol, side: signal.side, volume: executedQtyRecovered, entry: fillPriceRecovered, sl: signal.sl, tp: signal.tp, status:'open', openedAt: Date.now(), source: signal.source};
+          return {
+            ticket: recoveredTicket,
+            symbol: signal.symbol,
+            side: signal.side,
+            volume: executedQtyRecovered,
+            entry: fillPriceRecovered,
+            sl: signal.sl,
+            tp: signal.tp,
+            status: 'open',
+            openedAt: Date.now(),
+            source: signal.source,
+            ...(entryCommissionRecovered > 0
+              ? {
+                  commission: entryCommissionRecovered,
+                  commissionCurrency: entryCommissionCurrencyRecovered,
+                }
+              : {}),
+          };
         }
       }
       this.logger.error(`placeMarketOrder failed: ${e.response?.data ?? e.message}`);
