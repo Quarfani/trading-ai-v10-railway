@@ -78,9 +78,23 @@ export class MLEnhancer {
         if (this.required) throw new Error(`ML model unavailable for ${signal.symbol}/${tf}`);
         return signal;
       }
-      if (!['BUY','SELL','HOLD'].includes(ml.signal) ||
-          ![ml.confidence, ml.prob_buy, ml.prob_sell, ml.prob_hold].every(Number.isFinite)) {
-        throw new Error('ML response failed schema validation');
+      const probabilities = [
+        Number(ml.prob_buy),
+        Number(ml.prob_sell),
+        Number(ml.prob_hold),
+      ];
+      if (
+        !['BUY','SELL','HOLD'].includes(ml.signal) ||
+        ![ml.confidence, ...probabilities].every(
+          value => Number.isFinite(value),
+        ) ||
+        ml.confidence < 0 ||
+        ml.confidence > 1 ||
+        probabilities.some(value => value < 0 || value > 1) ||
+        Math.abs(probabilities.reduce((sum, value) => sum + value, 0) - 1) > 0.02 ||
+        ml.has_model !== true
+      ) {
+        throw new Error('ML response failed schema/range validation');
       }
 
       const mlSignal = ml.signal as 'BUY' | 'SELL' | 'HOLD';
