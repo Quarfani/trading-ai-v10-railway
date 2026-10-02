@@ -512,47 +512,20 @@ export class Reconciler {
   } | null {
     if (!t.id) return null;
 
-    const rows = this.db.raw().prepare(`
-      SELECT executionId, operationKey, requestJson, tradeId, updatedAt
-      FROM execution_ledger
-      WHERE action='OPEN'
-        AND status='EXECUTED'
-        AND (tradeId=? OR (tradeId IS NULL AND symbol=?))
-      ORDER BY updatedAt DESC, executionId DESC
-      LIMIT 50
-    `).all(
-      t.id,
-      t.symbol,
-    ) as Array<{
-      executionId: string;
-      operationKey: string;
-      requestJson?: string | null;
-      tradeId?: number | null;
-      updatedAt: number;
-    }>;
-
-    for (const row of rows) {
-      if (Number(row.tradeId) === t.id) {
-        return {
-          executionId: String(row.executionId),
-          operationKey: String(row.operationKey),
-        };
+    const row = this.db.getLatestExecutedOpenOperationForTrade(t.id);
+    if (!row || row.conflict) {
+      if (row?.conflict) {
+        this.logger.error(
+          `Conflicting executed OPEN identities for Binance Spot trade id=${t.id}`,
+        );
       }
-
-      if (!row.requestJson) continue;
-      try {
-        if (Number(JSON.parse(row.requestJson)?.tradeId) === t.id) {
-          return {
-            executionId: String(row.executionId),
-            operationKey: String(row.operationKey),
-          };
-        }
-      } catch {
-        // Legacy malformed rows remain unusable for exact recovery.
-      }
+      return null;
     }
 
-    return null;
+    return {
+      executionId: String(row.executionId),
+      operationKey: String(row.operationKey),
+    };
   }
 
   private async verifyBinanceSpotProtection(t: Trade): Promise<void> {
