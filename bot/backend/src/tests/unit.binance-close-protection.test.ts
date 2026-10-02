@@ -95,6 +95,62 @@ async function main() {
     "restart close must not submit a market close without verified position state",
   );
 
+  const spotPnl = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
+  } as any);
+  (spotPnl as any).getOpenOrders = async () => [];
+  (spotPnl as any).getSpotOcoByClientId = async () => null;
+  (spotPnl as any).getPosition = async () => ({ positionAmt: 0.5, entryPrice: 0, unrealizedProfit: 0 });
+  let postCalls = 0;
+  (spotPnl as any).signedPost = async (_path: string, payload: any) => {
+    postCalls += 1;
+    assert(payload.type === "MARKET", "Spot PnL close must submit a market order");
+    return {
+      orderId: 9901,
+      status: "FILLED",
+      executedQty: "0.5",
+      fills: [
+        { price: "110", qty: "0.3", commission: "0.033", commissionAsset: "USDT" },
+        { price: "111", qty: "0.2", commission: "0.022", commissionAsset: "USDT" },
+      ],
+    };
+  };
+  (spotPnl as any).signedGet = async (path: string) => {
+    if (path === "/api/v3/account") {
+      return {
+        balances: [
+          { asset: "BTC", free: "0", locked: "0" },
+        ],
+      };
+    }
+    if (path === "/api/v3/myTrades") {
+      return [
+        { price: "110", qty: "0.3", commission: "0.033", commissionAsset: "USDT" },
+        { price: "111", qty: "0.2", commission: "0.022", commissionAsset: "USDT" },
+      ];
+    }
+    return [];
+  };
+  const spotProfit = await spotPnl.closePosition(
+    1002,
+    "BTCUSDT",
+    0.5,
+    "BUY",
+    "spot-pnl-close",
+    undefined,
+    100,
+  );
+  assert(spotProfit.ok, "Spot close with authoritative fills must succeed");
+  assert(
+    spotProfit.realizedProfitCurrency === "USDT",
+    "Spot realized PnL must be denominated in the quote asset",
+  );
+  assert(
+    Math.abs(Number(spotProfit.realizedProfit) - 5.488) < 1e-9,
+    "Spot realized PnL must equal weighted exit proceeds minus entry cost and quote fees",
+  );
+  assert(postCalls === 1, "Spot PnL test must submit exactly one market close");
+
   const spot = new BinanceExecutor({
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
   } as any);
