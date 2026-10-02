@@ -187,12 +187,13 @@ async function main() {
       entryPrice: 100,
       unrealizedProfit: 0,
     }),
-    getBinanceOpenOrders: async (symbol: string) => {
+    recoverBinanceProtection: async (symbol: string, operationKey: string) => {
       assert(symbol === "BTCUSDT", "protective-order recovery must use the trade symbol");
-      return [
-        { orderId: 7101, side: "SELL", type: "STOP_MARKET", stopPrice: "95" },
-        { orderId: 7102, side: "SELL", type: "TAKE_PROFIT_MARKET", stopPrice: "110" },
-      ];
+      assert(operationKey === "binance-modify-op", "protective-order recovery must use the exact operation key");
+      return {
+        sl: { orderId: 7101, side: "SELL", type: "STOP_MARKET", stopPrice: "95", status: "NEW" },
+        tp: { orderId: 7102, side: "SELL", type: "TAKE_PROFIT_MARKET", stopPrice: "110", status: "NEW" },
+      };
     },
   };
   await (makeReconciler(modifyDb, modifyExec) as any).reconcileOne(modifyDb.getOpenTrades()[0]);
@@ -231,9 +232,10 @@ async function main() {
       entryPrice: 100,
       unrealizedProfit: 0,
     }),
-    getBinanceOpenOrders: async () => [
-      { orderId: 7103, side: "SELL", type: "STOP_MARKET", stopPrice: "95" },
-    ],
+    recoverBinanceProtection: async () => ({
+      sl: { orderId: 7103, side: "SELL", type: "STOP_MARKET", stopPrice: "95", status: "NEW" },
+      tp: null,
+    }),
   };
   let modifyBlocked = false;
   try {
