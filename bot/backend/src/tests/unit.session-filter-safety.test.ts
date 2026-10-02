@@ -21,4 +21,15 @@ assert(!invalid.allowed, 'invalid session timestamp must block');
 const emptySymbol = filter.check('TREND', '', now);
 assert(!emptySymbol.allowed, 'empty symbol must block');
 
-console.log('Result: 4 passed, 0 failed');
+const saturday = Date.parse('2026-10-03T12:00:00.000Z');
+const sundayMorning = Date.parse('2026-10-04T12:00:00.000Z');
+assert(
+  filter.check('TREND', 'EURUSD', saturday).session === 'DEAD_ZONE',
+  'Saturday FX session must be closed',
+);
+assert(
+  !filter.check('TREND', 'EURUSD', sundayMorning).allowed,
+  'Sunday morning FX session must be closed',
+);
+
+console.log('Result: 6 passed, 0 failed');
