@@ -347,6 +347,51 @@ export class DatabaseManager {
     return tx();
   }
 
+  resolveReconciledProtectionModify(
+    tradeId: number,
+    executionId: string,
+    sl: number,
+    tp: number,
+    result: unknown,
+    brokerOrderId?: string | number,
+  ): boolean {
+    const tx = this.db.transaction(() => {
+      const trade = this.db.prepare(
+        `SELECT status FROM trades WHERE id=? LIMIT 1`,
+      ).get(tradeId) as { status: string } | undefined;
+      if (!trade || trade.status !== 'open') return false;
+
+      const ledger = this.db.prepare(
+        `SELECT status FROM execution_ledger WHERE executionId=? LIMIT 1`,
+      ).get(executionId) as { status: string } | undefined;
+      if (!ledger || !['PENDING', 'UNKNOWN'].includes(ledger.status)) return false;
+
+      const changed = this.db.prepare(
+        `UPDATE trades SET sl=?, tp=? WHERE id=? AND status='open'`,
+      ).run(sl, tp, tradeId).changes;
+      if (changed !== 1) {
+        throw new Error(`Could not persist reconciled protection modify trade id=${tradeId}`);
+      }
+
+      const ledgerChanged = this.db.prepare(`
+        UPDATE execution_ledger
+        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+      `).run(
+        brokerOrderId != null ? String(brokerOrderId) : null,
+        JSON.stringify(result),
+        Date.now(),
+        executionId,
+      ).changes;
+      if (ledgerChanged !== 1) {
+        throw new Error(`Could not resolve reconciled protection ledger ${executionId}`);
+      }
+      return true;
+    });
+
+    return tx();
+  }
+
   resolveReconciledPartialClose(
     tradeId: number,
     executionId: string,
