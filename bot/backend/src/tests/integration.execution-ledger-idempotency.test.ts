@@ -311,6 +311,10 @@ async function main() {
     request: { tradeId: 42, exitPrice: 1.11, reason: "MANUAL" },
   });
   assert(created === true, "unresolved ledger fixture must be created");
+  const persistedTradeId = (resolveDb.raw()
+    .prepare("SELECT tradeId FROM execution_ledger WHERE executionId=?")
+    .get("resolve-1") as any)?.tradeId;
+  assert(persistedTradeId === 42, "execution ledger must persist tradeId as an indexed column");
   const unresolved = resolveDb.getLatestUnresolvedExecutionForTrade(42, ["CLOSE_AT_MARKET"]);
   assert(unresolved?.executionId === "resolve-1", "trade-linked unresolved ledger must be discoverable");
   const resolved = resolveDb.resolveExecutionLedger(
