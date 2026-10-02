@@ -41,6 +41,8 @@ export interface Signal {
   exitPrice?: number;
   timeframe?: Timeframe;
   quality?: number;
+  /** Stable identifier linking this signal to its ML prediction audit record. */
+  mlPredictionId?: string;
 }
 
 export interface RiskResult {
@@ -93,6 +95,8 @@ export interface Trade {
   exitQuoteToAccount?: number;
   notes?: string;
   account?: string;
+  /** ML prediction identifier used to create this trade, when applicable. */
+  mlPredictionId?: string;
 }
 
 export interface StrategyPerformance {
