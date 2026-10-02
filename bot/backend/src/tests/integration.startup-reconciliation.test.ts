@@ -589,6 +589,8 @@ async function main() {
   const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
   const originalPing = (BinanceExecutor.prototype as any).ping;
   const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
+  const originalSpotOcoRecovery = (BinanceExecutor.prototype as any).recoverSpotOcoByOperation;
+  const originalSpotOpenOrders = (BinanceExecutor.prototype as any).getOpenOrders;
   (BinanceExecutor.prototype as any).ping = async () => true;
 
   try {
@@ -608,20 +610,107 @@ async function main() {
     assert(hiddenBlocked, 'unattributed Binance Spot inventory must block startup');
 
     const spotOpen = await newDb();
-    spotOpen.insertTrade({
+    const spotTradeId = spotOpen.insertTrade({
       ticket: 9, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.1,
       entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
     });
-    let openBlocked = false;
-    try { await new StartupReconciler(spotCfg, spotOpen, new TelegramBot(spotCfg)).run(); } catch { openBlocked = true; }
-    assert(openBlocked, 'open Binance Spot bot trades must block ambiguous restart reconciliation');
+    spotOpen.createExecutionLedger({
+      executionId: 'spot-startup-open',
+      operationKey: 'spot-startup-open-op',
+      action: 'OPEN',
+      status: 'EXECUTED',
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      volume: 0.1,
+      request: { tradeId: spotTradeId, volume: 0.1 },
+    });
+    (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = async () => [
+      { asset: 'BTC', free: 0.1, locked: 0 },
+      { asset: 'USDT', free: 1000, locked: 0 },
+    ];
+    (BinanceExecutor.prototype as any).recoverSpotOcoByOperation = async (
+      symbol: string,
+      operationKey: string,
+    ) => {
+      assert(symbol === 'BTCUSDT', 'Spot startup OCO recovery must use trade symbol');
+      assert(operationKey === 'spot-startup-open-op', 'Spot startup OCO recovery must use exact OPEN operation key');
+      return {
+        orderListId: 9001,
+        listStatusType: 'EXEC_STARTED',
+        listOrderStatus: 'EXECUTING',
+        orders: [
+          { symbol: 'BTCUSDT', orderId: 9101, clientOrderId: 'tp' },
+          { symbol: 'BTCUSDT', orderId: 9102, clientOrderId: 'sl' },
+        ],
+      };
+    };
+    (BinanceExecutor.prototype as any).getOpenOrders = async (symbol: string) => {
+      assert(symbol === 'BTCUSDT', 'Spot startup open-order verification must use trade symbol');
+      return [
+        {
+          orderId: 9101, side: 'SELL', type: 'LIMIT_MAKER', status: 'NEW',
+          origQty: '0.1', price: '120',
+        },
+        {
+          orderId: 9102, side: 'SELL', type: 'STOP_LOSS_LIMIT', status: 'NEW',
+          origQty: '0.1', stopPrice: '90', price: '89.95',
+        },
+      ];
+    };
+
+    await new StartupReconciler(
+      spotCfg,
+      spotOpen,
+      new TelegramBot(spotCfg),
+    ).run();
+    assert(
+      spotOpen.getOpenTrades().length === 1,
+      'verifiable Binance Spot OCO protection must allow startup to continue',
+    );
+
+    const spotMissingProtection = await newDb();
+    const missingTradeId = spotMissingProtection.insertTrade({
+      ticket: 10, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 0.1,
+      entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
+    });
+    spotMissingProtection.createExecutionLedger({
+      executionId: 'spot-startup-missing',
+      operationKey: 'spot-startup-missing-op',
+      action: 'OPEN',
+      status: 'EXECUTED',
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      volume: 0.1,
+      request: { tradeId: missingTradeId, volume: 0.1 },
+    });
+    (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = async () => [
+      { asset: 'BTC', free: 0.1, locked: 0 },
+      { asset: 'USDT', free: 1000, locked: 0 },
+    ];
+    (BinanceExecutor.prototype as any).recoverSpotOcoByOperation = async () => null;
+    let missingBlocked = false;
+    try {
+      await new StartupReconciler(
+        spotCfg,
+        spotMissingProtection,
+        new TelegramBot(spotCfg),
+      ).run();
+    } catch {
+      missingBlocked = true;
+    }
+    assert(
+      missingBlocked,
+      'missing Binance Spot OCO protection must block startup',
+    );
 
   } finally {
     (BinanceExecutor.prototype as any).ping = originalPing;
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
+    (BinanceExecutor.prototype as any).recoverSpotOcoByOperation = originalSpotOcoRecovery;
+    (BinanceExecutor.prototype as any).getOpenOrders = originalSpotOpenOrders;
   }
 
-  console.log('Result: 30 passed, 0 failed');
+  console.log('Result: 36 passed, 0 failed');
 }
 
 main().catch(error => {
