@@ -63,7 +63,7 @@ export class SessionFilter {
     }
 
     // [FIX] Crypto: always allowed (24/7 market)
-    const isCrypto = CRYPTO_SYMBOLS.some(c => sym.startsWith(c)) || sym.endsWith('USDT') || sym.endsWith('USDC');
+    const isCrypto = this.isCryptoSymbol(sym);
     if (isCrypto) {
       // But block near funding rate settlement
       const fundingBlock = this.isFundingWindow(tsMs);
@@ -157,8 +157,19 @@ export class SessionFilter {
     return { OVERLAP: 100, NEWYORK: 85, LONDON: 80, TOKYO: 50, DEAD_ZONE: 0, CRYPTO_24_7: 90 }[s] ?? 0;
   }
 
-  isTradeable(symbol?: string):  boolean {
-    const isCrypto = symbol && (CRYPTO_SYMBOLS.some(c => symbol.toUpperCase().startsWith(c)));
-    return isCrypto ? !this.isFundingWindow(Date.now()) : this.currentSession() !== 'DEAD_ZONE';
+  isTradeable(symbol?: string): boolean {
+    const sym = String(symbol ?? '').trim().toUpperCase();
+    if (!sym) return false;
+    return this.isCryptoSymbol(sym)
+      ? !this.isFundingWindow(Date.now())
+      : this.currentSession() !== 'DEAD_ZONE';
+  }
+
+  private isCryptoSymbol(sym: string): boolean {
+    return (
+      CRYPTO_SYMBOLS.some(c => sym.startsWith(c)) ||
+      sym.endsWith('USDT') ||
+      sym.endsWith('USDC')
+    );
   }
 }
