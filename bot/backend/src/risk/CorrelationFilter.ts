@@ -150,7 +150,15 @@ export class CorrelationFilter {
     }
 
     const denom = Math.sqrt(varA * varB);
-    return denom > 0 ? Math.max(-1, Math.min(1, cov / denom)) : 0;
+    if (!(denom > 0) || !Number.isFinite(denom)) {
+      // Zero-variance returns do not contain enough information to establish
+      // a safe portfolio correlation. Treat them as unavailable.
+      return Number.NaN;
+    }
+    const value = cov / denom;
+    return Number.isFinite(value)
+      ? Math.max(-1, Math.min(1, value))
+      : Number.NaN;
   }
 
   private returns(prices: number[]): number[] {
