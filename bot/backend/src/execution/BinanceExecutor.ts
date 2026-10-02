@@ -545,6 +545,21 @@ export class BinanceExecutor {
         throw new Error('Binance partial close returned invalid orderId');
       }
 
+      const status = String(order?.status ?? '').toUpperCase();
+      const executedQty = Number(order?.executedQty ?? order?.cumQty ?? 0);
+      if (status && status !== 'FILLED') {
+        throw new Error(`Binance partial close was not fully filled: status=${status}`);
+      }
+      if (
+        !(executedQty > 0) ||
+        Math.abs(executedQty - qty) >
+          Math.max(getSymbolSpec(symbol).volumeStep, qty * 0.0001)
+      ) {
+        throw new Error(
+          `Binance partial close executed unexpected quantity: requested=${qty} executed=${executedQty}`,
+        );
+      }
+
       const after=await this.getPosition(symbol);
       const remainingVolume=Math.max(0,Math.abs(after?.positionAmt??0));
 
@@ -649,6 +664,37 @@ export class BinanceExecutor {
         const closeOrderId = Number(closeOrder?.orderId);
         if (!(closeOrderId > 0) || !Number.isFinite(closeOrderId)) {
           throw new Error('Binance full close returned invalid orderId');
+        }
+
+        const closeStatus = String(closeOrder?.status ?? '').toUpperCase();
+        const executedQty = Number(closeOrder?.executedQty ?? closeOrder?.cumQty ?? 0);
+        const quantityTolerance = Math.max(
+          getSymbolSpec(symbol).volumeStep,
+          Math.abs(closeQty) * 0.0001,
+        );
+        if (closeStatus && closeStatus !== 'FILLED') {
+          throw new Error(
+            `Binance full close was not fully filled: status=${closeStatus}`,
+          );
+        }
+        if (
+          !(executedQty > 0) ||
+          Math.abs(executedQty - Math.abs(closeQty)) > quantityTolerance
+        ) {
+          throw new Error(
+            `Binance full close executed unexpected quantity: requested=${Math.abs(closeQty)} executed=${executedQty}`,
+          );
+        }
+
+        const after = await this.getPosition(symbol);
+        const remaining = Math.abs(after?.positionAmt ?? 0);
+        if (
+          after &&
+          remaining > quantityTolerance
+        ) {
+          throw new Error(
+            `Binance full close left position open: ${symbol} remaining=${remaining}`,
+          );
         }
 
         const realized = await this.getFuturesOrderNetPnl(
