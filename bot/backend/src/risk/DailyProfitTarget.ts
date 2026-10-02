@@ -37,7 +37,11 @@ export class DailyProfitTarget {
       gainPct = realized / this.config.accountBalance;
     }
 
-    const hit = gainPct >= this.config.dailyProfitTarget;
+    const targetPct = Number(this.config.dailyProfitTarget);
+    if (!Number.isFinite(targetPct) || targetPct < 0) return false;
+    // A zero target is an explicit "disabled" setting.
+    if (targetPct === 0) return false;
+    const hit = gainPct >= targetPct;
     if (hit && this.notified !== today) {
       this.notified = today;
       this.telegram.sendMessage(
