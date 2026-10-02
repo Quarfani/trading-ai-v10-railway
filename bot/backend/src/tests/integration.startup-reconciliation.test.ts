@@ -573,7 +573,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 24 passed, 0 failed');
+  console.log('Result: 28 passed, 0 failed');
 }
 
 main().catch(error => {
