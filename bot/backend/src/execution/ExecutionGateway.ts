@@ -363,6 +363,7 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        key,
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
@@ -624,6 +625,7 @@ export class ExecutionGateway {
           t.ticket,
           t.symbol,
           volume,
+          key,
         );
         if (!result.ok) throw new Error('Binance partial close rejected');
         remaining = result.remainingVolume;
@@ -671,6 +673,31 @@ export class ExecutionGateway {
   }
 
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
+  async reconcileBinanceCloseOperation(
+    symbol: string,
+    operationKey: string,
+    expectedVolume: number,
+    partial: boolean,
+  ) {
+    const result = await this.binance.reconcileCloseOperation(
+      symbol,
+      operationKey,
+      expectedVolume,
+      partial,
+    );
+    if (!result) return null;
+
+    return {
+      ...result,
+      realizedProfit: result.realizedProfit == null
+        ? undefined
+        : await this.convertBrokerProfitToAccount(
+            result.realizedProfit,
+            result.realizedProfitCurrency ?? null,
+          ),
+    };
+  }
+
 
   private beginDestructive(operationKey: string, action: string, trade: Trade, request: Record<string, unknown>) {
     const existing = this.db.getExecutionByOperationKey(operationKey);
