@@ -3,7 +3,7 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: verify refs/heads/main before resuming
+Current head: 73463b94763a62277739aaa39fca8de0bc9dd936
 Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410 (latest known green; post-checkpoint changes are unverified until CI is available)
 
 ## TARGET
@@ -73,5 +73,5 @@ C. Preserve UNKNOWN execution states and never auto-retry ambiguous broker opera
 - Reconciliation lookup uses the indexed tradeId first and falls back only for pre-v15 rows.
 - Added integration assertion that tradeId is persisted.
 - Fixed a migration syntax typo before stopping.
-- Post-checkpoint commits: d242e4e74f1eb31f905132c4b40c346360dce477 plus d7ac2c4049ddb340f1b74376d4132abbb99e4dad and f34d97dd3146e32c3d0b40b6429f6044a8203a8f.
+- Latest post-checkpoint commit: 73463b94763a62277739aaa39fca8de0bc9dd936 (migration v15 syntax correction).
 - CI has NOT been run on these changes; do not claim them verified until a green run exists.
