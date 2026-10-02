@@ -59,6 +59,28 @@ export class BinanceExecutor {
   ): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const spec = getSymbolSpec(signal.symbol);
+
+    const before = await this.getPosition(signal.symbol);
+    if (!before) {
+      throw new Error(
+        `Emergency close position state unavailable for ${signal.symbol}`,
+      );
+    }
+
+    const beforeAmount = Math.abs(Number(before.positionAmt));
+    const quantityTolerance = Math.max(
+      spec.volumeStep,
+      Math.abs(quantity) * 0.0001,
+    );
+    if (
+      !Number.isFinite(beforeAmount) ||
+      beforeAmount < quantity - quantityTolerance
+    ) {
+      throw new Error(
+        `Emergency close quantity exceeds verified Binance inventory for ${signal.symbol}: requested=${quantity} available=${beforeAmount}`,
+      );
+    }
+
     const result = await this.signedPost(
       this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
       {
@@ -84,7 +106,7 @@ export class BinanceExecutor {
       );
     }
 
-    if (this.isFutures) {
+    {
       const after = await this.getPosition(signal.symbol);
       if (!after) {
         throw new Error(
@@ -92,12 +114,15 @@ export class BinanceExecutor {
         );
       }
       const remaining = Math.abs(Number(after.positionAmt));
+      const expectedRemaining = beforeAmount - executed;
       if (
         !Number.isFinite(remaining) ||
-        remaining > Math.max(spec.volumeStep, quantity * 0.0001)
+        !Number.isFinite(expectedRemaining) ||
+        expectedRemaining < -quantityTolerance ||
+        Math.abs(remaining - Math.max(0, expectedRemaining)) > quantityTolerance
       ) {
         throw new Error(
-          `Emergency close executed but residual position remains for ${signal.symbol}: ${remaining}`,
+          `Emergency close produced an unverified Binance inventory transition for ${signal.symbol}: before=${beforeAmount} executed=${executed} after=${remaining}`,
         );
       }
     }
@@ -641,7 +666,11 @@ export class BinanceExecutor {
               clientOrderId,
             );
           } catch (protectionError: any) {
-            const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
+            const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+              signal,
+              executedQtyRecovered,
+              clientOrderId,
+            ).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
             if (this.isFutures) {
               const remaining = await this.getPosition(signal.symbol);
