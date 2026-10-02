@@ -765,6 +765,47 @@ export class BinanceExecutor {
 
   // ─── Spot OCO (SL + TP combined) ─────────────────────────────────────
 
+  private async verifySpotOcoOpenLegs(
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    quantity: number,
+    sl: number,
+    tp: number,
+    orderIds: { slOrderId: number; tpOrderId: number },
+    volumeStep: number,
+  ): Promise<boolean> {
+    const openOrders = await this.getOpenOrders(symbol);
+    const byId = new Map(openOrders.map((order: any) => [Number(order.orderId), order]));
+    const slOrder = byId.get(orderIds.slOrderId);
+    const tpOrder = byId.get(orderIds.tpOrderId);
+    if (!slOrder || !tpOrder) return false;
+
+    const closeSide = side === 'BUY' ? 'SELL' : 'BUY';
+    const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+    const qtyTolerance = Math.max(volumeStep, Math.abs(quantity) * 0.0001);
+    const slQty = Number(slOrder.origQty ?? slOrder.quantity);
+    const tpQty = Number(tpOrder.origQty ?? tpOrder.quantity);
+
+    return (
+      String(slOrder.symbol ?? '').toUpperCase() === String(symbol).toUpperCase() &&
+      String(tpOrder.symbol ?? '').toUpperCase() === String(symbol).toUpperCase() &&
+      String(slOrder.side ?? '').toUpperCase() === closeSide &&
+      String(tpOrder.side ?? '').toUpperCase() === closeSide &&
+      String(slOrder.type ?? '').toUpperCase() === 'STOP_LOSS_LIMIT' &&
+      String(tpOrder.type ?? '').toUpperCase() === 'LIMIT_MAKER' &&
+      String(slOrder.status ?? '').toUpperCase() === 'NEW' &&
+      String(tpOrder.status ?? '').toUpperCase() === 'NEW' &&
+      Number.isFinite(slQty) &&
+      Number.isFinite(tpQty) &&
+      Math.abs(slQty - quantity) <= qtyTolerance &&
+      Math.abs(tpQty - quantity) <= qtyTolerance &&
+      Number.isFinite(Number(slOrder.stopPrice)) &&
+      Number.isFinite(Number(tpOrder.price)) &&
+      Math.abs(Number(slOrder.stopPrice) - sl) <= tolerance(sl) &&
+      Math.abs(Number(tpOrder.price) - tp) <= tolerance(tp)
+    );
+  }
+
   private async placeOCO(
     signal:       Signal,
     quantity:     number,
@@ -816,40 +857,43 @@ export class BinanceExecutor {
       const reports = Array.isArray(oco?.orderReports)
         ? oco.orderReports
         : [];
-      if (reports.length < 2) {
-        throw new Error('Binance Spot OCO requires two authoritative order reports');
+      const listedOrders = Array.isArray(oco?.orders)
+        ? oco.orders
+        : [];
+      const legs = reports.length >= 2 ? reports : listedOrders;
+      if (legs.length < 2) {
+        throw new Error('Binance Spot OCO requires two order legs');
       }
 
-      const tpReport = reports.find(
-        (r: any) =>
-          Number(r.orderId) > 0 &&
-          (
-            String(r.clientOrderId ?? '') === aboveClientOrderId ||
-            String(r.type ?? '').toUpperCase() === 'LIMIT_MAKER'
-          ),
-      );
-      const slReport = reports.find(
-        (r: any) =>
-          Number(r.orderId) > 0 &&
-          (
-            String(r.clientOrderId ?? '') === belowClientOrderId ||
-            String(r.type ?? '').toUpperCase() === 'STOP_LOSS_LIMIT'
-          ),
-      );
+      const findLeg = (clientId: string, fallbackType: string) =>
+        legs.find(
+          (r: any) =>
+            Number(r.orderId) > 0 &&
+            (
+              String(r.clientOrderId ?? '') === clientId ||
+              String(r.type ?? '').toUpperCase() === fallbackType
+            ),
+        );
+
+      const tpReport = findLeg(aboveClientOrderId, 'LIMIT_MAKER');
+      const slReport = findLeg(belowClientOrderId, 'STOP_LOSS_LIMIT');
+      if (!tpReport || !slReport) {
+        throw new Error('Binance Spot OCO legs could not be identified');
+      }
 
       if (
-        String(tpReport?.side ?? '').toUpperCase() !== closeSide ||
-        String(slReport?.side ?? '').toUpperCase() !== closeSide
+        reports.length >= 2 &&
+        (
+          String(tpReport.side ?? '').toUpperCase() !== closeSide ||
+          String(slReport.side ?? '').toUpperCase() !== closeSide
+        )
       ) {
         throw new Error('Binance Spot OCO protection legs have an unexpected side');
       }
-      if (!tpReport || !slReport) {
-        throw new Error('Binance Spot OCO legs could not be identified authoritatively');
-      }
 
       const expectedQty = Number(quantity);
-      const tpQty = Number(tpReport.origQty ?? tpReport.quantity);
-      const slQty = Number(slReport.origQty ?? slReport.quantity);
+      const tpQty = Number(tpReport.origQty ?? tpReport.quantity ?? expectedQty);
+      const slQty = Number(slReport.origQty ?? slReport.quantity ?? expectedQty);
       if (
         !(expectedQty > 0) ||
         !Number.isFinite(expectedQty) ||
@@ -892,6 +936,20 @@ export class BinanceExecutor {
       ).catch(() => null);
       if (recovered) {
         const ids = validateOco(recovered);
+        const verified = await this.verifySpotOcoOpenLegs(
+          signal.symbol,
+          signal.side,
+          quantity,
+          signal.sl,
+          signal.tp,
+          ids,
+          spec.volumeStep,
+        );
+        if (!verified) {
+          throw new Error(
+            `Binance Spot OCO list exists but active legs are not both valid for ${signal.symbol}`,
+          );
+        }
         this.orderMap.set(ticket, {
           slOrderId: ids.slOrderId,
           tpOrderId: ids.tpOrderId,
@@ -927,6 +985,19 @@ export class BinanceExecutor {
         ).catch(() => null);
         if (recovered) {
           const ids = validateOco(recovered);
+          if (!(await this.verifySpotOcoOpenLegs(
+            signal.symbol,
+            signal.side,
+            quantity,
+            signal.sl,
+            signal.tp,
+            ids,
+            spec.volumeStep,
+          ))) {
+            throw new Error(
+              `Recovered Binance Spot OCO legs are not both valid for ${signal.symbol}`,
+            );
+          }
           this.orderMap.set(ticket, {
             slOrderId: ids.slOrderId,
             tpOrderId: ids.tpOrderId,
