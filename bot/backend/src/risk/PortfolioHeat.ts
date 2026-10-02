@@ -109,6 +109,30 @@ export class PortfolioHeat {
     let currentRisk = 0;
 
     for (const trade of openTrades) {
+      if (
+        !trade ||
+        !String(trade.symbol ?? '').trim() ||
+        (trade.side !== 'BUY' && trade.side !== 'SELL') ||
+        !(Number(trade.volume) > 0) ||
+        !Number.isFinite(Number(trade.volume)) ||
+        !(Number(trade.entry) > 0) ||
+        !Number.isFinite(Number(trade.entry)) ||
+        !(Number(trade.sl) > 0) ||
+        !Number.isFinite(Number(trade.sl)) ||
+        (
+          (trade.side === 'BUY' && Number(trade.sl) >= Number(trade.entry)) ||
+          (trade.side === 'SELL' && Number(trade.sl) <= Number(trade.entry))
+        )
+      ) {
+        return {
+          allowed: false,
+          currentHeat: 0,
+          maxHeat,
+          addedRisk: 0,
+          reason: `Invalid open trade state for portfolio heat: ${trade?.symbol ?? 'unknown'}`,
+        };
+      }
+
       const risk = stopRisk(
         trade.symbol,
         trade.entry,
