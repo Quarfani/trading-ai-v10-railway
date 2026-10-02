@@ -141,6 +141,177 @@ export class BinanceExecutor {
     }
   }
 
+  private async findHistoricalOrderByClientId(
+    symbol: string,
+    clientOrderId: string,
+    createdAt?: number,
+  ): Promise<any | null> {
+    if (!this.isFutures || !symbol || !clientOrderId) return null;
+    try {
+      const now = Date.now();
+      const retentionFloor = Math.max(0, now - 7 * 24 * 60 * 60_000);
+      const requestedStart = Number(createdAt);
+      const startTime = Math.min(
+        now,
+        Number.isFinite(requestedStart) && requestedStart > 0
+          ? Math.max(retentionFloor, requestedStart - 5 * 60_000)
+          : Math.max(retentionFloor, now - 24 * 60 * 60_000),
+      );
+
+      let cursor = startTime;
+      for (let page = 0; page < 5; page += 1) {
+        const result = await this.signedGet('/fapi/v1/allOrders', {
+          symbol,
+          startTime: cursor,
+          endTime: now,
+          limit: 1000,
+        });
+        if (!Array.isArray(result)) return null;
+
+        const match = result.find((order: any) =>
+          String(order?.clientOrderId ?? order?.origClientOrderId ?? '') === clientOrderId,
+        );
+        if (match) return match;
+        if (result.length < 1000) return null;
+
+        const lastTime = Math.max(
+          ...result.map((order: any) =>
+            Number(order?.updateTime ?? order?.time ?? 0),
+          ),
+        );
+        if (!(lastTime >= cursor) || lastTime >= now) return null;
+        cursor = lastTime + 1;
+      }
+    } catch (error: any) {
+      this.logger.warn(
+        `[Binance] Historical order lookup failed for ${symbol}/${clientOrderId}: ${error?.message ?? String(error)}`,
+      );
+    }
+    return null;
+  }
+
+  async reconcileFullCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+    createdAt?: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    realizedProfit: number;
+    realizedProfitCurrency: string | null;
+  }> {
+    const empty = {
+      ok: false,
+      orderId: 0,
+      executedQty: 0,
+      realizedProfit: 0,
+      realizedProfitCurrency: null as string | null,
+    };
+    if (!this.isFutures || !clientOrderId) return empty;
+
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId, createdAt);
+    if (!order) return empty;
+
+    const orderId = Number(order?.orderId);
+    const status = String(order?.status ?? '').toUpperCase();
+    const executedQty = Number(order?.executedQty ?? 0);
+    if (!(orderId > 0) || !Number.isFinite(executedQty) || executedQty <= 0) {
+      return empty;
+    }
+    if (!['FILLED', 'PARTIALLY_FILLED'].includes(status)) {
+      return { ...empty, orderId, executedQty };
+    }
+
+    const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+    if (!realized) {
+      return { ...empty, orderId, executedQty };
+    }
+
+    const positions = await this.getAllPositions();
+    const openPosition = positions.find(
+      item => item.symbol === symbol && Math.abs(item.positionAmt) > 1e-12,
+    );
+    if (openPosition) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        realizedProfit: realized.profit,
+        realizedProfitCurrency: realized.currency,
+      };
+    }
+
+    return {
+      ok: true,
+      orderId,
+      executedQty,
+      realizedProfit: realized.profit,
+      realizedProfitCurrency: realized.currency,
+    };
+  }
+
+  async reconcilePartialCloseByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+    createdAt?: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    remainingVolume: number;
+    realizedProfit: number;
+    realizedProfitCurrency: string | null;
+  }> {
+    const empty = {
+      ok: false,
+      orderId: 0,
+      executedQty: 0,
+      remainingVolume: 0,
+      realizedProfit: 0,
+      realizedProfitCurrency: null as string | null,
+    };
+    if (!this.isFutures || !clientOrderId) return empty;
+
+    const order = await this.findHistoricalOrderByClientId(symbol, clientOrderId, createdAt);
+    if (!order) return empty;
+
+    const orderId = Number(order?.orderId);
+    const status = String(order?.status ?? '').toUpperCase();
+    const executedQty = Number(order?.executedQty ?? 0);
+    if (!(orderId > 0) || !Number.isFinite(executedQty) || executedQty <= 0) {
+      return empty;
+    }
+    if (!['FILLED', 'PARTIALLY_FILLED'].includes(status)) {
+      return { ...empty, orderId, executedQty };
+    }
+
+    const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+    if (!realized) {
+      return { ...empty, orderId, executedQty };
+    }
+
+    const position = await this.getPosition(symbol);
+    if (!position || !Number.isFinite(Number(position.positionAmt))) {
+      return {
+        ok: false,
+        orderId,
+        executedQty,
+        remainingVolume: 0,
+        realizedProfit: realized.profit,
+        realizedProfitCurrency: realized.currency,
+      };
+    }
+
+    return {
+      ok: true,
+      orderId,
+      executedQty,
+      remainingVolume: Math.max(0, Math.abs(position.positionAmt)),
+      realizedProfit: realized.profit,
+      realizedProfitCurrency: realized.currency,
+    };
+  }
   // ─── Ping ──────────────────────────────────────────────────────────────
 
   async ping(): Promise<boolean> {
