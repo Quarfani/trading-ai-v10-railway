@@ -109,7 +109,41 @@ async function main() {
   assert(recoveredPartial?.ok === true, "FILLED Binance partial close must be recoverable");
   assert(recoveredPartial.remainingVolume === 0.008, "partial recovery must preserve broker remaining volume");
 
-  console.log("Result: 8 passed, 0 failed");
+  const retrySafe = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  (retrySafe as any).orderMap.set(55, {
+    slOrderId: 701,
+    tpOrderId: 702,
+    quantity: 1,
+  });
+  let closePostAttempts = 0;
+  const deletedProtection: number[] = [];
+  (retrySafe as any).signedDelete = async (_path: string, params: any) => {
+    deletedProtection.push(Number(params.orderId));
+    return {};
+  };
+  (retrySafe as any).getOpenOrders = async () => [];
+  (retrySafe as any).getPosition = async () => ({
+    positionAmt: 1, entryPrice: 100, unrealizedProfit: 0,
+  });
+  (retrySafe as any).signedPost = async () => {
+    closePostAttempts += 1;
+    throw new Error("temporary exchange timeout after protection cancellation");
+  };
+  const firstClose = await retrySafe.closePosition(55, "BTCUSDT", 1, "BUY", "retry-safe-close");
+  assert(firstClose.ok === false, "temporary close failure must remain unsuccessful");
+  assert(
+    (retrySafe as any).orderMap.get(55) != null,
+    "failed Binance close must retain orderMap for safe retry/cleanup",
+  );
+  assert(closePostAttempts === 1, "failed close must issue only one broker close attempt");
+  assert(
+    deletedProtection.includes(701) && deletedProtection.includes(702),
+    "close must attempt to retire both prior protective orders",
+  );
+
+  console.log("Result: 9 passed, 0 failed");
 }
 
 main().catch(error => {
