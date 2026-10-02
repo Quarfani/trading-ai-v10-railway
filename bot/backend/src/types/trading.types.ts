@@ -143,6 +143,10 @@ export interface SystemConfig {
   maxDrawdown?: number;
   maxLeverage?: number;
   maxExposure?: number;
+  /** Optional independent same-symbol gross exposure fraction of equity. */
+  maxSymbolExposure?: number;
+  /** Optional independent correlated-bucket gross exposure fraction of equity. */
+  maxCorrelatedExposure?: number;
   mlRequired: boolean;
 
   symbols: string[];
