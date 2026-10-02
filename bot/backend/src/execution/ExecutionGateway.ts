@@ -456,6 +456,7 @@ export class ExecutionGateway {
         t.side,
         this.makeClientOrderId(operationKey),
         openOperationKey,
+        t.entry,
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
@@ -883,6 +884,8 @@ export class ExecutionGateway {
   async recoverBinanceExecution(
     symbol: string,
     operationKey: string,
+    entryPrice?: number,
+    entrySide?: 'BUY' | 'SELL',
   ): Promise<{
     orderId: number;
     status: string;
@@ -893,6 +896,8 @@ export class ExecutionGateway {
     const recovered = await this.binance.recoverOrderByClientId(
       symbol,
       this.makeClientOrderId(operationKey),
+      entryPrice,
+      entrySide,
     );
     if (!recovered) return null;
     if (recovered.realizedProfit == null) {
