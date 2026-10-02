@@ -674,6 +674,96 @@ export class ExecutionGateway {
 
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
 
+  async reconcileBinanceFullClose(
+    operationKey: string,
+    symbol: string,
+    createdAt?: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    realizedProfit: number;
+  }> {
+    if (this.config.mode !== 'binance') {
+      throw new Error('Binance full recovery requested outside Binance mode');
+    }
+
+    const recovered = await this.binance.reconcileFullCloseByClientOrderId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+      createdAt,
+    );
+
+    if (!recovered.ok) {
+      throw new Error(
+        `Binance full-close recovery unavailable for operation=${operationKey}`,
+      );
+    }
+
+    const realizedProfit = await this.convertBrokerProfitToAccount(
+      recovered.realizedProfit,
+      recovered.realizedProfitCurrency,
+    );
+    if (!Number.isFinite(realizedProfit)) {
+      throw new Error(
+        `Binance full-close recovered PnL is invalid for operation=${operationKey}`,
+      );
+    }
+
+    return {
+      ok: true,
+      orderId: recovered.orderId,
+      executedQty: recovered.executedQty,
+      realizedProfit,
+    };
+  }
+
+  async reconcileBinancePartialClose(
+    operationKey: string,
+    symbol: string,
+    createdAt?: number,
+  ): Promise<{
+    ok: boolean;
+    orderId: number;
+    executedQty: number;
+    remainingVolume: number;
+    realizedProfit: number;
+  }> {
+    if (this.config.mode !== 'binance') {
+      throw new Error('Binance partial recovery requested outside Binance mode');
+    }
+
+    const recovered = await this.binance.reconcilePartialCloseByClientOrderId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+      createdAt,
+    );
+
+    if (!recovered.ok) {
+      throw new Error(
+        `Binance partial-close recovery unavailable for operation=${operationKey}`,
+      );
+    }
+
+    const realizedProfit = await this.convertBrokerProfitToAccount(
+      recovered.realizedProfit,
+      recovered.realizedProfitCurrency,
+    );
+    if (!Number.isFinite(realizedProfit)) {
+      throw new Error(
+        `Binance partial-close recovered PnL is invalid for operation=${operationKey}`,
+      );
+    }
+
+    return {
+      ok: true,
+      orderId: recovered.orderId,
+      executedQty: recovered.executedQty,
+      remainingVolume: recovered.remainingVolume,
+      realizedProfit,
+    };
+  }
+
   private beginDestructive(operationKey: string, action: string, trade: Trade, request: Record<string, unknown>) {
     const existing = this.db.getExecutionByOperationKey(operationKey);
     if (existing) return { executionId: String(existing.executionId), existing };
