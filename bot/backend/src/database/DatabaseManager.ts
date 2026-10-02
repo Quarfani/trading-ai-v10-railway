@@ -263,13 +263,25 @@ export class DatabaseManager {
         trade.exitQuoteToAccount ?? null,
       );
 
+      const localTradeId = Number(inserted.lastInsertRowid);
+      const persistedResult =
+        result === undefined
+          ? undefined
+          : (
+              result &&
+              typeof result === 'object' &&
+              !Array.isArray(result)
+                ? { ...(result as Record<string, unknown>), id: localTradeId }
+                : result
+            );
+
       const ledgerChanged = this.db.prepare(`
         UPDATE execution_ledger
         SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
         WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
       `).run(
         brokerOrderId != null ? String(brokerOrderId) : null,
-        result === undefined ? null : JSON.stringify(result),
+        persistedResult === undefined ? null : JSON.stringify(persistedResult),
         Date.now(),
         executionId,
       ).changes;
@@ -278,7 +290,7 @@ export class DatabaseManager {
         throw new Error(`Could not resolve executed OPEN ledger ${executionId}`);
       }
 
-      return Number(inserted.lastInsertRowid);
+      return localTradeId;
     });
 
     return tx();
