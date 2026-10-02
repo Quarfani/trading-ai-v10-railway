@@ -200,7 +200,11 @@ export class BinanceExecutor {
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
-        const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQty).catch(e => e);
+        const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+          signal,
+          executedQty,
+          clientOrderId ? makeBinanceClientOrderId(clientOrderId + ':EMERGENCY_CLOSE') : undefined,
+        ).catch(e => e);
         if (emergencyError) throw new Error(`Protection failed and emergency close failed for ${signal.symbol}`);
         if (this.isFutures) {
           const remaining = await this.getPosition(signal.symbol);
@@ -238,7 +242,11 @@ export class BinanceExecutor {
             if (this.isFutures) await this.placeSLTP(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
             else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
           } catch (protectionError: any) {
-            const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
+            const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+              signal,
+              executedQtyRecovered,
+              clientOrderId ? makeBinanceClientOrderId(clientOrderId + ':EMERGENCY_CLOSE') : undefined,
+            ).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
             if (this.isFutures) {
               const remaining = await this.getPosition(signal.symbol);
@@ -424,6 +432,7 @@ export class BinanceExecutor {
     ticket:number,
     symbol:string,
     volume:number,
+    clientOrderId?: string,
   ):Promise<{
     ok:boolean;
     remainingVolume:number;
@@ -466,6 +475,7 @@ export class BinanceExecutor {
         type:'MARKET',
         quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
         reduceOnly:'true',
+        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
       });
 
       const orderId=Number(order?.orderId);
@@ -532,6 +542,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -597,6 +608,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
@@ -654,6 +666,7 @@ export class BinanceExecutor {
             closeQty,
             getSymbolSpec(symbol).volumeStep,
           ),
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
       }
 
@@ -795,12 +808,16 @@ export class BinanceExecutor {
     if (!this.isFutures) return [];
     const res = await this.signedGet('/fapi/v2/positionRisk', {});
     if (!Array.isArray(res)) throw new Error('Binance positionRisk response is not an array');
-    return res.map((p: any) => ({
-      symbol: String(p.symbol),
-      positionAmt: Number(p.positionAmt),
-      entryPrice: Number(p.entryPrice),
-      unrealizedProfit: Number(p.unRealizedProfit),
-    })).filter(p => Number.isFinite(p.positionAmt) && Number.isFinite(p.entryPrice) && Number.isFinite(p.unrealizedProfit));
+    return res.map((p: any) => {
+      const symbol = String(p.symbol ?? '').trim().toUpperCase();
+      const positionAmt = Number(p.positionAmt);
+      const entryPrice = Number(p.entryPrice);
+      const unrealizedProfit = Number(p.unRealizedProfit);
+      if (!symbol || !Number.isFinite(positionAmt) || !Number.isFinite(entryPrice) || !Number.isFinite(unrealizedProfit)) {
+        throw new Error('Binance positionRisk response contains invalid position metadata');
+      }
+      return { symbol, positionAmt, entryPrice, unrealizedProfit };
+    });
   }
 
   async getAllSpotBalancesForConfiguredSymbols(): Promise<any[]> {
