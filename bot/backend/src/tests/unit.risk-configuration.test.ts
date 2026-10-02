@@ -78,4 +78,4 @@ assert(
   'non-integer maxOpenTrades must be rejected',
 );
 
-console.log('Result: 11 passed, 0 failed');
+console.log('Result: 9 passed, 0 failed');
