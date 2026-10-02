@@ -697,6 +697,8 @@ export class Reconciler {
     const recovered = await this.exec.recoverBinanceExecution(
       t.symbol,
       String(operation.operationKey),
+      Number(t.entry),
+      t.side,
     );
     if (!recovered) return false;
     if (recovered.status !== 'FILLED') return false;
