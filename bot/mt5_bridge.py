@@ -944,7 +944,18 @@ def trade():
         # close/modify operations require the position ticket.
         position_ticket, deal_ticket = resolve_position_ticket(result, mt5)
 
-        positions_after = mt5.positions_get(ticket=position_ticket) or []
+        positions_after = mt5.positions_get(ticket=position_ticket)
+        if positions_after is None:
+            payload = {
+                "ok": False,
+                "error": (
+                    f"Trade executed but broker position state could not be queried: "
+                    f"order={result.order} deal={deal_ticket}"
+                ),
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
         actual_volume = sum(
             float(getattr(position, "volume", 0.0) or 0.0)
             for position in positions_after
@@ -955,6 +966,37 @@ def trade():
                 "error": (
                     f"Trade executed but position identity could not be resolved: "
                     f"order={result.order} deal={deal_ticket}"
+                ),
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        primary_position = positions_after[0]
+        actual_symbol = str(getattr(primary_position, "symbol", "") or "")
+        actual_type = "BUY" if int(getattr(primary_position, "type", -1)) == int(
+            getattr(mt5, "POSITION_TYPE_BUY", 0)
+        ) else "SELL"
+        actual_sl = float(getattr(primary_position, "sl", 0.0) or 0.0)
+        actual_tp = float(getattr(primary_position, "tp", 0.0) or 0.0)
+        price_tolerance = max(
+            float(getattr(sym_info, "point", 0) or 0) * 1.5,
+            1e-9,
+        )
+        if (
+            actual_symbol.upper() != symbol.upper() or
+            actual_type != side or
+            not math.isfinite(actual_sl) or
+            not math.isfinite(actual_tp) or
+            actual_sl <= 0 or
+            actual_tp <= 0 or
+            abs(actual_sl - sl) > price_tolerance or
+            abs(actual_tp - tp) > price_tolerance
+        ):
+            payload = {
+                "ok": False,
+                "error": (
+                    f"Trade executed but broker position protection/state mismatched: "
+                    f"symbol={actual_symbol} side={actual_type} sl={actual_sl} tp={actual_tp}"
                 ),
             }
             _idempotency_record(idempotency_key, "UNKNOWN", payload)
@@ -1104,6 +1146,53 @@ def modify():
         if int(getattr(result, "retcode", -1)) != int(getattr(mt5, "TRADE_RETCODE_DONE", -2)):
             return err(f"Modify failed: {getattr(result, 'retcode', mt5.last_error())}")
 
+        positions_after = mt5.positions_get(ticket=ticket)
+        if positions_after is None:
+            payload = {
+                "ok": False,
+                "error": f"Modify executed but post-modify position state is unavailable for {ticket}",
+                "ticket": ticket,
+                "status": "UNKNOWN",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+        if not positions_after:
+            payload = {
+                "ok": False,
+                "error": f"Modify executed but position {ticket} disappeared before verification",
+                "ticket": ticket,
+                "status": "UNKNOWN",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        verified = positions_after[0]
+        verified_sl = float(getattr(verified, "sl", 0.0) or 0.0)
+        verified_tp = float(getattr(verified, "tp", 0.0) or 0.0)
+        price_tolerance = max(
+            float(getattr(sym_info, "point", 0) or 0) * 1.5,
+            1e-9,
+        )
+        if (
+            not math.isfinite(verified_sl) or
+            not math.isfinite(verified_tp) or
+            verified_sl <= 0 or
+            verified_tp <= 0 or
+            abs(verified_sl - sl) > price_tolerance or
+            abs(verified_tp - tp) > price_tolerance
+        ):
+            payload = {
+                "ok": False,
+                "error": (
+                    f"Modify executed but broker SL/TP could not be verified for {ticket}: "
+                    f"sl={verified_sl} tp={verified_tp}"
+                ),
+                "ticket": ticket,
+                "status": "UNKNOWN",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
         response_payload = {
             "ok": True,
             "ticket": ticket,
@@ -1221,8 +1310,18 @@ def close():
         if not is_successful_trade_retcode(result.retcode, mt5):
             return err(f"Close failed: {result.retcode}")
 
-        remaining_after_close = mt5.positions_get(ticket=ticket) or []
-        if int(result.retcode) == int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", -2)) and remaining_after_close:
+        remaining_after_close = mt5.positions_get(ticket=ticket)
+        if remaining_after_close is None:
+            payload = {
+                "ok": False,
+                "error": f"Position {ticket} close was submitted but post-close position state is unavailable",
+                "ticket": ticket,
+                "status": "UNKNOWN",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        if remaining_after_close:
             remaining_volume = sum(
                 float(getattr(position, "volume", 0.0) or 0.0)
                 for position in remaining_after_close
@@ -1230,7 +1329,7 @@ def close():
             payload = {
                 "ok": False,
                 "error": (
-                    f"Position {ticket} was partially closed; authoritative "
+                    f"Position {ticket} was not fully closed; authoritative "
                     f"reconciliation required (remaining_volume={remaining_volume})"
                 ),
                 "ticket": ticket,
@@ -1240,16 +1339,27 @@ def close():
             _idempotency_record(idempotency_key, "UNKNOWN", payload)
             return jsonify(payload), 503
 
-        summary = summarize_position_deals(
-            mt5.history_deals_get(position=ticket) or []
-        )
-        if not summary:
-            # The broker accepted the close, but realized deal history is not
-            # yet observable. Return UNKNOWN to the caller so reconciliation
-            # can resolve the final PnL instead of recording pre-close PnL.
+        deals = mt5.history_deals_get(position=ticket)
+        if deals is None:
             payload = {
                 "ok": False,
                 "error": f"Position {ticket} closed but realized deal history is unavailable",
+                "ticket": ticket,
+                "status": "UNKNOWN",
+            }
+            _idempotency_record(idempotency_key, "UNKNOWN", payload)
+            return jsonify(payload), 503
+
+        summary = summarize_position_deals(deals)
+        if not summary or not summary.get("closed"):
+            # A successful server retcode is not sufficient: the authoritative
+            # position/deal view must prove the whole position is closed.
+            payload = {
+                "ok": False,
+                "error": (
+                    f"Position {ticket} close execution is not yet authoritative "
+                    "or remained partially open; reconciliation is required"
+                ),
             }
             _idempotency_record(idempotency_key, "UNKNOWN", payload)
             return jsonify(payload), 503
