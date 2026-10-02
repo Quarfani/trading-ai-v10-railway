@@ -785,6 +785,64 @@ export class BinanceExecutor {
 
   // ─── Modify SL/TP ─────────────────────────────────────────────────────
 
+  private async cancelSpotProtectionByOperation(
+    symbol: string,
+    operationKey: string,
+  ): Promise<void> {
+    const list = await this.recoverSpotOcoByOperation(symbol, operationKey);
+    if (!list) {
+      throw new Error(
+        `Binance Spot OCO could not be recovered before closing ${symbol}`,
+      );
+    }
+
+    const status = String(list.listStatusType).toUpperCase();
+    const listStatus = String(list.listOrderStatus).toUpperCase();
+    if (
+      !['EXEC_STARTED', 'EXECUTING'].includes(status) &&
+      !['EXECUTING'].includes(listStatus)
+    ) {
+      throw new Error(
+        `Binance Spot OCO is not active before close for ${symbol}: ${status}/${listStatus}`,
+      );
+    }
+
+    const orders = Array.isArray(list.orders) ? list.orders : [];
+    if (orders.length !== 2) {
+      throw new Error(`Binance Spot OCO has invalid leg count before close for ${symbol}`);
+    }
+
+    const ids = orders
+      .map((order: any) => Number(order.orderId))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+    if (ids.length !== 2) {
+      throw new Error(`Binance Spot OCO returned invalid leg identities before close for ${symbol}`);
+    }
+
+    for (const orderId of ids) {
+      try {
+        await this.signedDelete('/api/v3/order', {
+          symbol,
+          orderId,
+        });
+      } catch (e: any) {
+        this.logger.warn(
+          `[Binance Spot] OCO leg cancellation request failed for ${symbol} order=${orderId}: ${e?.message ?? e}`,
+        );
+      }
+    }
+
+    const remaining = await this.getOpenOrders(symbol);
+    const survivors = remaining.filter((order: any) =>
+      ids.includes(Number(order.orderId)),
+    );
+    if (survivors.length > 0) {
+      throw new Error(
+        `Binance Spot OCO cancellation could not be verified for ${symbol}`,
+      );
+    }
+  }
+
   private async getProtectiveOrderIds(
     symbol: string,
     side: 'BUY' | 'SELL',
@@ -989,6 +1047,7 @@ export class BinanceExecutor {
     volume?: number,
     side?: 'BUY' | 'SELL',
     clientOrderId?: string,
+    protectionOperationKey?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -1003,6 +1062,23 @@ export class BinanceExecutor {
         ids?.slOrderId,
         ids?.tpOrderId,
       ].filter((id): id is number => Number.isFinite(id));
+
+      if (
+        !this.isFutures &&
+        protectionOperationKey
+      ) {
+        await this.cancelSpotProtectionByOperation(
+          symbol,
+          protectionOperationKey,
+        );
+      } else if (
+        !this.isFutures &&
+        trackedIds.length === 0
+      ) {
+        throw new Error(
+          `Binance Spot close lacks an authoritative OCO identity after restart for ${symbol}`,
+        );
+      }
       let protectionSide: 'BUY' | 'SELL' | undefined = side;
       if (!protectionSide && ids?.closeSide) {
         protectionSide = ids.closeSide === 'SELL' ? 'BUY' : 'SELL';
@@ -1135,15 +1211,74 @@ export class BinanceExecutor {
           };
         }
 
-        await this.signedPost('/api/v3/order', {
+        const spec = getSymbolSpec(symbol);
+        const before = await this.getPosition(symbol);
+        if (!before) {
+          throw new Error(
+            `Binance Spot position state unavailable before closing ${symbol}`,
+          );
+        }
+        const available = Number(before.positionAmt);
+        const quantityTolerance = Math.max(
+          spec.volumeStep,
+          Math.abs(closeQty) * 0.0001,
+        );
+        if (
+          !(available > 0) ||
+          !Number.isFinite(available) ||
+          closeQty > available + quantityTolerance
+        ) {
+          throw new Error(
+            `Binance Spot close quantity exceeds verified inventory for ${symbol}: requested=${closeQty} available=${available}`,
+          );
+        }
+
+        const closeOrder = await this.signedPost('/api/v3/order', {
           symbol,
           side: closeSide,
           type: 'MARKET',
           quantity: this.formatQty(
             closeQty,
-            getSymbolSpec(symbol).volumeStep,
+            spec.volumeStep,
           ),
+          newOrderRespType: 'FULL',
         });
+
+        const status = String(closeOrder?.status ?? '').toUpperCase();
+        const executedQty = Number(
+          closeOrder?.executedQty ??
+          closeOrder?.origQty ??
+          0,
+        );
+        if (status && status !== 'FILLED') {
+          throw new Error(
+            `Binance Spot market close was not fully filled: status=${status}`,
+          );
+        }
+        if (
+          !(executedQty > 0) ||
+          Math.abs(executedQty - closeQty) > quantityTolerance
+        ) {
+          throw new Error(
+            `Binance Spot market close executed unexpected quantity: requested=${closeQty} executed=${executedQty}`,
+          );
+        }
+
+        const after = await this.getPosition(symbol);
+        if (!after) {
+          throw new Error(
+            `Binance Spot post-close position state unavailable for ${symbol}`,
+          );
+        }
+        const remaining = Number(after.positionAmt);
+        if (
+          !Number.isFinite(remaining) ||
+          remaining > quantityTolerance
+        ) {
+          throw new Error(
+            `Binance Spot market close left residual inventory for ${symbol}: ${remaining}`,
+          );
+        }
       }
 
       return {
