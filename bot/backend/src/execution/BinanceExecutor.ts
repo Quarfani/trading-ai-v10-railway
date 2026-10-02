@@ -200,6 +200,7 @@ export class BinanceExecutor {
     executedQty: number;
     realizedProfit: number;
     realizedProfitCurrency: string | null;
+    executedAt: number;
   }> {
     const empty = {
       ok: false,
@@ -207,6 +208,7 @@ export class BinanceExecutor {
       executedQty: 0,
       realizedProfit: 0,
       realizedProfitCurrency: null as string | null,
+      executedAt: 0,
     };
     if (!this.isFutures || !clientOrderId) return empty;
 
@@ -239,6 +241,7 @@ export class BinanceExecutor {
         executedQty,
         realizedProfit: realized.profit,
         realizedProfitCurrency: realized.currency,
+        executedAt: Number(order?.updateTime ?? order?.time ?? 0),
       };
     }
 
@@ -248,6 +251,7 @@ export class BinanceExecutor {
       executedQty,
       realizedProfit: realized.profit,
       realizedProfitCurrency: realized.currency,
+      executedAt: Number(order?.updateTime ?? order?.time ?? 0),
     };
   }
 
