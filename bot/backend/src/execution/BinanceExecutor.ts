@@ -741,13 +741,14 @@ export class BinanceExecutor {
         ids?.slOrderId,
         ids?.tpOrderId,
       ].filter((id): id is number => Number.isFinite(id));
+      let protectionSide: 'BUY' | 'SELL' | undefined = side;
+      if (!protectionSide && ids?.closeSide) {
+        protectionSide = ids.closeSide === 'SELL' ? 'BUY' : 'SELL';
+      }
       const oldOrderIds = trackedIds.length
         ? trackedIds
-        : this.isFutures
-          ? await this.getProtectiveOrderIds(
-              symbol,
-              side ?? ids?.closeSide === 'SELL' ? 'BUY' : 'SELL',
-            )
+        : this.isFutures && protectionSide
+          ? await this.getProtectiveOrderIds(symbol, protectionSide)
           : [];
 
       for (const orderId of oldOrderIds) {
