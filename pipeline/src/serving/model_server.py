@@ -176,11 +176,13 @@ class ModelServer:
 
     def record_trade_closed(
         self,
-        symbol:    str,
-        timeframe: str,
-        features:  np.ndarray,   # features at trade entry
-        profit:    float,         # actual profit
-        signal:    int,           # 1=BUY, -1=SELL that was taken
+        symbol:          str,
+        timeframe:       str,
+        features:        np.ndarray,   # features at trade entry
+        profit:          float,         # actual profit
+        signal:          int,           # 1=BUY, -1=SELL that was taken
+        prediction_id:   Optional[str] = None,
+        predicted_signal: Optional[int] = None,
     ) -> None:
         """
         Record trade outcome for online learning.
@@ -208,18 +210,39 @@ class ModelServer:
             logger.error(f"Rejected invalid online-learning signal for {symbol}/{timeframe}: {signal}")
             return
 
+        if prediction_id is not None:
+            prediction_id = str(prediction_id).strip()
+            if not prediction_id or len(prediction_id) > 128:
+                logger.error(
+                    f"Rejected invalid prediction_id for {symbol}/{timeframe}"
+                )
+                return
+
+        if predicted_signal is not None and predicted_signal not in (-1, 0, 1):
+            logger.error(
+                f"Rejected invalid predicted_signal for {symbol}/{timeframe}: {predicted_signal}"
+            )
+            return
+
         label = self._profit_to_label(profit_value, signal)
 
         with self._lock:
             self._buffers[key].append({
                 "X":     arr,
                 "y":     label,
-                "profit":profit,
+                "profit": profit_value,
                 "ts":    time.time(),
             })
             self._outcomes[key].append({
+                "prediction_id": prediction_id,
+                "predicted_label": predicted_signal,
                 "actual_label": label,
-                "profit":       profit,
+                "profit":       profit_value,
+                "correct": (
+                    predicted_signal == label
+                    if predicted_signal is not None
+                    else None
+                ),
                 "ts":           time.time(),
             })
 
@@ -267,31 +290,49 @@ class ModelServer:
         if len(outcomes) < DEGRADATION_WINDOW:
             return
 
-        # These outcomes currently record the realized trade direction,
-        # not the model's prediction at inference time. They therefore measure
-        # trading win-rate, not model accuracy. Never auto-retrain on that proxy.
         recent = outcomes[-DEGRADATION_WINDOW:]
         profitable = sum(1 for o in recent if float(o["profit"]) > 0)
         recent_win_rate = profitable / len(recent)
+        self._stats[key]["recent_win_rate"] = recent_win_rate
+
+        prediction_outcomes = [
+            o for o in recent
+            if (
+                o.get("prediction_id") and
+                o.get("predicted_label") in (-1, 0, 1) and
+                o.get("actual_label") in (-1, 0, 1)
+            )
+        ]
+
+        if len(prediction_outcomes) < DEGRADATION_WINDOW:
+            logger.info(
+                f"[{symbol}/{timeframe}] Prediction accuracy unavailable: "
+                f"{len(prediction_outcomes)}/{DEGRADATION_WINDOW} outcomes carry a "
+                "prediction identity"
+            )
+            self._stats[key]["last_accuracy"] = None
+            return
+
+        correct = sum(
+            1 for o in prediction_outcomes
+            if o.get("correct") is True
+        )
+        recent_accuracy = correct / len(prediction_outcomes)
+        self._stats[key]["last_accuracy"] = recent_accuracy
 
         logger.info(
-            f"[{symbol}/{timeframe}] Recent trading win-rate="
-            f"{recent_win_rate:.3f} over {len(recent)} closed outcomes"
+            f"[{symbol}/{timeframe}] True model accuracy="
+            f"{recent_accuracy:.3f} over {len(prediction_outcomes)} predictions; "
+            f"trading win-rate={recent_win_rate:.3f}"
         )
-        self._stats[key]["recent_win_rate"] = recent_win_rate
-        self._stats[key]["last_accuracy"] = None
 
-        if recent_win_rate < DEGRADATION_THRESHOLD:
+        if recent_accuracy < DEGRADATION_THRESHOLD:
             logger.warning(
-                f"[{symbol}/{timeframe}] Trading win-rate below monitoring threshold: "
-                f"{recent_win_rate:.3f} < {DEGRADATION_THRESHOLD}; "
-                "model retraining requires staged evaluation"
+                f"[{symbol}/{timeframe}] Model degradation detected: "
+                f"accuracy={recent_accuracy:.3f} < threshold={DEGRADATION_THRESHOLD}"
             )
             if AUTO_RETRAIN_ENABLED:
-                logger.warning(
-                    f"[{symbol}/{timeframe}] Auto-retrain suppressed because "
-                    "prediction-level accuracy is not available in the outcome record"
-                )
+                self._schedule_retrain(symbol, timeframe)
 
     def _schedule_retrain(self, symbol: str, timeframe: str) -> None:
         """Schedule async retraining (non-blocking)."""
@@ -300,9 +341,14 @@ class ModelServer:
                 from src.training.trainer import ModelTrainer
                 trainer = ModelTrainer()
                 report  = trainer.train(symbol, timeframe)
-                if "DEPLOY" in report.recommendation:
-                    self.load_model(symbol, timeframe)
-                    logger.info(f"[{symbol}/{timeframe}] Retrained and reloaded ✅")
+                if report.recommendation == "DEPLOY ✅":
+                    if self.load_model(symbol, timeframe):
+                        logger.info(f"[{symbol}/{timeframe}] Retrained and reloaded ✅")
+                    else:
+                        logger.error(
+                            f"[{symbol}/{timeframe}] Retraining produced a deploy recommendation "
+                            "but artifact reload failed"
+                        )
             except Exception as e:
                 logger.error(f"Retraining failed {symbol}/{timeframe}: {e}")
 
