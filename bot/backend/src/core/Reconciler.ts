@@ -353,11 +353,14 @@ export class Reconciler {
         throw new Error(`Binance cumulative realized PnL is invalid for ${t.symbol}`);
       }
 
+      const closedAt = Number(recovered.executedAt) > 0
+        ? Number(recovered.executedAt)
+        : Date.now();
       const resolved = this.db.resolveReconciledFullClose(
         t.id!,
         String(unresolvedClose.executionId),
         cumulativeRealized,
-        Date.now(),
+        closedAt,
         'MANUAL',
         {
           broker: 'binance',
