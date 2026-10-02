@@ -58,6 +58,12 @@ export class CorrelationFilter {
           candleMap[symbol],
           candleMap[t.symbol],
         );
+        if (corr == null || !Number.isFinite(corr)) {
+          return {
+            blocked: true,
+            with: t.symbol,
+          };
+        }
         const sideSign = side === 'BUY' ? 1 : -1;
         const existingSideSign = t.side === 'BUY' ? 1 : -1;
         const exposureCorrelation = corr * sideSign * existingSideSign;
@@ -88,12 +94,28 @@ export class CorrelationFilter {
 
   // ─── Pearson correlation ────────────────────────────────────────────────
 
-  private getPearson(symA: string, symB: string, candlesA: Candle[], candlesB: Candle[]): number {
-    const key    = this.pairKey(symA, symB);
+  private getPearson(
+    symA: string,
+    symB: string,
+    candlesA: Candle[],
+    candlesB: Candle[],
+  ): number | null {
+    const key = this.pairKey(symA, symB);
     const cached = this.matrix.get(key);
-    if (cached && Date.now() - cached.updatedAt < this.TTL) return cached.value;
+    if (
+      cached &&
+      Date.now() - cached.updatedAt < this.TTL &&
+      Number.isFinite(cached.value)
+    ) {
+      return cached.value;
+    }
 
     const corr = this.computePearson(candlesA, candlesB);
+    if (!Number.isFinite(corr)) {
+      this.matrix.delete(key);
+      return null;
+    }
+
     this.matrix.set(key, { value: corr, updatedAt: Date.now() });
     return corr;
   }
@@ -102,8 +124,17 @@ export class CorrelationFilter {
     const n   = Math.min(candlesA.length, candlesB.length, bars);
     if (n < 10) return 0;
 
-    const rA  = this.returns(candlesA.slice(-n).map(c => c.close));
-    const rB  = this.returns(candlesB.slice(-n).map(c => c.close));
+    const closesA = candlesA.slice(-n).map(c => Number(c.close));
+    const closesB = candlesB.slice(-n).map(c => Number(c.close));
+    if (
+      closesA.some(price => !(price > 0) || !Number.isFinite(price)) ||
+      closesB.some(price => !(price > 0) || !Number.isFinite(price))
+    ) {
+      return Number.NaN;
+    }
+
+    const rA  = this.returns(closesA);
+    const rB  = this.returns(closesB);
     const len = Math.min(rA.length, rB.length);
     if (len < 5) return 0;
 
@@ -125,7 +156,16 @@ export class CorrelationFilter {
   private returns(prices: number[]): number[] {
     const r: number[] = [];
     for (let i = 1; i < prices.length; i++) {
-      r.push(prices[i - 1] > 0 ? (prices[i] - prices[i - 1]) / prices[i - 1] : 0);
+      if (
+        !(prices[i - 1] > 0) ||
+        !Number.isFinite(prices[i - 1]) ||
+        !Number.isFinite(prices[i])
+      ) {
+        return [];
+      }
+      const value = (prices[i] - prices[i - 1]) / prices[i - 1];
+      if (!Number.isFinite(value)) return [];
+      r.push(value);
     }
     return r;
   }
