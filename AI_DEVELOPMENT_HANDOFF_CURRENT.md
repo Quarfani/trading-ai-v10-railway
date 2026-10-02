@@ -3,7 +3,7 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 694753de3b53c348eb14f10af14f75aeeb97a623
+Current head: 31c771ed1032e1bffdc8a46aaec3a941b3557ba2
 Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410 (latest known green; post-checkpoint changes are unverified until CI is available)
 
 ## TARGET
@@ -52,7 +52,7 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 ## NEXT TASK
 1. When GitHub Actions capacity/log access is restored, run the focused backend integration test and verify the current main head.
 2. Until then, continue static/code-level hardening only; do not burn Actions minutes on blind reruns.
-3. Next high-value area: audit Binance reconciliation settlement and partial-close accounting for the same atomicity/idempotency guarantees.
+3. Next high-value area: audit Binance protective-order recovery and modify/cancel idempotency, then harden restart behavior.
 4. Preserve UNKNOWN execution states and never auto-retry ambiguous broker operations.
 
 ## STOP/RESUME
@@ -77,5 +77,10 @@ The exact broker symbol is authoritative for runtime broker calls. Canonical sym
 - Added atomic MT5 partial-close reconciliation using DatabaseManager.resolveReconciledPartialClose().
 - Preserved duplicate-operation safety: atomic partial reconciliation resolves only the selected UNKNOWN operation and deliberately leaves additional unresolved duplicate operations blocked.
 - Added reconciled-close side effects only after the atomic DB transaction succeeds.
-- New commits in this session: 824e5c4d6ff3d007a9bc2430131d5bb3b0aa0555 and 694753de3b53c348eb14f10af14f75aeeb97a623.
+- Binance close and partial-close now carry deterministic clientOrderId values derived from the execution operation key.
+- Binance execution recovery can locate the exact broker order by clientOrderId and verify authoritative realized PnL from userTrades before reconciliation.
+- Binance full/partial reconciliation now resolves UNKNOWN operations only after exact order identity, FILLED status, quantity, position state, and authoritative PnL all match.
+- Binance Spot closes now fail closed when authoritative realized PnL is unavailable instead of marking the local operation EXECUTED with unknown economics.
+- Added Binance reconciliation safety integration coverage plus clientOrderId forwarding assertions.
+- New commits in this session: 824e5c4d6ff3d007a9bc2430131d5bb3b0aa0555, 694753de3b53c348eb14f10af14f75aeeb97a623, 324aa1a3373709a6aebe03ffa45c75852b0b5da0, 35e2e41926fa89f39ee7aae21c048de38563673c, b1c44b4b0a97fdad7d5b76471abacf127f3baaef, f83dca05abb08ddb52084bb5b3f80c4b102cc576, f9bfbdaef70d9cf1fd712b73e43268e3c8750451, 5967fd7652c3ed52f2e547b97c780ccfa7d26369, ac910305bddbeecf65efadc689a0a41feae6d345, 31c771ed1032e1bffdc8a46aaec3a941b3557ba2
 - CI has NOT been run on these changes because Actions capacity is exhausted; do not claim them verified until a green run exists.
