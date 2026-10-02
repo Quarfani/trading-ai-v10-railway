@@ -128,6 +128,50 @@ export class BinanceExecutor {
   }
 
 
+  private closeClientOrderId(operationKey: string): string {
+    return 'tac' + crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 32);
+  }
+
+  async reconcileCloseOperation(
+    symbol: string,
+    operationKey: string,
+    expectedVolume: number,
+    partial: boolean,
+  ): Promise<{
+    ok: boolean;
+    orderId?: number;
+    executedQty?: number;
+    remainingVolume?: number;
+    realizedProfit?: number;
+    realizedProfitCurrency?: string;
+  } | null> {
+    if (!this.isFutures || !(expectedVolume > 0)) return null;
+    const clientOrderId = this.closeClientOrderId(operationKey);
+    const order = await this.findOrderByClientId(symbol, clientOrderId);
+    if (!order) return null;
+
+    const status = String(order.status ?? '').toUpperCase();
+    if (status !== 'FILLED') return null;
+    const orderId = Number(order.orderId);
+    const executedQty = Number(order.executedQty ?? 0);
+    if (!(orderId > 0) || !Number.isFinite(orderId) || !(executedQty > 0) || !Number.isFinite(executedQty)) return null;
+
+    const realized = await this.getFuturesOrderNetPnl(symbol, orderId);
+    if (!realized) return null;
+
+    const position = await this.getPosition(symbol);
+    const remainingVolume = Math.max(0, Math.abs(position?.positionAmt ?? 0));
+    const tolerance = Math.max(getSymbolSpec(symbol).volumeStep, expectedVolume * 0.02, 1e-8);
+    if (Math.abs(executedQty - expectedVolume) > tolerance) return null;
+    if (!partial && remainingVolume > tolerance) return null;
+    if (partial && !(remainingVolume > 0) && executedQty < expectedVolume - tolerance) return null;
+
+    return {
+      ok: true, orderId, executedQty, remainingVolume,
+      realizedProfit: realized.profit,
+      realizedProfitCurrency: realized.currency,
+    };
+  }
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
     try {
       return await this.signedGet(
@@ -474,6 +518,7 @@ export class BinanceExecutor {
     ticket:number,
     symbol:string,
     volume:number,
+    clientOrderId?: string,
   ):Promise<{
     ok:boolean;
     remainingVolume:number;
@@ -517,6 +562,7 @@ export class BinanceExecutor {
         type:'MARKET',
         quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
         reduceOnly:'true',
+        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
       });
 
       const orderId=Number(order?.orderId);
@@ -562,6 +608,7 @@ export class BinanceExecutor {
     symbol: string,
     volume?: number,
     side?: 'BUY' | 'SELL',
+    clientOrderId?: string,
   ): Promise<{
     ok: boolean;
     realizedProfit: number | null;
@@ -625,6 +672,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
+          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
