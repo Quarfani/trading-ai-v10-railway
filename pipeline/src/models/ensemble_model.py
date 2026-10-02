@@ -327,18 +327,49 @@ class EnsembleModel(BaseModel):
         with open(meta_path) as f:
             cfg = json.load(f)
 
-        self._weights        = cfg.get("weights", {})
+        self._weights = cfg.get("weights", {})
         self._trained_models = cfg.get("trained_models", [])
-        self.confidence_min  = cfg.get("confidence_min", 0.55)
+        self.confidence_min = float(cfg.get("confidence_min", 0.55))
 
-        ok = True
+        if not isinstance(self._weights, dict):
+            return False
+        if (
+            not np.isfinite(self.confidence_min) or
+            self.confidence_min < 0 or
+            self.confidence_min > 1
+        ):
+            return False
+
+        loaded_count = 0
         if "xgboost" in self._trained_models:
-            ok = ok and self.xgb.load()
-        if "lstm" in self._trained_models and self.lstm:
-            self.lstm.load()  # non-critical
+            if self.xgb.load():
+                loaded_count += 1
+            else:
+                return False
 
-        self._trained = ok
-        return ok
+        if "lstm" in self._trained_models:
+            if self.lstm is None or not self.lstm.load():
+                return False
+            loaded_count += 1
+
+        if loaded_count == 0:
+            return False
+
+        valid_weights = {}
+        for model_name in self._trained_models:
+            weight = float(self._weights.get(model_name, 0.0))
+            if model_name not in {"xgboost", "lstm"}:
+                return False
+            if not np.isfinite(weight) or weight < 0:
+                return False
+            valid_weights[model_name] = weight
+
+        if sum(valid_weights.values()) <= 0:
+            return False
+
+        self._weights = valid_weights
+        self._trained = True
+        return True
 
     # ─── Comparison report ────────────────────────────────────────────────────
 
