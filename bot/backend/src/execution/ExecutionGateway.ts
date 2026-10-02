@@ -162,6 +162,11 @@ export class ExecutionGateway {
       }
       if (!trade) throw new Error('No trade returned');
 
+      trade = {
+        ...trade,
+        mlPredictionId: signal.mlPredictionId,
+      };
+
       const id = this.db.persistExecutedOpenTrade(
         { ...trade, timeframe, account: this.config.accountName ?? 'default' },
         executionId,
