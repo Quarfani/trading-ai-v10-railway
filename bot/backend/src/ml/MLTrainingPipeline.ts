@@ -195,17 +195,21 @@ export class MLTrainingPipeline {
       if (e200.length && atr > 0) emaDist200 = (price - e200[e200.length - 1]) / atr;
     } catch {}
 
-    const now   = new Date();
-    const hour  = now.getUTCHours();
-    const dow   = now.getUTCDay();
+    const featureTime = Number(candles[candles.length - 1]?.time);
+    if (!Number.isFinite(featureTime) || featureTime <= 0) {
+      throw new Error('ML feature extraction requires a valid latest candle timestamp');
+    }
+    const featureDate = new Date(featureTime);
+    const hour  = featureDate.getUTCHours();
+    const dow   = featureDate.getUTCDay();
     const sessionScore = this.getSessionScore(hour);
 
     const slDist = Math.abs(price - sl);
     const tpDist = Math.abs(tp - price);
     const rr     = slDist > 0 ? tpDist / slDist : 0;
 
-    const symbolWR = this.getSymbolWR(symbol);
-    const sourceWR = this.getSourceWR(source);
+    const symbolWR = this.getSymbolWRAsOf(symbol, featureTime);
+    const sourceWR = this.getSourceWRAsOf(source, featureTime);
 
     const regimeNum = regime === 'TRENDING' ? 1 : regime === 'RANGING' ? 0 : 0.5;
 
