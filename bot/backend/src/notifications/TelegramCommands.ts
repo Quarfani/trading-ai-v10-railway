@@ -207,9 +207,26 @@ export class TelegramCommands {
     });
 
     // ── /emergency ────────────────────────────────────────────
-    b.onText(/\/emergency/, m => { if (!auth(m)) return;
-      (this.engine as any).emergencyStop?.();
-      send(m.chat.id, '🚨 <b>EMERGENCY STOP</b>\nNo new trades will be opened.');
+    b.onText(/\/emergency$/, async m => { if (!auth(m)) return;
+      try {
+        await this.engine.activateEmergencyStop(
+          `Manual Telegram emergency stop by chat ${m.chat.id}`,
+        );
+        send(m.chat.id, '🚨 <b>EMERGENCY STOP</b>\nNo new trades will be opened.');
+      } catch (e: any) {
+        send(m.chat.id, `❌ Emergency stop failed: ${e?.message ?? e}`);
+      }
+    });
+
+    b.onText(/\/emergency_off/, async m => { if (!auth(m)) return;
+      try {
+        await this.engine.deactivateEmergencyStop(
+          `Manual Telegram emergency resume by chat ${m.chat.id}`,
+        );
+        send(m.chat.id, '🟢 <b>EMERGENCY STOP CLEARED</b>\nTrading may resume.');
+      } catch (e: any) {
+        send(m.chat.id, `❌ Emergency resume failed: ${e?.message ?? e}`);
+      }
     });
 
     // ── /backtest ────────────────────────────────────────────
