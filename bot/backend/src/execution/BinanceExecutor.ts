@@ -30,6 +30,7 @@ interface OpenOrderIds {
   tpOrderId?: number;
   closeSide?: 'BUY'|'SELL';
   quantity?: number;
+  staleOrderIds?: number[];
 }
 
 export class BinanceExecutor {
@@ -368,50 +369,55 @@ export class BinanceExecutor {
   ):Promise<boolean>{
     if(!this.isFutures)return false;
     try{
-      const ids=this.orderMap.get(ticket);
-      const oldIds=[ids?.slOrderId,ids?.tpOrderId].filter(
+      const previous=this.orderMap.get(ticket);
+      const oldIds=[
+        previous?.slOrderId,
+        previous?.tpOrderId,
+        ...(previous?.staleOrderIds ?? []),
+      ].filter(
         (id): id is number => Number.isFinite(id),
       );
-
-      for(const orderId of oldIds) {
-        await this.signedDelete('/fapi/v1/order',{symbol,orderId});
-      }
-
-      if (oldIds.length) {
-        const remaining = await this.getOpenOrders(symbol);
-        const stillOpen = remaining.some((order: any) =>
-          oldIds.includes(Number(order.orderId)),
-        );
-        if (stillOpen) {
-          throw new Error(
-            `protective order cancellation not verified for ${symbol}`,
-          );
-        }
-      }
-
-      const quantity=ids?.quantity ?? Math.abs(
+      const quantity=previous?.quantity ?? Math.abs(
         (await this.getPosition(symbol))?.positionAmt ?? 0,
       );
       if(!(quantity>0)) return false;
 
+      // Replace first: an accepted new SL/TP keeps the position protected.
       const sig={
-        symbol,
-        side,
-        price:0,
-        confidence:1,
-        sl:newSl,
-        tp:newTp,
-        source:'modify',
-        reason:'modify',
-        timestamp:Date.now(),
+        symbol, side, price:0, confidence:1, sl:newSl, tp:newTp,
+        source:'modify', reason:'modify', timestamp:Date.now(),
       } as Signal;
+      await this.placeSLTP(sig, quantity, ticket, getSymbolSpec(symbol));
 
-      await this.placeSLTP(
-        sig,
-        quantity,
-        ticket,
-        getSymbolSpec(symbol),
+      const replacement=this.orderMap.get(ticket);
+      const replacementIds=[replacement?.slOrderId,replacement?.tpOrderId].filter(
+        (id): id is number => Number.isFinite(id),
       );
+      const stale:number[]=[];
+      for(const orderId of oldIds) {
+        if (replacementIds.includes(orderId)) continue;
+        try {
+          await this.signedDelete('/fapi/v1/order',{symbol,orderId});
+        } catch (e:any) {
+          stale.push(orderId);
+          this.logger.warn(`protective order cleanup deferred orderId=${orderId}: ${e?.message??e}`);
+        }
+      }
+      if (oldIds.length) {
+        const remaining = await this.getOpenOrders(symbol);
+        for (const order of remaining) {
+          const id=Number(order.orderId);
+          if (oldIds.includes(id)) stale.push(id);
+        }
+      }
+      const uniqueStale=[...new Set(stale.filter(Number.isFinite))];
+      this.orderMap.set(ticket,{
+        ...(replacement ?? {}),
+        ...(uniqueStale.length ? {staleOrderIds:uniqueStale} : {}),
+      });
+      if(uniqueStale.length){
+        this.logger.warn(`protective replacement active with ${uniqueStale.length} stale old orders for ${symbol}`);
+      }
       return true;
     }catch(e:any){
       this.logger.warn(`modifyPosition failed: ${e?.message??e}`);
@@ -522,7 +528,11 @@ export class BinanceExecutor {
     try {
       const ids = this.orderMap.get(ticket);
       if (ids) {
-        const oldOrderIds = [ids.slOrderId, ids.tpOrderId].filter(
+        const oldOrderIds = [
+          ids.slOrderId,
+          ids.tpOrderId,
+          ...(ids.staleOrderIds ?? []),
+        ].filter(
           (id): id is number => Number.isFinite(id),
         );
 
