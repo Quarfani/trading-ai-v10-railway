@@ -518,8 +518,13 @@ export class DatabaseManager {
   ): boolean {
     const tx = this.db.transaction(() => {
       const trade = this.db.prepare(
-        `SELECT status FROM trades WHERE id=? LIMIT 1`,
-      ).get(tradeId) as { status: string } | undefined;
+        `SELECT status, side, realizedProfit, mlPredictionId FROM trades WHERE id=? LIMIT 1`,
+      ).get(tradeId) as {
+        status: string;
+        side: 'BUY' | 'SELL';
+        realizedProfit?: number | null;
+        mlPredictionId?: string | null;
+      } | undefined;
       if (!trade) return false;
 
       const ledger = this.db.prepare(
