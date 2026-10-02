@@ -404,15 +404,20 @@ export class Reconciler {
       );
 
       const recoveredRemaining = Number(recovered.remainingVolume);
+      const recoveredExecuted = Number(recovered.executedQty);
       const positionTolerance = Math.max(1e-12, dbVolume * 0.02);
+      const expectedClosed = dbVolume - recoveredRemaining;
       if (
         !Number.isFinite(recoveredRemaining) ||
         recoveredRemaining <= 0 ||
         Math.abs(recoveredRemaining - liveVolume) > positionTolerance ||
-        recoveredRemaining >= dbVolume
+        recoveredRemaining >= dbVolume ||
+        !Number.isFinite(recoveredExecuted) ||
+        recoveredExecuted <= 0 ||
+        Math.abs(recoveredExecuted - expectedClosed) > positionTolerance
       ) {
         throw new Error(
-          `Binance partial recovery volume mismatch for ${t.symbol}: recovered=${recoveredRemaining} live=${liveVolume} db=${dbVolume}`,
+          `Binance partial recovery quantity mismatch for ${t.symbol}: executed=${recoveredExecuted} expectedClosed=${expectedClosed} recoveredRemaining=${recoveredRemaining} live=${liveVolume} db=${dbVolume}`,
         );
       }
 
