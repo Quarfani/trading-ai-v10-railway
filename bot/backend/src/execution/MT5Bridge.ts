@@ -35,16 +35,29 @@ export class MT5Bridge {
     } catch { return false; }
   }
 
-  async placeOrder(s: Signal, volume: number): Promise<Trade | null> {
+  async placeOrder(s: Signal, volume: number, idempotencyKey: string): Promise<Trade | null> {
     try {
       const market = getBrokerMarketDefinition(s.symbol, s.timeframe ?? 'H1');
       if (!market) return null;
       const brokerSymbol = market.brokerSymbol ?? s.symbol;
+      if (!idempotencyKey?.trim()) throw new Error('MT5 placeOrder requires idempotencyKey');
       const r = await this.http.post('/trade',
-        { symbol: brokerSymbol, side: s.side, volume, sl: s.sl, tp: s.tp },
+        {
+          symbol: brokerSymbol,
+          side: s.side,
+          volume,
+          sl: s.sl,
+          tp: s.tp,
+          idempotency_key: idempotencyKey.trim(),
+        },
         { timeout: TIMEOUT_NORMAL });
-      if (!r.data.ticket) {
-        this.logger.error(`Order returned no ticket: ${JSON.stringify(r.data)}`);
+      if (
+        r.data?.ok !== true ||
+        !r.data.ticket ||
+        !Number.isFinite(Number(r.data.price)) ||
+        !(Number(r.data.volume) > 0)
+      ) {
+        this.logger.error('Order returned non-authoritative result: ' + JSON.stringify(r.data));
         return null;
       }
       return {
@@ -59,11 +72,18 @@ export class MT5Bridge {
     }
   }
 
-  async getOpenPositions(): Promise<any[]> {
+  async getOpenPositions(): Promise<any[] | null> {
     try {
       const r = await this.http.get('/positions', { timeout: TIMEOUT_SHORT });
-      return r.data.positions ?? [];
-    } catch { return []; }
+      if (!Array.isArray(r.data?.positions)) {
+        this.logger.error('MT5 positions response was not authoritative');
+        return null;
+      }
+      return r.data.positions;
+    } catch (e: any) {
+      this.logger.warn('getOpenPositions failed: ' + (e?.message ?? e));
+      return null;
+    }
   }
 
   async getTrade(ticket: number): Promise<any | null> {
@@ -80,17 +100,42 @@ export class MT5Bridge {
     }
   }
 
-  async closeTrade(ticket: number): Promise<{ profit: number } | null> {
+  async closeTrade(ticket: number, idempotencyKey: string): Promise<{ profit: number } | null> {
     try {
-      const r = await this.http.post('/close', { ticket }, { timeout: TIMEOUT_CLOSE });
-      return { profit: Number(r.data.profit ?? 0) };
-    } catch { return null; }
+      if (ticket <= 0 || !idempotencyKey?.trim()) {
+        throw new Error('MT5 closeTrade requires positive ticket and idempotencyKey');
+      }
+      const r = await this.http.post(
+        '/close',
+        { ticket, idempotency_key: idempotencyKey.trim() },
+        { timeout: TIMEOUT_CLOSE },
+      );
+      const profit = Number(r.data?.profit);
+      if (r.data?.ok !== true || !Number.isFinite(profit)) {
+        this.logger.error('MT5 close returned non-authoritative result: ' + JSON.stringify(r.data));
+        return null;
+      }
+      return { profit };
+    } catch (e: any) {
+      this.logger.warn('closeTrade failed: ' + (e?.message ?? e));
+      return null;
+    }
   }
 
-  async modifyTrade(ticket: number, sl: number, tp: number): Promise<boolean> {
+  async modifyTrade(ticket: number, sl: number, tp: number, idempotencyKey: string): Promise<boolean> {
     try {
-      const r = await this.http.post('/modify', { ticket, sl, tp }, { timeout: TIMEOUT_NORMAL });
+      if (ticket <= 0 || !(sl > 0) || !(tp > 0) || !idempotencyKey?.trim()) {
+        throw new Error('MT5 modifyTrade requires valid ticket, SL/TP and idempotencyKey');
+      }
+      const r = await this.http.post(
+        '/modify',
+        { ticket, sl, tp, idempotency_key: idempotencyKey.trim() },
+        { timeout: TIMEOUT_NORMAL },
+      );
       return r.data?.ok === true;
-    } catch { return false; }
+    } catch (e: any) {
+      this.logger.warn('modifyTrade failed: ' + (e?.message ?? e));
+      return false;
+    }
   }
 }
