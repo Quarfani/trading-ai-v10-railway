@@ -230,7 +230,7 @@ export class Reconciler {
             );
           }
 
-          if (Number.isFinite(cumulativeRealized)) {
+          if (!reconciledAtomically && Number.isFinite(cumulativeRealized)) {
             this.resolveReconciledLedger(
               t.id,
               ['PARTIAL_CLOSE'],
