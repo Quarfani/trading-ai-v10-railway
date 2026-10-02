@@ -12,7 +12,12 @@ export class SlippageGuard {
     trade: Trade,
     maxPctOverride?: number,
   ): { ok: boolean; slippagePct: number } {
-    if (!(signal.price > 0) || !Number.isFinite(signal.price) || !Number.isFinite(trade.entry)) {
+    if (
+      !(signal.price > 0) ||
+      !Number.isFinite(signal.price) ||
+      !(trade.entry > 0) ||
+      !Number.isFinite(trade.entry)
+    ) {
       return { ok: false, slippagePct: Number.POSITIVE_INFINITY };
     }
     const limit = maxPctOverride ?? this.maxPct;
