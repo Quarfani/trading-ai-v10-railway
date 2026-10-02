@@ -156,18 +156,20 @@ export class Reconciler {
         // Position closed on broker side
         const hist = await this.getMT5History(t.ticket);
         if (!hist) throw new Error(`MT5 position ${t.ticket} is absent but authoritative close history is unavailable`);
-        await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
-        this.resolveReconciledLedger(
-          t.id,
-          ['CLOSE', 'CLOSE_AT_MARKET'],
-          {
-            broker: 'mt5',
-            ticket: t.ticket,
-            profit: hist.profit,
-            reason: hist.reason,
-            closePrice: hist.price,
-          },
-        );
+        if (!this.reconcileFullCloseAtomically(t, hist)) {
+          await this.closeAndRecord(t, hist.price, hist.reason, hist.profit);
+          this.resolveReconciledLedger(
+            t.id,
+            ['CLOSE', 'CLOSE_AT_MARKET'],
+            {
+              broker: 'mt5',
+              ticket: t.ticket,
+              profit: hist.profit,
+              reason: hist.reason,
+              closePrice: hist.price,
+            },
+          );
+        }
       } else {
         // Handle partial close: volume reduced on broker side
         const brokerVolume = Number(live.volume);
@@ -186,20 +188,37 @@ export class Reconciler {
             ? Number(cumulative.profit)
             : Number.NaN;
 
+          let reconciledAtomically = false;
           if (Number.isFinite(cumulativeRealized)) {
-            this.db.raw()
-              .prepare(
-                'UPDATE trades SET volume=?, realizedProfit=? WHERE id=? AND status=\'open\'',
-              )
-              .run(
-                brokerVolume,
-                cumulativeRealized,
-                t.id!,
-              );
-          } else {
-            this.db.raw()
-              .prepare('UPDATE trades SET volume=? WHERE id=? AND status=\'open\'')
-              .run(brokerVolume, t.id!);
+            reconciledAtomically = this.reconcilePartialCloseAtomically(
+              t,
+              brokerVolume,
+              cumulativeRealized,
+              {
+                broker: 'mt5',
+                ticket: t.ticket,
+                closedVolume: volumeDelta,
+                remainingVolume: brokerVolume,
+                cumulativeRealizedProfit: cumulativeRealized,
+              },
+            );
+          }
+          if (!reconciledAtomically) {
+            if (Number.isFinite(cumulativeRealized)) {
+              this.db.raw()
+                .prepare(
+                  'UPDATE trades SET volume=?, realizedProfit=? WHERE id=? AND status=\'open\'',
+                )
+                .run(
+                  brokerVolume,
+                  cumulativeRealized,
+                  t.id!,
+                );
+            } else {
+              this.db.raw()
+                .prepare('UPDATE trades SET volume=? WHERE id=? AND status=\'open\'')
+                .run(brokerVolume, t.id!);
+            }
           }
 
           if (
@@ -270,6 +289,86 @@ export class Reconciler {
     } catch (e) {
       throw new Error(`MT5 history lookup failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  private reconcileFullCloseAtomically(
+    t: Trade,
+    hist: { price: number; profit: number; reason: string },
+  ): boolean {
+    const operation = t.id
+      ? this.db.getLatestUnresolvedExecutionForTrade(
+          t.id,
+          ['CLOSE', 'CLOSE_AT_MARKET'],
+        )
+      : null;
+    if (!operation || !t.id) return false;
+
+    const resolved = this.db.resolveReconciledFullClose(
+      t.id,
+      String(operation.executionId),
+      hist.profit,
+      Date.now(),
+      hist.reason,
+      {
+        broker: 'mt5',
+        ticket: t.ticket,
+        profit: hist.profit,
+        reason: hist.reason,
+        closePrice: hist.price,
+      },
+      t.ticket,
+    );
+    if (!resolved) return false;
+
+    this.recordReconciledClose(t, hist.price, hist.reason, hist.profit);
+    this.logger.info(
+      `[${operation.action}] atomically reconciled execution-ledger operation=${operation.operationKey}`,
+    );
+    return true;
+  }
+
+  private reconcilePartialCloseAtomically(
+    t: Trade,
+    brokerVolume: number,
+    cumulativeRealized: number,
+    result: Record<string, unknown>,
+  ): boolean {
+    const operation = t.id
+      ? this.db.getLatestUnresolvedExecutionForTrade(t.id, ['PARTIAL_CLOSE'])
+      : null;
+    if (!operation || !t.id) return false;
+
+    const resolved = this.db.resolveReconciledPartialClose(
+      t.id,
+      String(operation.executionId),
+      brokerVolume,
+      cumulativeRealized,
+      result,
+      t.ticket,
+    );
+    if (!resolved) return false;
+
+    this.logger.info(
+      `[${operation.action}] atomically reconciled execution-ledger operation=${operation.operationKey}`,
+    );
+    return true;
+  }
+
+  private recordReconciledClose(
+    t: Trade,
+    exitPrice: number,
+    exitReason: string,
+    profit: number,
+  ): void {
+    this.tracker.recordClose(profit);
+    const emoji = profit > 0 ? '💰' : '❌';
+    const pnlStr = `${profit > 0 ? '+' : ''}${profit.toFixed(2)}`;
+    this.telegram.sendMessage(
+      `${emoji} <b>Trade Closed</b>: ${t.symbol} ${t.side}\n` +
+      `P/L: <b>${pnlStr}</b> | Reason: ${exitReason}\n` +
+      `Entry: ${t.entry.toFixed(5)} → Exit: ${exitPrice.toFixed(5)}`,
+    ).catch(() => {});
+    this.onClose({ ...t, status: 'closed', profit, exitPrice });
   }
 
   private resolveReconciledLedger(
