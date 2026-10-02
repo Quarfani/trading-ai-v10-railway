@@ -487,6 +487,57 @@ async function main() {
     binanceRecoveryDb.raw().close();
   }
 
+  const binanceModifyDb = await newDb();
+  const binanceModifyTradeId = binanceModifyDb.insertTrade({
+    ticket: 602, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 1,
+    entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
+  });
+  binanceModifyDb.createExecutionLedger({
+    executionId: 'binance-startup-modify',
+    operationKey: 'binance-startup-modify-op',
+    action: 'MOVE_SL_TP',
+    status: 'UNKNOWN',
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    volume: 1,
+    request: { tradeId: binanceModifyTradeId, newSl: 95, newTp: 110 },
+  });
+
+  const originalModifyGetAllPositions = (BinanceExecutor.prototype as any).getAllPositions;
+  const originalModifyGetOpenOrders = (BinanceExecutor.prototype as any).getOpenOrders;
+  try {
+    (BinanceExecutor.prototype as any).getAllPositions = async () => [{
+      symbol: 'BTCUSDT',
+      positionAmt: 1,
+      entryPrice: 100,
+      unrealizedProfit: 0,
+    }];
+    (BinanceExecutor.prototype as any).getOpenOrders = async (symbol: string) => {
+      assert(symbol === 'BTCUSDT', 'startup protection recovery must use the trade symbol');
+      return [
+        { orderId: 9921, side: 'SELL', type: 'STOP_MARKET', stopPrice: '95' },
+        { orderId: 9922, side: 'SELL', type: 'TAKE_PROFIT_MARKET', stopPrice: '110' },
+      ];
+    };
+    await new StartupReconciler(
+      futuresCfg,
+      binanceModifyDb,
+      new TelegramBot(futuresCfg),
+    ).run();
+    assert(
+      binanceModifyDb.getExecutionByOperationKey('binance-startup-modify-op').status === 'EXECUTED',
+      'startup reconciliation must resolve verifiable Binance MOVE_SL_TP operations',
+    );
+    assert(
+      binanceModifyDb.getOpenTrades().length === 1,
+      'resolving Binance MOVE_SL_TP must keep the broker-backed trade open',
+    );
+  } finally {
+    (BinanceExecutor.prototype as any).getAllPositions = originalModifyGetAllPositions;
+    (BinanceExecutor.prototype as any).getOpenOrders = originalModifyGetOpenOrders;
+    binanceModifyDb.raw().close();
+  }
+
   const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
   const originalPing = (BinanceExecutor.prototype as any).ping;
   const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
