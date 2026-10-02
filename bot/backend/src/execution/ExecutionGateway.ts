@@ -128,11 +128,13 @@ export class ExecutionGateway {
       }
       if (!trade) throw new Error('No trade returned');
 
-      const id = this.db.insertTrade({ ...trade, timeframe, account: this.config.accountName ?? 'default' });
+      const id = this.db.persistExecutedOpenTrade(
+        { ...trade, timeframe, account: this.config.accountName ?? 'default' },
+        executionId,
+        trade.ticket,
+        trade,
+      );
       trade.id = id;
-      this.db.updateExecutionLedger(executionId, {
-        status: 'EXECUTED', brokerOrderId: trade.ticket, result: trade, retryCount: 0,
-      });
       this.db.saveExecutionEvent({
         executionId, operationKey, symbol: signal.symbol, side: signal.side,
         action: 'OPEN', quantity: volume, price: trade.entry, status: 'EXECUTED',
