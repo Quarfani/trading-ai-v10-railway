@@ -109,18 +109,18 @@ export class CircuitBreaker {
       const raw = this.stateStore.getSetting(this.stateKey);
       if (!raw) return;
       const state = JSON.parse(raw);
+      const consecutiveLosses = Number(state?.consecutiveLosses);
+      const trippedUntil = Number(state?.trippedUntil);
       if (
-        Number.isFinite(Number(state?.consecutiveLosses)) &&
-        Number(state.consecutiveLosses) >= 0
+        !Number.isFinite(consecutiveLosses) ||
+        consecutiveLosses < 0 ||
+        !Number.isFinite(trippedUntil) ||
+        trippedUntil < 0
       ) {
-        this.consecutiveLosses = Math.floor(Number(state.consecutiveLosses));
+        throw new Error('Persisted circuit breaker state has invalid fields');
       }
-      if (
-        Number.isFinite(Number(state?.trippedUntil)) &&
-        Number(state.trippedUntil) >= 0
-      ) {
-        this.trippedUntil = Number(state.trippedUntil);
-      }
+      this.consecutiveLosses = Math.floor(consecutiveLosses);
+      this.trippedUntil = trippedUntil;
     } catch {
       this.stateCorrupt = true;
       this.logger.error('Circuit breaker persisted state is corrupt — trading blocked');
@@ -138,8 +138,11 @@ export class CircuitBreaker {
           updatedAt: Date.now(),
         }),
       );
-    } catch {
-      // Non-persistence must not throw out of the trading pipeline.
+    } catch (e) {
+      this.stateCorrupt = true;
+      this.logger.error(
+        `Circuit breaker state persistence failed — trading blocked: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
 }
