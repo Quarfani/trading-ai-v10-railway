@@ -473,6 +473,25 @@ class TestModelServer:
         assert len(server._outcomes["TEST/1h"]) == 2
         assert server._outcomes["TEST/1h"][0]["correct"] is True
         assert server._outcomes["TEST/1h"][1]["correct"] is False
+
+    def test_record_prediction_outcome_rejects_conflicting_duplicate(self):
+        from src.serving.model_server import ModelServer
+
+        server = ModelServer()
+        server._outcomes["TEST/1h"] = []
+
+        assert server.record_prediction_outcome(
+            "TEST", "1h", "same-id", 1, 1, 10.0
+        ) is True
+        assert server.record_prediction_outcome(
+            "TEST", "1h", "same-id", 1, 1, 10.0
+        ) is True
+        assert server.record_prediction_outcome(
+            "TEST", "1h", "same-id", 1, -1, 10.0
+        ) is False
+        assert len(server._outcomes["TEST/1h"]) == 1
+
+
 class TestTrainingReport:
 
     def test_report_to_json(self, tmp_path):
