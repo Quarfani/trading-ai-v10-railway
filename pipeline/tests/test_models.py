@@ -174,6 +174,56 @@ class TestXGBoostModel:
 
         np.testing.assert_allclose(proba1, proba2, atol=1e-5)
 
+    def test_load_rejects_missing_scaler(self, tmp_path):
+        try:
+            import xgboost
+        except ImportError:
+            pytest.skip("xgboost not installed")
+
+        from src.models.xgboost_model import XGBoostModel
+
+        X_train, y_train = make_xy(200)
+        X_val, y_val = make_xy(50)
+
+        model = XGBoostModel("TEST", "1h")
+        model.model_dir = tmp_path / "xgb_missing_scaler"
+        model.model_dir.mkdir(parents=True)
+        model.params["n_estimators"] = 20
+        model.train(X_train, y_train, X_val, y_val)
+
+        (model.model_dir / "scaler.pkl").unlink()
+
+        reloaded = XGBoostModel("TEST", "1h")
+        reloaded.model_dir = model.model_dir
+        assert not reloaded.load()
+
+    def test_load_rejects_checksum_corruption(self, tmp_path):
+        try:
+            import xgboost
+        except ImportError:
+            pytest.skip("xgboost not installed")
+
+        from src.models.xgboost_model import XGBoostModel
+
+        X_train, y_train = make_xy(200)
+        X_val, y_val = make_xy(50)
+
+        model = XGBoostModel("TEST", "1h")
+        model.model_dir = tmp_path / "xgb_corrupt_meta"
+        model.model_dir.mkdir(parents=True)
+        model.params["n_estimators"] = 20
+        model.train(X_train, y_train, X_val, y_val)
+
+        import json
+        meta_path = model.model_dir / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["checksum"] = "000000000000"
+        meta_path.write_text(json.dumps(meta))
+
+        reloaded = XGBoostModel("TEST", "1h")
+        reloaded.model_dir = model.model_dir
+        assert not reloaded.load()
+
     def test_evaluate_returns_correct_structure(self, tmp_path):
         try:
             import xgboost
