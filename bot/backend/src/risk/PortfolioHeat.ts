@@ -63,10 +63,38 @@ export class PortfolioHeat {
     newSymbol: string,
     equity: number,
     prices: Record<string, number> = {},
-  newTimeframe: Timeframe = 'H1',
+    newTimeframe: Timeframe = 'H1',
   ): HeatResult {
     const maxHeat = this.config.maxPortfolioHeat ?? 0.06;
     const accountCurrency = this.config.accountCurrency ?? 'USD';
+
+    if (!Number.isFinite(maxHeat) || maxHeat <= 0) {
+      return {
+        allowed: false,
+        currentHeat: 0,
+        maxHeat: Number.isFinite(maxHeat) ? maxHeat : 0,
+        addedRisk: 0,
+        reason: 'MAX_PORTFOLIO_HEAT must be a finite positive number',
+      };
+    }
+
+    if (
+      !Number.isFinite(newVolume) ||
+      newVolume <= 0 ||
+      !Number.isFinite(newEntry) ||
+      newEntry <= 0 ||
+      !Number.isFinite(newSL) ||
+      newSL <= 0 ||
+      !newSymbol?.trim()
+    ) {
+      return {
+        allowed: false,
+        currentHeat: 0,
+        maxHeat,
+        addedRisk: 0,
+        reason: 'Invalid proposed position for portfolio heat',
+      };
+    }
 
     if (!Number.isFinite(equity) || equity <= 0) {
       return {
