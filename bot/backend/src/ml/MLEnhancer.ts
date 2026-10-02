@@ -179,6 +179,65 @@ export class MLEnhancer {
     }
   }
 
+  private async replayRecentOutcomes(): Promise<void> {
+    if (!this.enabled || !this.available) return;
+
+    const since = Date.now() - 7 * 24 * 3_600_000;
+    const recent = this.db.getRecentModelOutcomes(500, since);
+
+    for (const row of recent) {
+      const predictionId = String(row.predictionId ?? '').trim();
+      const symbol = String(row.symbol ?? '').trim().toUpperCase();
+      const timeframe = String(row.timeframe ?? '').trim();
+      const profit = Number(row.outcomeProfit);
+      const predictedSignal = Number(row.predictedLabel);
+      const actualLabel = Number(row.outcomeLabel);
+
+      if (
+        !predictionId ||
+        !symbol ||
+        !timeframe ||
+        !Number.isFinite(profit) ||
+        ![-1, 0, 1].includes(predictedSignal) ||
+        ![-1, 0, 1].includes(actualLabel)
+      ) {
+        continue;
+      }
+
+      try {
+        const response = await axios.post(
+          `${this.url}/record_trade`,
+          {
+            symbol,
+            timeframe,
+            profit,
+            signal: actualLabel,
+            actual_label: actualLabel,
+            predicted_signal: predictedSignal,
+            prediction_id: predictionId,
+          },
+          {
+            timeout: 2_000,
+            headers: this.apiKey
+              ? { Authorization: `Bearer ${this.apiKey}` }
+              : {},
+          },
+        );
+
+        if (response.data?.ok !== true) {
+          throw new Error(
+            `ML server rejected replay: ${JSON.stringify(response.data)}`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(
+          `ML outcome replay stopped at ${predictionId}: ${e?.message ?? e}`,
+        );
+        break;
+      }
+    }
+  }
+
   private async flushPendingOutcomes(): Promise<void> {
     if (
       !this.enabled ||
@@ -263,6 +322,7 @@ export class MLEnhancer {
       });
       this.available = r.data?.ok === true;
       if (this.available) {
+        void this.replayRecentOutcomes();
         void this.flushPendingOutcomes();
       }
     } catch {
