@@ -59,6 +59,19 @@ async function main() {
     paperDb.updateTradeClose(tradeId, 40, Date.now(), 'MANUAL'),
     'paper test trade must close and contribute to daily stats',
   );
+  const disabledConfig = {
+    mode: 'paper',
+    accountName: 'disabled-target',
+    accountCurrency: 'USD',
+    accountBalance: 1_000,
+    dailyProfitTarget: 0,
+  } as any;
+  const disabledTarget = new DailyProfitTarget(disabledConfig, paperDb, telegram);
+  assert(
+    !disabledTarget.reached(),
+    'zero daily profit target must disable the profit-target gate',
+  );
+
   const paperTarget = new DailyProfitTarget(paperConfig, paperDb, telegram);
   assert(
     paperTarget.reached(),
