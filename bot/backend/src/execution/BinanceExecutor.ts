@@ -127,6 +127,23 @@ export class BinanceExecutor {
   }
 
 
+  async recoverOperation(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{
+    orderId: number;
+    status: string;
+    executedQty: number;
+    avgPrice: number;
+    realizedProfit: number | null;
+    realizedProfitCurrency: string | null;
+  } | null> {
+    return this.recoverOrderByClientId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+    );
+  }
+
   async recoverOrderByClientId(
     symbol: string,
     clientOrderId: string,
@@ -173,6 +190,11 @@ export class BinanceExecutor {
       );
       return null;
     }
+  }
+
+  private makeClientOrderId(operationKey: string): string {
+    const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
+    return `ta_${digest}`.slice(0, 36);
   }
 
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
