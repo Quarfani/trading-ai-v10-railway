@@ -59,6 +59,25 @@ async function main() {
     paperDb.updateTradeClose(tradeId, 40, Date.now(), 'MANUAL'),
     'paper test trade must close and contribute to daily stats',
   );
+  const corruptedDb = new DatabaseManager(':memory:');
+  await corruptedDb.initialize();
+  const corruptedKey = 'daily_start_equity:corrupted:' + new Date().toISOString().slice(0, 10);
+  corruptedDb.setSetting(corruptedKey, 'not-a-number');
+  const corruptedTarget = new DailyProfitTarget(
+    { ...liveConfig, accountName: 'corrupted' },
+    corruptedDb,
+    telegram,
+  );
+  assert(
+    corruptedTarget.reached(2000),
+    'corrupt live daily equity anchor must fail closed as target reached',
+  );
+  assert(
+    corruptedDb.getSetting(corruptedKey) === 'not-a-number',
+    'corrupt daily equity anchor must not be overwritten',
+  );
+  corruptedDb.raw().close();
+
   const disabledConfig = {
     mode: 'paper',
     accountName: 'disabled-target',
@@ -80,7 +99,7 @@ async function main() {
 
   db.raw().close();
   paperDb.raw().close();
-  console.log('Result: 5 passed, 0 failed');
+  console.log('Result: 7 passed, 0 failed');
 }
 
 main().catch(error => {
