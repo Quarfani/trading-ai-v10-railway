@@ -130,6 +130,29 @@ class ModelServer:
 
             result = model.predict(X)
 
+            probabilities = (
+                float(result.buy_prob),
+                float(result.sell_prob),
+                float(result.hold_prob),
+            )
+            if (
+                not all(np.isfinite(p) and 0.0 <= p <= 1.0 for p in probabilities) or
+                not np.isfinite(float(result.confidence)) or
+                not 0.0 <= float(result.confidence) <= 1.0 or
+                result.label not in (-1, 0, 1)
+            ):
+                logger.error(
+                    f"Predict returned invalid probabilities for {symbol}/{timeframe}"
+                )
+                return None
+
+            prob_sum = sum(probabilities)
+            if abs(prob_sum - 1.0) > 0.02:
+                logger.error(
+                    f"Predict probabilities are not normalized for {symbol}/{timeframe}: sum={prob_sum:.6f}"
+                )
+                return None
+
             # Apply confidence floor
             if result.confidence < self.min_confidence:
                 return None
@@ -176,7 +199,16 @@ class ModelServer:
             return
 
         # Convert profit to label
-        label = self._profit_to_label(profit, signal)
+        profit_value = float(profit)
+        if not np.isfinite(profit_value):
+            logger.error(f"Rejected non-finite online-learning profit for {symbol}/{timeframe}")
+            return
+
+        if signal not in (-1, 0, 1):
+            logger.error(f"Rejected invalid online-learning signal for {symbol}/{timeframe}: {signal}")
+            return
+
+        label = self._profit_to_label(profit_value, signal)
 
         with self._lock:
             self._buffers[key].append({
