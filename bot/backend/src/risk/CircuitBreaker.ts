@@ -14,6 +14,7 @@ export class CircuitBreaker {
   private logger = new Logger('CircuitBreaker');
   private consecutiveLosses = 0;
   private trippedUntil = 0;
+  private stateCorrupt = false;
   private readonly stateKey: string;
 
   constructor(
@@ -29,6 +30,11 @@ export class CircuitBreaker {
   }
 
   recordResult(profit: number) {
+    if (!Number.isFinite(profit)) {
+      this.stateCorrupt = true;
+      this.logger.error('Non-finite circuit-breaker PnL — trading blocked');
+      return;
+    }
     if (profit > 0) {
       if (this.consecutiveLosses) this.logger.info(`Win — streak reset (was ${this.consecutiveLosses})`);
       this.consecutiveLosses = 0;
@@ -57,6 +63,17 @@ export class CircuitBreaker {
   }
 
   canTrade(): boolean {
+    if (
+      !Number.isInteger(this.maxConsecutiveLosses) ||
+      this.maxConsecutiveLosses <= 0 ||
+      !Number.isFinite(this.cooldownMs) ||
+      this.cooldownMs < 0 ||
+      this.stateCorrupt
+    ) {
+      this.logger.error('Circuit breaker state/config invalid — trading blocked');
+      return false;
+    }
+
     if (Date.now() >= this.trippedUntil) {
       if (this.trippedUntil > 0) {
         this.logger.info('Cooldown ended — resuming trading');
@@ -105,8 +122,8 @@ export class CircuitBreaker {
         this.trippedUntil = Number(state.trippedUntil);
       }
     } catch {
-      // Fail closed at canTrade() only when a valid persisted trip exists;
-      // corrupt state must not fabricate an active circuit.
+      this.stateCorrupt = true;
+      this.logger.error('Circuit breaker persisted state is corrupt — trading blocked');
     }
   }
 
