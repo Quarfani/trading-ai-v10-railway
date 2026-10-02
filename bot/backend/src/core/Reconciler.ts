@@ -555,37 +555,55 @@ export class Reconciler {
       return false;
     }
 
-    const openOrders = await this.exec.getBinanceOpenOrders(t.symbol);
-    const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
-    const matching = openOrders.filter(
-      (order: any) => String(order.side).toUpperCase() === closeSide,
+    const recovered = await this.exec.recoverBinanceProtection(
+      t.symbol,
+      String(operation.operationKey),
     );
+    const slOrder = recovered?.sl;
+    const tpOrder = recovered?.tp;
+    if (!slOrder || !tpOrder) return false;
+
+    const slStatus = String(slOrder.status ?? '').toUpperCase();
+    const tpStatus = String(tpOrder.status ?? '').toUpperCase();
+    if (
+      (slStatus && slStatus !== 'NEW') ||
+      (tpStatus && tpStatus !== 'NEW')
+    ) {
+      return false;
+    }
+
+    const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
+    if (
+      String(slOrder.side ?? '').toUpperCase() !== closeSide ||
+      String(tpOrder.side ?? '').toUpperCase() !== closeSide
+    ) {
+      return false;
+    }
+
     const priceTolerance = (target: number) =>
       Math.max(1e-8, Math.abs(target) * 1e-6);
+    const slType = String(slOrder.type ?? '').toUpperCase();
+    const tpType = String(tpOrder.type ?? '').toUpperCase();
+    const slStop = Number(slOrder.stopPrice);
+    const tpStop = Number(tpOrder.stopPrice);
+    const tpPrice = Number(tpOrder.price);
 
-    const slOrder = matching.find((order: any) => {
-      const type = String(order.type ?? '').toUpperCase();
-      const stopPrice = Number(order.stopPrice);
-      return (
-        /STOP_MARKET|STOP_LOSS/.test(type) &&
-        Number.isFinite(stopPrice) &&
-        Math.abs(stopPrice - newSl) <= priceTolerance(newSl)
-      );
-    });
-    const tpOrder = matching.find((order: any) => {
-      const type = String(order.type ?? '').toUpperCase();
-      const stopPrice = Number(order.stopPrice);
-      const price = Number(order.price);
-      return (
-        /TAKE_PROFIT_MARKET|TAKE_PROFIT/.test(type) &&
-        (
-          (Number.isFinite(stopPrice) && Math.abs(stopPrice - newTp) <= priceTolerance(newTp)) ||
-          (Number.isFinite(price) && Math.abs(price - newTp) <= priceTolerance(newTp))
-        )
-      );
-    });
-
-    if (!slOrder || !tpOrder) return false;
+    if (
+      !/STOP_MARKET|STOP_LOSS/.test(slType) ||
+      !Number.isFinite(slStop) ||
+      Math.abs(slStop - newSl) > priceTolerance(newSl)
+    ) {
+      return false;
+    }
+    if (
+      !/TAKE_PROFIT_MARKET|TAKE_PROFIT/.test(tpType) ||
+      !(
+        (Number.isFinite(tpStop) && Math.abs(tpStop - newTp) <= priceTolerance(newTp)) ||
+        (Number.isFinite(tpPrice) && Math.abs(tpPrice - newTp) <= priceTolerance(newTp))
+      )
+    ) {
+      return false;
+    }
 
     const resolved = this.db.resolveExecutionLedger(
       String(operation.executionId),
