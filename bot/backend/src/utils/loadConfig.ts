@@ -260,6 +260,24 @@ export function loadConfig(): SystemConfig {
     0.05,
     10,
   );
+  const maxSymbolExposure =
+    process.env.MAX_SYMBOL_EXPOSURE == null
+      ? undefined
+      : validateRange(
+          'MAX_SYMBOL_EXPOSURE',
+          num('MAX_SYMBOL_EXPOSURE', 0),
+          0.01,
+          10,
+        );
+  const maxCorrelatedExposure =
+    process.env.MAX_CORRELATED_EXPOSURE == null
+      ? undefined
+      : validateRange(
+          'MAX_CORRELATED_EXPOSURE',
+          num('MAX_CORRELATED_EXPOSURE', 0),
+          0.01,
+          10,
+        );
   const minConfidence = validateRange(
     'MIN_CONFIDENCE',
     num('MIN_CONFIDENCE', 0.55),
@@ -632,6 +650,8 @@ export function loadConfig(): SystemConfig {
     maxDrawdown,
     maxLeverage,
     maxExposure,
+    maxSymbolExposure,
+    maxCorrelatedExposure,
     mlRequired,
     minRR,
     maxSlippagePips,
