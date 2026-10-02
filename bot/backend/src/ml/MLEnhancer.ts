@@ -73,8 +73,14 @@ export class MLEnhancer {
         String(ml.prediction_id ?? '').trim() ||
         crypto.randomUUID();
 
+      const predictedLabel: -1 | 0 | 1 =
+        ml.signal === 'BUY' ? 1 :
+        ml.signal === 'SELL' ? -1 : 0;
+
       this.recordDecision({
         predictionId,
+        timeframe: tf,
+        predictedLabel,
         symbol: signal.symbol, modelName: ml.model, modelVersion: ml.model_version ?? '',
         promptVersion: ml.prompt_version ?? '', inputHash, output: ml, latencyMs: Date.now() - started,
         decision: ml.signal,
@@ -164,14 +170,32 @@ export class MLEnhancer {
 
   private recordDecision(d: {
     predictionId: string;
+    timeframe: string;
+    predictedLabel: -1 | 0 | 1;
     symbol: string; modelName: string; modelVersion: string; promptVersion: string;
     inputHash: string; output: unknown; latencyMs: number; decision: string;
   }) {
     try {
       this.db.raw().prepare(`
-        INSERT INTO model_decisions(predictionId,modelName,modelVersion,promptVersion,inputHash,output,latencyMs,decision,symbol,timestamp)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
-      `).run(d.predictionId, d.modelName, d.modelVersion, d.promptVersion, d.inputHash, JSON.stringify(d.output), d.latencyMs, d.decision, d.symbol, Date.now());
+        INSERT INTO model_decisions(
+          predictionId,modelName,modelVersion,promptVersion,inputHash,output,
+          latencyMs,decision,symbol,timestamp,timeframe,predictedLabel
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        d.predictionId,
+        d.modelName,
+        d.modelVersion,
+        d.promptVersion,
+        d.inputHash,
+        JSON.stringify(d.output),
+        d.latencyMs,
+        d.decision,
+        d.symbol,
+        Date.now(),
+        d.timeframe,
+        d.predictedLabel,
+      );
     } catch (e) {
       // A model audit write is important, but a transient DB issue must still not
       // silently permit a required-ML trade.
