@@ -3,86 +3,159 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 684072ca4c65a56bd88a0b8a503670d7612cdbbc
-Current validated checkpoint: CI #549 passed for commit c1eb40fc08c3624691b06f3533fe43ff7e924410 (latest known green; post-checkpoint changes are unverified until CI is available)
+Current head: 984f0a5b0975cf2a4cdcce55081b5dc80c46df1d
+Current verified status: The code changes in this development line have NOT been validated by a green GitHub Actions run. GitHub Actions capacity is exhausted, so do not burn minutes on blind reruns.
 
 ## TARGET
-Adaptive Quantitative Trading Decision System
-Crypto + Forex + Gold + Oil
-M1/M5/M15/M30/H1/H4/D1
-Unified market/contract/timeframe model with explicit broker economics, currency conversion, OOS/WFO evidence, promotion gates, execution/reconciliation safety.
+Adaptive quantitative trading decision system for Crypto + Forex + Gold + Oil with:
+- canonical market/broker contract identity
+- explicit contract economics and account-currency conversion
+- OOS/WFO evidence and promotion gates
+- deterministic execution idempotency
+- broker-authoritative reconciliation
+- fail-closed risk/data/execution gates
+- restart-safe emergency controls
+- ML prediction/training integrity
 
-## RECENTLY COMPLETED
-- Broker-confirmed MT5 contract registry now preserves the exact broker symbol spelling/case.
-- SymbolValidator enriches MT5 contracts and returns the broker's exact runtime symbol.
-- PositionSizer and KellyPositionSizer consume broker-confirmed contract economics instead of stale static values on the live path.
-- Static MarketCatalog economics are timeframe-aware.
-- Broker-declared supported timeframes are propagated to MarketDefinition and blocked before signal computation/sizing.
-- MT5 execution routes through the exact brokerSymbol.
-- MT5 bridge open endpoint is aligned to /trade.
-- MT5 bridge contract payload now exposes trade permissions, tick economics, volume limits, stop/freeze levels and margin metadata.
-- Broker trade mode is respected by PositionSizer for BUY/SELL opening gates.
-- CurrencyConversionProvider preserves exact broker suffixes during FX conversion lookup.
-- MT5 broker-contract refresh runs every 6 hours; expired metadata fails closed.
-- Existing WFO/Monte Carlo/evidence-promotion work remains intact.
-- Startup reconciliation and execution-ledger safety remain in force.
+## RESOURCE CONSTRAINTS
+- GitHub Actions quota is exhausted for the current billing cycle. Avoid workflow reruns unless capacity is restored.
+- A direct container clone attempt failed at the container DNS layer while GitHub integration remained operational. This is a tool/runtime limitation, not evidence that the user's internet is down.
+- Continue development through GitHub static/code-level changes until runnable local/CI validation is available.
 
-## VERIFIED
-- CI #523 for commit 1879743a73ea051e8608096f58d298d5fda9f4fb passed backend/frontend/python.
-- CI #524 for commit 110e973d45383faf226bca128d4f203aa0780747 passed backend/frontend but exposed a Python simulation-path regression; it is fixed in the reconciliation hardening line.
-- Reconciliation hardening includes authoritative MT5 close-state gating, stable idempotency persistence, simulation replay protection, and atomic execution-ledger operation claims.
-- The current main/branch SHA must be checked before claiming any later CI run is green.
+## COMPLETED IN CURRENT DEVELOPMENT LINE
 
-## IMPORTANT ARCHITECTURE
-Market identity flow:
-MT5 symbol_info -> /contract -> SymbolValidator -> BrokerContractRegistry -> MarketCatalog/MarketDefinition -> PositionSizer/Kelly -> ExecutionGateway.
+### Execution ledger / atomic persistence
+- Added execution_ledger.tradeId in migration v15 with an index on (tradeId,status,updatedAt).
+- createExecutionLedger extracts request.tradeId into the indexed column while retaining requestJson compatibility for legacy rows.
+- Reconciliation lookup prefers indexed tradeId and falls back to parsing pre-v15 requestJson.
+- OPEN persistence is now atomic: local trade insertion and execution-ledger EXECUTED transition occur in one transaction.
+- Atomic OPEN result now persists the local trade id so idempotent replay after restart returns a complete Trade identity.
+- Full close, partial close, and SL/TP reconciliation have atomic DatabaseManager helpers.
+- Terminal execution-ledger states remain one-way; ambiguous broker operations stay UNKNOWN and are never auto-retried.
+- Added rollback coverage for atomic OPEN and SL/TP settlement.
 
-The exact broker symbol is authoritative for runtime broker calls. Canonical symbol normalization is used only for internal identity/classification.
+### Binance execution / recovery
+- Full and partial closes use deterministic clientOrderId values derived from execution operation keys.
+- Binance clientOrderId generation is constrained to the documented <=32-character format and allowed character set.
+- ExecutionGateway and BinanceExecutor now use the SAME clientOrderId derivation so recovery searches for the exact identifier that was submitted.
+- Binance close/partial-close require FILLED status and expected executed quantity.
+- Full and partial closes verify broker post-close position state; unavailable position state is ambiguous and fails closed.
+- Binance full close requires authoritative realized PnL from broker fill history.
+- Futures PnL recovery uses userTrades and can recover a weighted average fill price when order avgPrice is missing/zero.
+- Binance close recovery matches operationKey -> clientOrderId -> exact broker order -> FILLED status -> quantity -> position state -> authoritative PnL.
+- Startup reconciliation attempts exact recovery for CLOSE, CLOSE_AT_MARKET and PARTIAL_CLOSE.
+- Binance protective SL/TP orders receive deterministic clientOrderIds derived from the MOVE_SL_TP/entry operation identity.
+- Runtime MOVE_SL_TP recovery uses exact protective-order identity, validates status/side/type/price, and atomically updates trades.sl/tp plus the execution ledger.
+- Binance protective-order state is continuously verified for open positions; missing/mismatched protection blocks further reconciliation/trading.
+- Binance modify/close now recovers broker-visible protective order ids even after process restart instead of trusting the in-memory orderMap only.
+- Cancellation uses the union of tracked and broker-visible protection ids and verifies they are gone before continuing.
+- Entry-protection failure emergency close now uses a deterministic operation-derived client id and verifies the final position is actually flat.
+- Binance close no longer treats getPosition()==null as a successful zero-position result.
 
-## CURRENT RISKS / GAPS
-1. Full non-USD live broker E2E still needs real broker credentials/network evidence.
-2. Paper and backtest cost engines remain separate; economic equivalence is not proven across all asset classes.
-3. Tick metadata is captured, but sizing remains primarily contract-size + explicit FX conversion.
-4. Long paper/testnet/cloud soak evidence is still outstanding.
-5. Strategy lifecycle evidence, WFO calibration evidence, and Monte Carlo evidence remain separate domains.
-6. Deployment docs/reference profiles need another consistency pass after broker-contract hardening.
-7. Real-runtime broker-contract refresh/expiry behavior still needs soak evidence.
-8. Full reconciliation under broker/network interruption needs runtime evidence; code now fails closed on ambiguous closure, duplicate operation claims, corrupt persisted execution results, and conflicting partial position/history state.
+### MT5 bridge / reconciliation
+- MT5 bridge returns 503 for broker query failures instead of converting None into empty positions/history.
+- /trade verifies authoritative post-entry broker position state, symbol/side, and SL/TP; malformed result becomes UNKNOWN.
+- /close verifies post-close position state and authoritative deal history; residual or unavailable state becomes UNKNOWN.
+- /modify verifies final broker SL/TP after DONE; mismatch/unavailable state becomes UNKNOWN.
+- MT5 idempotency now binds each key to a canonical request fingerprint and rejects reuse for a different request with HTTP 409.
+- Legacy MT5Bridge client now passes idempotency keys and treats non-authoritative responses as failure.
+- Runtime and startup MT5 reconciliation recover verifiable MOVE_SL_TP operations atomically.
+- Runtime MT5 protective-order drift blocks silently accepting unexplained broker SL/TP changes.
 
-## NEXT TASK
-1. When GitHub Actions capacity/log access is restored, run the focused backend integration test and verify the current main head.
-2. Until then, continue static/code-level hardening only; do not burn Actions minutes on blind reruns.
-3. Next high-value area: harden Binance protective-order creation/replacement recovery and MOVE_SL_TP restart semantics.
-4. Preserve UNKNOWN execution states and never auto-retry ambiguous broker operations.
+### Risk / capital protection
+- Added centralized validateRiskConfiguration() fail-closed checks for malformed risk settings.
+- PositionSizer and KellyPositionSizer reject non-finite/invalid inputs and prevent minimum-volume rounding from exceeding the calculated risk budget.
+- Kelly non-positive edge now returns zero size instead of forcing broker minimum volume.
+- ExposureGuard fails closed on invalid equity, prices, conversion, exposure, or leverage inputs.
+- PortfolioHeat fails closed on invalid configuration/proposed-position inputs.
+- DailyLossGuard uses start-of-day equity for live account checks and fails closed when the anchor is unavailable.
+- DailyProfitTarget uses the same live start-of-day equity concept; zero target is treated as explicitly disabled; invalid target blocks in the standalone guard.
+- DrawdownScaler fails closed on invalid current equity and invalid persisted peak state.
+- CircuitBreaker validates persisted state, blocks on non-finite PnL, and blocks immediately when persistence fails.
+- Fixed circuit-breaker cooldown expiry edge case: a state-save failure can no longer allow one additional trade cycle.
+- SessionFilter rejects invalid/future timestamps, applies weekend closure to FX/Metals, keeps Crypto 24/7, and uses unified USDT/USDC crypto detection including synthetic symbols such as 1000PEPEUSDT.
+- SpreadFilter rejects invalid/crossed quotes.
+- CorrelationFilter rejects invalid/zero-variance live correlation data instead of silently treating it as zero correlation.
+- NewsFilter is fail-closed when the economic calendar is stale, malformed, or timestamp-invalid.
+- StaleDataGuard and DataQualityGate reject future/invalid timestamps.
+- RiskManager validates signal symbol/side/confidence/timestamp/prices before R:R or downstream sizing.
 
-## STOP/RESUME
-1. Read this file and verify current main SHA.
-2. Check the latest CI run for the current head.
-3. Never overwrite unresolved execution-ledger entries automatically.
-4. Keep one concrete NEXT TASK only.
+### Emergency controls
+- TradingEngine exposes explicit activateEmergencyStop/deactivateEmergencyStop APIs.
+- Telegram /emergency now calls the real emergency-stop state instead of a non-existent function.
+- Added /emergency_off for authorized manual resume.
+- Manual emergency stop persists in DB across process restarts and is restored before engine.start().
+- /status exposes emergency-stop state.
+- EmergencyStop documentation now matches actual behavior: it halts new entries and leaves existing protective orders untouched.
 
-## CURRENT MAIN CI STATUS
-- Main HEAD: caf0d9f46b61aeef66c01d8c44a4c35a6b019d27
-- Latest successful main CI: #549 (c1eb40fc08c3624691b06f3533fe43ff7e924410)
-- Main CI #550 and #551 completed as failures. Both runs finished within seconds and their job step summaries/log blobs are currently unavailable through the GitHub integration, so the exact failure cause is not verified.
-- Do not burn Actions minutes on blind reruns. First establish whether this is an Actions/billing/runner-level block; GitHub Free includes 2,000 Actions minutes/month and usage can be blocked after quota exhaustion when no valid payment method/budget is available.
+### ML integrity
+- TypeScript MLTrainingPipeline now uses chronological train/test splitting instead of random mixing.
+- TypeScript ML performance features symbolWR/sourceWR are computed as-of each trade timestamp rather than using future outcomes.
+- Invalid TypeScript ML training rows are filtered.
+- Persisted TypeScript trees are fully stored and structurally validated on load.
+- TypeScript ML predict returns neutral output on invalid feature/probability state.
+- Production Python ModelServer validates prediction probabilities/confidence/label ranges and normalization.
+- Production Python online-learning path rejects non-finite profit and invalid signal labels.
+- Disabled false “model degradation” auto-retraining based on realized win-rate because the server did not store the model prediction needed to compute true prediction accuracy.
+- ML API validates candle shape, finite OHLCV values, monotonic timestamps, OHLC geometry, and no future timestamps.
+- ML API validates record_trade symbol/timeframe/profit/signal.
+- Node MLEnhancer/MLClient validate ML output ranges before using it.
+- Training pipeline already uses time-based train/val/test splitting with purge/embargo.
+- Deployment recommendation now includes a majority-class baseline check so class-imbalanced accuracy cannot alone justify deployment.
 
-## LAST DEVELOPMENT SESSION (2026-10-02)
-- Added migration v15: execution_ledger.tradeId plus index (tradeId,status,updatedAt).
-- createExecutionLedger now extracts request.tradeId into the indexed column while retaining requestJson compatibility.
-- Reconciliation lookup uses the indexed tradeId first and falls back only for pre-v15 rows.
-- Added integration assertion that tradeId is persisted.
-- Fixed a migration syntax typo before stopping.
-- Added atomic MT5 full-close reconciliation using DatabaseManager.resolveReconciledFullClose(), so broker-confirmed trade settlement and UNKNOWN-ledger resolution commit in one DB transaction.
-- Added atomic MT5 partial-close reconciliation using DatabaseManager.resolveReconciledPartialClose().
-- Preserved duplicate-operation safety: atomic partial reconciliation resolves only the selected UNKNOWN operation and deliberately leaves additional unresolved duplicate operations blocked.
-- Added reconciled-close side effects only after the atomic DB transaction succeeds.
-- Binance close and partial-close now carry deterministic clientOrderId values derived from the execution operation key.
-- Binance execution recovery can locate the exact broker order by clientOrderId and verify authoritative realized PnL from userTrades before reconciliation.
-- Binance full/partial reconciliation now resolves UNKNOWN operations only after exact order identity, FILLED status, quantity, position state, and authoritative PnL all match.
-- Binance Spot closes now fail closed when authoritative realized PnL is unavailable instead of marking the local operation EXECUTED with unknown economics.
-- Binance full/partial close broker calls now require FILLED status, expected executed quantity, and verified post-close position state before returning success.
-- Binance startup reconciliation now attempts exact-operation recovery for CLOSE/CLOSE_AT_MARKET/PARTIAL_CLOSE ledgers before evaluating open-trade consistency.
-- Added Binance reconciliation safety integration coverage plus clientOrderId forwarding assertions.
-- New commits in this session: 824e5c4d6ff3d007a9bc2430131d5bb3b0aa0555, 694753de3b53c348eb14f10af14f75aeeb97a623, 324aa1a3373709a6aebe03ffa45c75852b0b5da0, 35e2e41926fa89f39ee7aae21c048de38563673c, b1c44b4b0a97fdad7d5b76471abacf127f3baaef, f83dca05abb08ddb52084bb5b3f80c4b102cc576, f9bfbdaef70d9cf1fd712b73e43268e3c8750451, 5967fd7652c3ed52f2e547b97c780ccfa7d26369, ac910305bddbeecf65efadc689a0a41feae6d345, 31c771ed1032e1bffdc8a46aaec3a941b3557ba2, 25b1bab62e17566c9fe91a17cf826180bca1a76f, 8b2c289b70d31bc1424ecdc5a7eff25327d44494, 104b7d5e8ffaaafcd2e7092b400abad4476b6429, 4bc4d606f0b3b9df6b997d5845aea9dc7580d465, 71859127ae0757877610f1b072838f64ce478fc5, 62bf04f167c8db0f5aae058e0bff096e39c1077c, 12c2b673f1005bc3f56f80b5a385bac718add3d8, 684072ca4c65a56bd88a0b8a503670d7612cdbbc
-- CI has NOT been run on these changes because Actions capacity is exhausted; do not claim them verified until a green run exists.
+### Backtest / research integrity
+- Backtester executes pending signals on the next bar open to avoid close-to-entry leakage.
+- H4 confirmation uses resampled historical data excluding the current incomplete H4 bucket.
+- Backtests include explicit entry/exit/impact/holding costs and historical currency conversion checks.
+- Open positions at dataset end are settled as TIMEOUT rather than silently dropped.
+- Market-data quality and historical FX conversion coverage are validation gates.
+
+## TESTS ADDED/UPDATED
+Focused tests were added for:
+- Binance close/partial-close idempotency and residual protection.
+- Binance runtime/startup exact execution recovery.
+- Binance exact protective-order recovery and protection-loss blocking.
+- Binance clientOrderId length/format.
+- MT5 bridge query failures, residual closes, unverified modifications, protection mismatch, and idempotency conflicts.
+- MT5 runtime/startup MOVE_SL_TP recovery and protection drift.
+- Atomic OPEN/SLTP transaction rollback and success.
+- Risk configuration, daily target, portfolio heat, drawdown, circuit-breaker persistence.
+- Session, spread, correlation, news, and stale-data fail-closed behavior.
+- Malformed RiskManager signal inputs.
+- Persistent emergency-stop lifecycle.
+- ML/risk safety tests.
+
+IMPORTANT: test files contain human-readable Result counters, but because CI/local execution is unavailable in this environment, those counters are not evidence that the suites passed. Do not claim green tests until actually executed.
+
+## KNOWN LIMITATIONS / NEXT ENGINEERING TARGETS
+1. Fix/verify all current TypeScript/Python tests by actual execution once a runnable local environment or GitHub Actions capacity is available.
+2. Audit Binance Spot OCO restart recovery separately. Futures protective-order recovery is now broker-identity based; Spot OCO recovery may still rely more heavily on in-memory order mapping.
+3. Audit Binance protective-order creation itself for partial failure between SL and TP creation; ensure a half-created protection set is either rolled back or remains explicitly UNKNOWN/blocked.
+4. Audit emergency-close recovery after a protection failure so the emergency-close operation can itself be reconciled from broker history after a process crash.
+5. Add prediction-level IDs to Python ModelServer outcome records if true live model-accuracy degradation monitoring is desired; do not re-enable auto-retraining based only on win-rate.
+6. Review TypeScript MLTrainingPipeline because it is now leak-resistant but its historical training rows still use simplified placeholder technical features; production deployment relies on the Python pipeline, so these two paths should eventually be consolidated.
+7. Perform a final consistency pass between README/deployment profiles and the new fail-closed risk semantics.
+8. Real broker E2E/soak evidence remains outstanding for non-USD conversions, restart interruption, broker latency, and long-run protection/reconciliation behavior.
+
+## IMMEDIATE NEXT TASK
+Audit Binance Spot OCO restart recovery and protective-order half-creation failure handling. Keep UNKNOWN states authoritative and never auto-retry ambiguous broker operations.
+
+## RESUME PROCEDURE
+1. Read this file first.
+2. Verify current main SHA.
+3. Inspect latest GitHub Actions status only if capacity is restored; do not spend minutes on blind reruns.
+4. Continue with the IMMEDIATE NEXT TASK above.
+5. Before any interruption, update this file with the latest HEAD and exact next task.
+
+## DEVELOPMENT HISTORY / RECENT HEADS
+Recent important commits in this development line include:
+- 2b47ca9aa7d6b1d29fd3d72127b326c30104f52e — Binance clientOrderId <=32 enforcement
+- 7d38f252e4862ab9fd79e786d541edcf1dc8ddbf — unified ExecutionGateway/BinanceExecutor clientOrderId derivation
+- d263c2e994cfa261d0040caa31dd208321fc22c1 — restart-safe broker-visible Binance protective order recovery
+- 5effef3c07cbb1049b83236c24a860a5a5a311ca — emergency-close residual-position verification
+- 56630f3f8330027b97c9a161d14a69a9208b999c — CircuitBreaker null-Telegram safety
+- d60303374165c6db8a1787d01d31c2b3307d811e — CircuitBreaker persisted-state fail-closed
+- 984f0a5b0975cf2a4cdcce55081b5dc80c46df1d — latest current HEAD checkpoint
+
+## FINAL RULE
+Never infer “internet is closed” from a single tool failure. Verify the specific service/tool limitation separately before reporting connectivity problems.
