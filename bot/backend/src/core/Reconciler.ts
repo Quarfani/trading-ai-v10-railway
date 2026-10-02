@@ -442,6 +442,8 @@ export class Reconciler {
       );
     }
 
+    await this.verifyBinanceProtectionSafe(t);
+
     if (remaining < t.volume - 0.001) {
       if (
         unresolvedPartial &&
@@ -529,6 +531,62 @@ export class Reconciler {
     return true;
   }
 
+  private async verifyBinanceProtectionSafe(t: Trade): Promise<void> {
+    const openOrders = await this.exec.getBinanceOpenOrders(t.symbol);
+    const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
+    const matching = openOrders.filter(
+      (order: any) => String(order.side).toUpperCase() === closeSide,
+    );
+    const tolerance = (target: number) =>
+      Math.max(1e-8, Math.abs(target) * 1e-6);
+
+    const slOrder = matching.find((order: any) => {
+      const type = String(order.type ?? '').toUpperCase();
+      const stop = Number(order.stopPrice);
+      const closePosition = String(order.closePosition).toLowerCase() === 'true';
+      return (
+        type === 'STOP_MARKET' &&
+        closePosition &&
+        Number.isFinite(stop) &&
+        Math.abs(stop - t.sl) <= tolerance(t.sl)
+      );
+    });
+
+    const tpOrder = matching.find((order: any) => {
+      const type = String(order.type ?? '').toUpperCase();
+      const stop = Number(order.stopPrice);
+      const closePosition = String(order.closePosition).toLowerCase() === 'true';
+      return (
+        type === 'TAKE_PROFIT_MARKET' &&
+        closePosition &&
+        Number.isFinite(stop) &&
+        Math.abs(stop - t.tp) <= tolerance(t.tp)
+      );
+    });
+
+    if (!slOrder || !tpOrder) {
+      throw new Error(
+        `Binance protective orders missing/mismatched for ${t.symbol}`,
+      );
+    }
+
+    const positionEntry = await this.exec.getBinancePosition(t.symbol);
+    if (!positionEntry || !(positionEntry.entryPrice > 0)) {
+      throw new Error(
+        `Binance protective-order verification lacks valid entry price for ${t.symbol}`,
+      );
+    }
+
+    if (
+      (t.side === 'BUY' && !(t.sl < positionEntry.entryPrice && t.tp > positionEntry.entryPrice)) ||
+      (t.side === 'SELL' && !(t.sl > positionEntry.entryPrice && t.tp < positionEntry.entryPrice))
+    ) {
+      throw new Error(
+        `Binance protective order direction invalid for ${t.symbol}`,
+      );
+    }
+  }
+
   private async reconcileBinanceModify(
     t: Trade,
     operation: any,
@@ -605,8 +663,11 @@ export class Reconciler {
       return false;
     }
 
-    const resolved = this.db.resolveExecutionLedger(
+    const resolved = this.db.resolveReconciledSLTP(
+      t.id,
       String(operation.executionId),
+      newSl,
+      newTp,
       {
         broker: 'binance',
         ticket: t.ticket,
