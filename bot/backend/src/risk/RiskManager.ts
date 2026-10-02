@@ -483,6 +483,71 @@ export class RiskManager {
       ).toFixed(3)}x`,
     );
 
+    if (this.config.maxSymbolExposure != null) {
+      const symbolKey = signal.symbol.trim().toUpperCase();
+      const sameSymbolTrades = openTrades.filter(
+        trade => trade.symbol.trim().toUpperCase() === symbolKey,
+      );
+      const symbolExposureCheck = checkExposureAndLeverage(
+        sameSymbolTrades,
+        {
+          symbol: signal.symbol,
+          volume,
+          entry: execPrice,
+          timeframe: signal.timeframe ?? 'H1',
+        },
+        currentEquity,
+        this.config.accountCurrency ?? 'USD',
+        this.config.maxSymbolExposure,
+        Number.MAX_SAFE_INTEGER,
+        livePrices,
+        this.mode === 'mt5',
+      );
+      if (!symbolExposureCheck.allowed) {
+        return this.block('symbol_exposure', [symbolExposureCheck.reason]);
+      }
+      reasons.push(
+        `Symbol exposure ${(((symbolExposureCheck.snapshot?.totalExposure ?? 0) / currentEquity) * 100).toFixed(2)}%`,
+      );
+    }
+
+    if (this.config.maxCorrelatedExposure != null) {
+      const correlatedPeers = this.correlation.getExposurePeers(
+        signal.symbol,
+        signal.side,
+        openTrades,
+        candleMap,
+      );
+      let correlatedExposure = exposureCheck.snapshot?.addedExposure ?? 0;
+      for (const peer of correlatedPeers) {
+        const peerNotional = calculatePositionNotional(
+          {
+            symbol: peer.trade.symbol,
+            volume: peer.trade.volume,
+            entry: peer.trade.entry,
+            timeframe: peer.trade.timeframe ?? signal.timeframe ?? 'H1',
+          },
+          livePrices,
+          this.config.accountCurrency ?? 'USD',
+          this.mode === 'mt5',
+          true,
+        );
+        if (peerNotional.ok === false) {
+          return this.block('correlated_exposure_state', [peerNotional.reason]);
+        }
+        correlatedExposure += peerNotional.value;
+      }
+      const correlatedRatio = correlatedExposure / currentEquity;
+      if (!Number.isFinite(correlatedRatio)) {
+        return this.block('correlated_exposure_state', ['Correlated exposure calculation is invalid']);
+      }
+      if (correlatedRatio > this.config.maxCorrelatedExposure) {
+        return this.block('correlated_exposure', [
+          `Correlated exposure ${(correlatedRatio * 100).toFixed(2)}% > max ${(this.config.maxCorrelatedExposure * 100).toFixed(2)}%`,
+        ]);
+      }
+      reasons.push(`Correlated exposure ${(correlatedRatio * 100).toFixed(2)}%`);
+    }
     const heatCheck = this.heat.check(
       openTrades,
       volume,
