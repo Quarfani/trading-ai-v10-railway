@@ -707,6 +707,43 @@ export class ExecutionGateway {
     return rate;
   }
 
+  async recoverBinanceExecution(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{
+    orderId: number;
+    status: string;
+    executedQty: number;
+    avgPrice: number;
+    realizedProfit: number | null;
+  } | null> {
+    const recovered = await this.binance.recoverOrderByClientId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+    );
+    if (!recovered) return null;
+    if (recovered.realizedProfit == null) {
+      return {
+        orderId: recovered.orderId,
+        status: recovered.status,
+        executedQty: recovered.executedQty,
+        avgPrice: recovered.avgPrice,
+        realizedProfit: null,
+      };
+    }
+    const realizedProfit = await this.convertBrokerProfitToAccount(
+      recovered.realizedProfit,
+      recovered.realizedProfitCurrency,
+    );
+    return {
+      orderId: recovered.orderId,
+      status: recovered.status,
+      executedQty: recovered.executedQty,
+      avgPrice: recovered.avgPrice,
+      realizedProfit,
+    };
+  }
+
   getBinancePosition(symbol: string) { return this.binance.getPosition(symbol); }
 
   private beginDestructive(operationKey: string, action: string, trade: Trade, request: Record<string, unknown>) {
