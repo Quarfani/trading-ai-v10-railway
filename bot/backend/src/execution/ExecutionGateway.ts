@@ -227,8 +227,12 @@ export class ExecutionGateway {
   }
 
   private makeClientOrderId(operationKey: string): string {
-    const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
-    return `ta_${digest}`.slice(0, 36);
+    const digest = crypto
+      .createHash('sha256')
+      .update(operationKey)
+      .digest('hex')
+      .slice(0, 27);
+    return `ta_${digest}`;
   }
 
   async getMT5PositionMode(): Promise<'HEDGING' | 'NETTING_OR_EXCHANGE' | 'UNKNOWN' | null> {
