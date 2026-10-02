@@ -463,6 +463,48 @@ async function main() {
   );
   atomicFullDb.raw().close();
 
+  const conflictOpenDb = new DatabaseManager(":memory:");
+  await conflictOpenDb.initialize();
+  const conflictTradeId = conflictOpenDb.insertTrade({
+    ticket: 1203,
+    symbol: "EURUSD",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 0.1,
+    entry: 1.1,
+    sl: 1.09,
+    tp: 1.12,
+    status: "open",
+    openedAt: Date.now(),
+    source: "OPEN_IDENTITY_CONFLICT",
+  } as any);
+  conflictOpenDb.createExecutionLedger({
+    executionId: "conflict-open-a",
+    operationKey: "conflict-open-op-a",
+    action: "OPEN",
+    status: "EXECUTED",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.1,
+    request: { tradeId: conflictTradeId, volume: 0.1 },
+  });
+  conflictOpenDb.createExecutionLedger({
+    executionId: "conflict-open-b",
+    operationKey: "conflict-open-op-b",
+    action: "OPEN",
+    status: "EXECUTED",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.1,
+    request: { tradeId: conflictTradeId, volume: 0.1 },
+  });
+  const conflict = conflictOpenDb.getLatestExecutedOpenOperationForTrade(conflictTradeId);
+  assert(
+    conflict?.conflict === true,
+    "multiple executed OPEN identities for one trade must be reported as a conflict",
+  );
+  conflictOpenDb.raw().close();
+
   const atomicOpenDb = new DatabaseManager(":memory:");
   await atomicOpenDb.initialize();
   atomicOpenDb.createExecutionLedger({
@@ -774,7 +816,7 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 39 passed, 0 failed");
+  console.log("Result: 40 passed, 0 failed");
 }
 
 main().catch(error => {
