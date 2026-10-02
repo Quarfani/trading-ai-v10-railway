@@ -171,6 +171,52 @@ export class Reconciler {
           );
         }
       } else {
+        // Verify and recover MT5 protective-order state before processing
+        // partial-close changes. A broker-side SL/TP change that was not
+        // persisted locally must be reconciled atomically; an unexplained
+        // mismatch is never silently accepted.
+        const unresolvedModify = t.id
+          ? this.db.getLatestUnresolvedExecutionForTrade(t.id, ['MOVE_SL_TP'])
+          : null;
+        if (unresolvedModify) {
+          if (!this.reconcileMT5Modify(t, live, unresolvedModify)) {
+            throw new Error(
+              `MT5 protective-order state for unresolved MOVE_SL_TP is not provably safe for ticket=${t.ticket}`,
+            );
+          }
+        }
+
+        const sl = Number(live.sl);
+        const tp = Number(live.tp);
+        if (
+          !Number.isFinite(sl) ||
+          !Number.isFinite(tp) ||
+          sl <= 0 ||
+          tp <= 0
+        ) {
+          throw new Error(
+            'MT5 invalid protective-order state ticket=' + t.ticket,
+          );
+        }
+        if (
+          (t.side === 'BUY' && !(sl < t.entry && tp > t.entry)) ||
+          (t.side === 'SELL' && !(sl > t.entry && tp < t.entry))
+        ) {
+          throw new Error(
+            'MT5 protective-order direction invalid ticket=' + t.ticket,
+          );
+        }
+        const slTolerance = Math.max(1e-8, Math.abs(t.sl) * 1e-6);
+        const tpTolerance = Math.max(1e-8, Math.abs(t.tp) * 1e-6);
+        if (
+          Math.abs(sl - t.sl) > slTolerance ||
+          Math.abs(tp - t.tp) > tpTolerance
+        ) {
+          throw new Error(
+            `MT5 protective-order mismatch ticket=${t.ticket}: DB SL/TP=${t.sl}/${t.tp} broker=${sl}/${tp}`,
+          );
+        }
+
         // Handle partial close: volume reduced on broker side
         const brokerVolume = Number(live.volume);
         if (!Number.isFinite(brokerVolume) || brokerVolume <= 0) {
@@ -245,6 +291,72 @@ export class Reconciler {
           }
         }
       }
+  }
+
+  private reconcileMT5Modify(
+    t: Trade,
+    live: any,
+    operation: any,
+  ): boolean {
+    if (!t.id) return false;
+    const sl = Number(live?.sl);
+    const tp = Number(live?.tp);
+    if (!Number.isFinite(sl) || !Number.isFinite(tp) || sl <= 0 || tp <= 0) {
+      return false;
+    }
+
+    let request: any;
+    try {
+      request = operation.requestJson
+        ? JSON.parse(operation.requestJson)
+        : null;
+    } catch {
+      return false;
+    }
+    const newSl = Number(request?.newSl);
+    const newTp = Number(request?.newTp);
+    if (!Number.isFinite(newSl) || !Number.isFinite(newTp) || newSl <= 0 || newTp <= 0) {
+      return false;
+    }
+
+    const slTolerance = Math.max(1e-8, Math.abs(newSl) * 1e-6);
+    const tpTolerance = Math.max(1e-8, Math.abs(newTp) * 1e-6);
+    if (
+      Math.abs(sl - newSl) > slTolerance ||
+      Math.abs(tp - newTp) > tpTolerance
+    ) {
+      return false;
+    }
+
+    if (
+      (t.side === 'BUY' && !(newSl < t.entry && newTp > t.entry)) ||
+      (t.side === 'SELL' && !(newSl > t.entry && newTp < t.entry))
+    ) {
+      return false;
+    }
+
+    const resolved = this.db.resolveReconciledSLTP(
+      t.id,
+      String(operation.executionId),
+      newSl,
+      newTp,
+      {
+        broker: 'mt5',
+        ticket: t.ticket,
+        newSl,
+        newTp,
+        reconciliation: true,
+      },
+      t.ticket,
+    );
+    if (!resolved) return false;
+
+    (t as any).sl = newSl;
+    (t as any).tp = newTp;
+    this.logger.info(
+      `[${operation.action}] reconciled MT5 protective orders operation=${operation.operationKey}`,
+    );
+    return true;
   }
 
   private async getMT5History(
