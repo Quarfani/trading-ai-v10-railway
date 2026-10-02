@@ -45,6 +45,7 @@ export interface MLFeatures {
 }
 
 interface TrainingRow {
+  openedAt: number;
   features: MLFeatures;
   label:    0 | 1;  // 1 = win, 0 = loss
 }
@@ -84,11 +85,13 @@ export class MLTrainingPipeline {
 
       this.logger.info(`ML Training: ${rows.length} samples...`);
 
-      // Split 80/20 train/test
-      const shuffled = this.shuffle(rows);
-      const splitAt  = Math.floor(shuffled.length * 0.8);
-      const trainSet = shuffled.slice(0, splitAt);
-      const testSet  = shuffled.slice(splitAt);
+      // Chronological 80/20 split. Randomly mixing future trades into
+      // the training set would make the reported accuracy optimistic and
+      // is inappropriate for a forward-looking trading model.
+      const ordered = [...rows].sort((a, b) => a.openedAt - b.openedAt);
+      const splitAt  = Math.floor(ordered.length * 0.8);
+      const trainSet = ordered.slice(0, splitAt);
+      const testSet  = ordered.slice(splitAt);
 
       // Train 50-tree Random Forest
       this.forest = [];
@@ -108,7 +111,7 @@ export class MLTrainingPipeline {
 
       // Persist model to DB
       this.db.setSetting('ml_model', JSON.stringify({
-        forest: this.forest.slice(0, 10), // save first 10 trees (space)
+        forest: this.forest,
         trainedAt: Date.now(),
         samples: rows.length,
         accuracy,
@@ -232,7 +235,10 @@ export class MLTrainingPipeline {
       LIMIT 2000
     `).all(cutoff) as any[];
 
-    return rows.map(r => ({
+    return rows
+      .filter(r => Number.isFinite(Number(r.openedAt)) && Number(r.openedAt) > 0)
+      .map(r => ({
+      openedAt: Number(r.openedAt),
       features: {
         adx: 20, atrPct: 0.01, bbWidth: 0.02, choppiness: 50,
         emaDist50: 0, emaDist200: 0,
@@ -242,15 +248,15 @@ export class MLTrainingPipeline {
         confidenceRaw: r.confidence ?? 0.6,
         sourceEncoded: this.encodeSource(r.source ?? ''),
         rrRatio: Math.min(Math.abs(r.tp - r.entry) / Math.max(Math.abs(r.entry - r.sl), 0.0001) / 5, 1),
-        symbolWR30d: this.getSymbolWR(r.symbol),
-        sourceWR30d: this.getSourceWR(r.source),
+        symbolWR30d: this.getSymbolWRAsOf(r.symbol, Number(r.openedAt)),
+        sourceWR30d: this.getSourceWRAsOf(r.source, Number(r.openedAt)),
         slDistPct: Math.min(Math.abs(r.entry - r.sl) / r.entry / 0.05, 1),
         tpDistPct: Math.min(Math.abs(r.tp - r.entry) / r.entry / 0.10, 1),
         portfolioHeat: 0.02,
         regime: 0.5,
       } as MLFeatures,
       label: r.profit > 0 ? 1 : 0,
-    }));
+      }));
   }
 
   private buildTree(
@@ -370,11 +376,38 @@ export class MLTrainingPipeline {
       const saved = this.db.getSetting('ml_model');
       if (!saved) return;
       const m = JSON.parse(saved);
-      if (Date.now() - m.trainedAt < 48 * 3_600_000) {
-        this.forest  = m.forest ?? [];
+      const trainedAt = Number(m?.trainedAt);
+      if (
+        Array.isArray(m?.forest) &&
+        Number.isFinite(trainedAt) &&
+        trainedAt > 0 &&
+        Date.now() - trainedAt < 48 * 3_600_000
+      ) {
+        this.forest = m.forest.filter((tree: any) => this.isValidTree(tree));
         this.trained = this.forest.length > 0;
+        this.lastTrain = trainedAt;
       }
     } catch {}
+  }
+
+  private isValidTree(node: any, depth = 0): boolean {
+    if (!node || depth > 12) return false;
+    if (node.prediction !== undefined) {
+      return Number.isFinite(Number(node.prediction)) &&
+        Number(node.prediction) >= 0 &&
+        Number(node.prediction) <= 1 &&
+        Number.isFinite(Number(node.samples));
+    }
+    if (
+      !Number.isInteger(Number(node.featureIdx)) ||
+      Number(node.featureIdx) < 0 ||
+      Number(node.featureIdx) >= 18 ||
+      !Number.isFinite(Number(node.threshold))
+    ) {
+      return false;
+    }
+    return this.isValidTree(node.left, depth + 1) &&
+      this.isValidTree(node.right, depth + 1);
   }
 
   private bootstrapSample(data: TrainingRow[]): TrainingRow[] {
@@ -402,6 +435,45 @@ export class MLTrainingPipeline {
     if (hour >= 8  && hour < 13) return 80;
     if (hour >= 17 && hour < 22) return 85;
     return 50;
+  }
+
+  private getSymbolWRAsOf(symbol: string, asOfMs: number): number {
+    try {
+      const cutoff = asOfMs - 30 * 24 * 3_600_000;
+      const r = this.db.raw().prepare(`
+        SELECT
+          SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS wr
+        FROM trades
+        WHERE status='closed'
+          AND symbol=?
+          AND openedAt > ?
+          AND openedAt < ?
+      `).get(symbol, cutoff, asOfMs) as any;
+      const value = Number(r?.wr);
+      return Number.isFinite(value) ? value : 0.5;
+    } catch {
+      return 0.5;
+    }
+  }
+
+  private getSourceWRAsOf(source: string, asOfMs: number): number {
+    try {
+      const primary = String(source ?? '').split('+')[0];
+      const cutoff = asOfMs - 30 * 24 * 3_600_000;
+      const r = this.db.raw().prepare(`
+        SELECT
+          SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS wr
+        FROM trades
+        WHERE status='closed'
+          AND source LIKE ?
+          AND openedAt > ?
+          AND openedAt < ?
+      `).get(`%${primary}%`, cutoff, asOfMs) as any;
+      const value = Number(r?.wr);
+      return Number.isFinite(value) ? value : 0.5;
+    } catch {
+      return 0.5;
+    }
   }
 
   private getSymbolWR(symbol: string): number {
