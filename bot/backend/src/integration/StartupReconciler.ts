@@ -355,6 +355,98 @@ export class StartupReconciler {
       closeTimeMsc: history.closeTimeMsc,
     };
   }
+  private async resolveAuthoritativeBinanceModifyLedgers(
+    exec: BinanceExecutor,
+    positions: any[],
+  ): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, requestJson
+      FROM execution_ledger
+      WHERE status IN ('PENDING','UNKNOWN')
+        AND action='MOVE_SL_TP'
+      ORDER BY createdAt ASC, updatedAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      operationKey: string;
+      requestJson?: string | null;
+    }>;
+
+    const bySymbol = new Map<string, any>(
+      positions.map(position => [String(position.symbol).toUpperCase(), position]),
+    );
+    for (const row of rows) {
+      if (!row.requestJson) continue;
+
+      let request: any;
+      try { request = JSON.parse(row.requestJson); }
+      catch { continue; }
+
+      const tradeId = Number(request?.tradeId);
+      if (!Number.isInteger(tradeId) || tradeId <= 0) continue;
+
+      const trade = this.db.raw()
+        .prepare('SELECT * FROM trades WHERE id=? LIMIT 1')
+        .get(tradeId) as any;
+      if (!trade?.ticket || String(trade.status) !== 'open') continue;
+
+      const live = bySymbol.get(String(trade.symbol).toUpperCase());
+      if (!live || Math.abs(Number(live.positionAmt)) < 0.0001) continue;
+
+      const newSl = Number(request?.newSl);
+      const newTp = Number(request?.newTp);
+      if (
+        !(newSl > 0) ||
+        !(newTp > 0) ||
+        !Number.isFinite(newSl) ||
+        !Number.isFinite(newTp)
+      ) continue;
+
+      const openOrders = await exec.getOpenOrders(String(trade.symbol));
+      const closeSide = String(trade.side).toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
+      const matching = openOrders.filter(
+        (order: any) => String(order.side).toUpperCase() === closeSide,
+      );
+      const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+
+      const sl = matching.find((order: any) => {
+        const type = String(order.type ?? '').toUpperCase();
+        const stop = Number(order.stopPrice);
+        return /STOP_MARKET|STOP_LOSS/.test(type) &&
+          Number.isFinite(stop) &&
+          Math.abs(stop - newSl) <= tolerance(newSl);
+      });
+      const tp = matching.find((order: any) => {
+        const type = String(order.type ?? '').toUpperCase();
+        const stop = Number(order.stopPrice);
+        const price = Number(order.price);
+        return /TAKE_PROFIT_MARKET|TAKE_PROFIT/.test(type) &&
+          ((Number.isFinite(stop) && Math.abs(stop - newTp) <= tolerance(newTp)) ||
+           (Number.isFinite(price) && Math.abs(price - newTp) <= tolerance(newTp)));
+      });
+
+      if (!sl || !tp) continue;
+
+      const resolved = this.db.resolveExecutionLedger(
+        String(row.executionId),
+        {
+          broker: 'binance',
+          ticket: Number(trade.ticket),
+          newSl,
+          newTp,
+          slOrderId: Number(sl.orderId),
+          tpOrderId: Number(tp.orderId),
+          startupReconciliation: true,
+        },
+        Number(sl.orderId) > 0 ? Number(sl.orderId) : undefined,
+      );
+      if (resolved) {
+        this.logger.info(
+          `[Binance] startup-resolved protective-order operation=${row.operationKey}`,
+        );
+      }
+    }
+  }
+
   private async resolveAuthoritativeBinanceLedgers(
     exec: BinanceExecutor,
     positions: any[],
@@ -582,6 +674,7 @@ export class StartupReconciler {
     }
 
     const positions = await exec.getAllPositions();
+    await this.resolveAuthoritativeBinanceModifyLedgers(exec, positions);
     await this.resolveAuthoritativeBinanceLedgers(exec, positions);
     const openTrades = this.db.getOpenTrades();
     const bySymbol = new Map<string, any>(
