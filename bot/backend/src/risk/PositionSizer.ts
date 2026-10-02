@@ -56,7 +56,28 @@ export class PositionSizer {
     livePrices:     Record<string, number> = {},
     timeframe:      Timeframe = 'H1',
   ): number {
-    const equity = currentEquity ?? this.config.accountBalance;
+    const equity = Number(currentEquity ?? this.config.accountBalance);
+    if (
+      !(equity > 0) ||
+      !Number.isFinite(equity) ||
+      !(entry > 0) ||
+      !Number.isFinite(entry) ||
+      !(sl > 0) ||
+      !Number.isFinite(sl) ||
+      !Number.isFinite(qualityScore) ||
+      qualityScore < 0 ||
+      qualityScore > 100
+    ) {
+      this.logger.warn(`[${symbol}] Invalid sizing inputs — sizing blocked`);
+      return 0;
+    }
+    if (
+      tp !== undefined &&
+      (!(tp > 0) || !Number.isFinite(tp))
+    ) {
+      this.logger.warn(`[${symbol}] Invalid TP input — sizing blocked`);
+      return 0;
+    }
 
     const market = this.config.mode === 'mt5'
       ? getBrokerMarketDefinition(symbol, timeframe)
