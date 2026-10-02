@@ -80,7 +80,22 @@ export class MLClient {
         body.candles_h4 = candlesH4.map(c => [c.time, c.open, c.high, c.low, c.close, c.volume]);
       }
       const r = await this.http.post('/predict', body);
-      return r.data as MLPrediction;
+      const value = r.data as Partial<MLPrediction>;
+      const probs = [
+        Number(value.prob_buy),
+        Number(value.prob_sell),
+      ];
+      if (
+        !['BUY', 'SELL', 'NO_TRADE'].includes(String(value.signal)) ||
+        ![value.confidence, ...probs].every(Number.isFinite) ||
+        Number(value.confidence) < 0 ||
+        Number(value.confidence) > 1 ||
+        probs.some(v => v < 0 || v > 1)
+      ) {
+        this.logger.warn('ML prediction failed schema/range validation');
+        return null;
+      }
+      return value as MLPrediction;
     } catch {
       this.alive = false;
       this.lastCheck = Date.now();
