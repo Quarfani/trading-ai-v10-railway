@@ -360,7 +360,7 @@ export class StartupReconciler {
     if (!this.config.binance.futures) return;
 
     const rows = this.db.raw().prepare(`
-      SELECT executionId, operationKey, requestJson
+      SELECT executionId, operationKey, requestJson, createdAt
       FROM execution_ledger
       WHERE status IN ('PENDING','UNKNOWN')
         AND action='OPEN'
@@ -369,6 +369,7 @@ export class StartupReconciler {
       executionId: string;
       operationKey: string;
       requestJson?: string | null;
+      createdAt: number;
     }>;
 
     const bySymbol = new Map<string, Array<typeof rows[number]>>();
