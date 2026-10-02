@@ -363,6 +363,7 @@ export class ExecutionGateway {
         t.symbol,
         t.volume,
         t.side,
+        makeBinanceClientOrderId(operationKey),
       );
 
       if (!result.ok) throw new Error('Binance close rejected');
