@@ -299,7 +299,7 @@ async function main() {
   );
   blockedDb.raw().close();
 
-  console.log("Result: 20 passed, 0 failed");
+  console.log("Result: 18 passed, 0 failed");
 }
 
 main().catch(error => {
