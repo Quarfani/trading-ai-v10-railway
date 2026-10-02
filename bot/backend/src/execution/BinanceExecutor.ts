@@ -292,7 +292,7 @@ export class BinanceExecutor {
             protectionOperationKey,
           );
         } else {
-          await this.placeOCO(signal, executedQty, ticket, spec);
+          await this.placeOCO(signal, executedQty, ticket, spec, protectionOperationKey);
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
@@ -340,7 +340,15 @@ export class BinanceExecutor {
                 protectionOperationKey,
               );
             }
-            else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
+            else {
+              await this.placeOCO(
+                signal,
+                executedQtyRecovered,
+                recoveredTicket,
+                getSymbolSpec(signal.symbol),
+                protectionOperationKey,
+              );
+            }
           } catch (protectionError: any) {
             const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
@@ -464,6 +472,7 @@ export class BinanceExecutor {
     quantity: number,
     ticket:   number,
     spec:     ReturnType<typeof getSymbolSpec>,
+    operationKey?: string,
   ): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
 
@@ -475,7 +484,9 @@ export class BinanceExecutor {
       : this.formatPrice(signal.sl * 1.0005, spec.pip);
 
     // Binance's current Spot REST API uses the order-list OCO endpoint; the legacy /api/v3/order/oco route is deprecated.
-    const baseId = `ta${ticket}`.slice(0, 12);
+    const baseId = operationKey
+      ? `ta${crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 8)}`
+      : `ta${ticket}`;
     const oco = await this.signedPost('/api/v3/orderList/oco', {
       symbol:            signal.symbol,
       side:              closeSide,
