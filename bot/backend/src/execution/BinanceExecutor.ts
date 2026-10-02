@@ -240,8 +240,12 @@ export class BinanceExecutor {
   }
 
   private makeClientOrderId(operationKey: string): string {
-    const digest = crypto.createHash('sha256').update(operationKey).digest('hex').slice(0, 28);
-    return `ta_${digest}`.slice(0, 36);
+    const digest = crypto
+      .createHash('sha256')
+      .update(operationKey)
+      .digest('hex')
+      .slice(0, 27);
+    return `ta_${digest}`;
   }
 
   private makeProtectionClientOrderId(
@@ -252,8 +256,12 @@ export class BinanceExecutor {
       .createHash('sha256')
       .update(`PROTECTION:${kind}:${operationKey}`)
       .digest('hex')
-      .slice(0, 28);
-    return `ta${kind.toLowerCase()}_${digest}`.slice(0, 36);
+      .slice(0, 27);
+    const id = `ta${kind.toLowerCase()}_${digest}`;
+    if (id.length > 32) {
+      throw new Error(`Generated Binance protection clientOrderId exceeds 32 chars: ${id.length}`);
+    }
+    return id;
   }
 
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
