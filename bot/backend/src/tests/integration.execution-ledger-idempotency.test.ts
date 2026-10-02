@@ -560,6 +560,35 @@ async function main() {
   );
   corruptDb.raw().close();
 
+  const closeIdentityExecutor = new (require("../execution/BinanceExecutor").BinanceExecutor)(baseConfig("binance")) as any;
+  const closePosts: any[] = [];
+  closeIdentityExecutor.getPosition = async () => ({
+    positionAmt: 0.01,
+    entryPrice: 50_000,
+    unrealizedProfit: 0,
+  });
+  closeIdentityExecutor.signedPost = async (_path: string, params: any) => {
+    closePosts.push(params);
+    return { orderId: 99901 };
+  };
+  closeIdentityExecutor.getFuturesOrderNetPnl = async () => ({
+    profit: 4.5,
+    currency: "USDT",
+  });
+  const closeClientOrderId = makeBinanceClientOrderId("ledger-close-identity-op");
+  const closeIdentityResult = await closeIdentityExecutor.closePosition(
+    999,
+    "BTCUSDT",
+    0.01,
+    "BUY",
+    closeClientOrderId,
+  );
+  assert(closeIdentityResult.ok === true, "Binance close with deterministic clientOrderId must succeed");
+  assert(
+    closePosts[0]?.newClientOrderId === closeClientOrderId,
+    "Binance close MARKET order must carry the ledger-derived clientOrderId",
+  );
+
   const claimDb = new DatabaseManager(":memory:");
   await claimDb.initialize();
   const firstClaim = claimDb.createExecutionLedger({
