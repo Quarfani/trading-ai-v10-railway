@@ -590,6 +590,23 @@ async function main() {
     "Binance close MARKET order must carry the ledger-derived clientOrderId",
   );
 
+  const emergencyIdentityExecutor = new BinanceExecutor(baseConfig("binance")) as any;
+  const emergencyPosts: any[] = [];
+  emergencyIdentityExecutor.signedPost = async (_path: string, params: any) => {
+    emergencyPosts.push(params);
+    return { status: "FILLED", executedQty: "0.01", orderId: 99903 };
+  };
+  const emergencyClientOrderId = makeBinanceClientOrderId("ledger-open-identity-op:EMERGENCY_CLOSE");
+  await (emergencyIdentityExecutor as any).emergencyCloseAfterProtectionFailure(
+    { symbol: "BTCUSDT", side: "BUY" },
+    0.01,
+    emergencyClientOrderId,
+  );
+  assert(
+    emergencyPosts[0]?.newClientOrderId === emergencyClientOrderId,
+    "Binance emergency close must carry a deterministic clientOrderId",
+  );
+
   const partialIdentityExecutor = new BinanceExecutor(baseConfig("binance")) as any;
   const partialPosts: any[] = [];
   partialIdentityExecutor.getPosition = async () => ({
