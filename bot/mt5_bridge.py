@@ -44,7 +44,7 @@ logging.basicConfig(
 log = logging.getLogger("MT5Bridge")
 
 try:
-    from flask import Flask, request, jsonify
+    from flask import Flask, request, jsonify, g
 except ImportError:
     print("Install Flask: pip install flask")
     exit(1)
@@ -134,6 +134,13 @@ def _idempotency_persist():
     os.replace(tmp_path, _IDEMPOTENCY_STATE_PATH)
 
 
+def _current_idempotency_fingerprint() -> str | None:
+    try:
+        return getattr(g, "idempotency_fingerprint", None)
+    except RuntimeError:
+        return None
+
+
 def _idempotency_fingerprint(operation: str, data: dict) -> str:
     request = {
         str(key): value
@@ -152,6 +159,8 @@ def _idempotency_fingerprint(operation: str, data: dict) -> str:
 def _idempotency_lookup(key: str, fingerprint: str | None = None):
     if not key:
         return None
+    if fingerprint is None:
+        fingerprint = _current_idempotency_fingerprint()
     with _idempotency_lock:
         now = time.time()
         stale = [
@@ -782,6 +791,7 @@ def trade():
     side = str(data.get("side", "")).upper()
     comment = str(data.get("comment", "bot"))[:31]
     idempotency_key = str(data.get("idempotency_key", "")).strip()
+    g.idempotency_fingerprint = _idempotency_fingerprint("trade", data)
 
     try:
         volume = float(data.get("volume", 0))
@@ -802,6 +812,8 @@ def trade():
     cached = _idempotency_lookup(idempotency_key)
     if cached:
         _, cached_status, cached_payload = cached
+        if cached_status == "CONFLICT":
+            return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
             return jsonify(cached_payload)
         if cached_status == "UNKNOWN":
@@ -1077,6 +1089,7 @@ def modify():
         return err("JSON object required", 422)
 
     idempotency_key = str(data.get("idempotency_key", "")).strip()
+    g.idempotency_fingerprint = _idempotency_fingerprint("modify", data)
     try:
         ticket = int(data.get("ticket", 0))
         sl = float(data.get("sl", 0))
@@ -1092,6 +1105,8 @@ def modify():
     cached = _idempotency_lookup(idempotency_key)
     if cached:
         _, cached_status, cached_payload = cached
+        if cached_status == "CONFLICT":
+            return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
             return jsonify(cached_payload)
         if cached_status == "UNKNOWN":
@@ -1259,6 +1274,7 @@ def close():
         return err("JSON object required", 422)
 
     idempotency_key = str(data.get("idempotency_key", "")).strip()
+    g.idempotency_fingerprint = _idempotency_fingerprint("close", data)
     try:
         ticket = int(data.get("ticket", 0))
     except (TypeError, ValueError):
@@ -1272,6 +1288,8 @@ def close():
     cached = _idempotency_lookup(idempotency_key)
     if cached:
         _, cached_status, cached_payload = cached
+        if cached_status == "CONFLICT":
+            return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
             return jsonify(cached_payload)
         if cached_status == "UNKNOWN":
@@ -1435,6 +1453,7 @@ def close_partial():
         return err("JSON object required", 422)
 
     idempotency_key = str(data.get("idempotency_key", "")).strip()
+    g.idempotency_fingerprint = _idempotency_fingerprint("close_partial", data)
     try:
         ticket = int(data.get("ticket", 0))
         fraction = float(data.get("fraction", 0.5))
@@ -1449,6 +1468,8 @@ def close_partial():
     cached = _idempotency_lookup(idempotency_key)
     if cached:
         _, cached_status, cached_payload = cached
+        if cached_status == "CONFLICT":
+            return err(cached_payload.get("error", "idempotency_key request mismatch"), 409)
         if cached_status == "SUCCESS":
             return jsonify(cached_payload)
         if cached_status == "UNKNOWN":
