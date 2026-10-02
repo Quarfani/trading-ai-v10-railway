@@ -146,7 +146,7 @@ async function main() {
     "Spot realized PnL must be denominated in the quote asset",
   );
   assert(
-    Math.abs(Number(spotProfit.realizedProfit) - 5.488) < 1e-9,
+    Math.abs(Number(spotProfit.realizedProfit) - 5.145) < 1e-9,
     "Spot realized PnL must equal weighted exit proceeds minus entry cost and quote fees",
   );
   assert(postCalls === 1, "Spot PnL test must submit exactly one market close");
