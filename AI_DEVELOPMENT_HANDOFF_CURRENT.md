@@ -65,3 +65,11 @@ B. Continue paper execution/reconciliation soak evidence, then testnet/cloud E2E
 - Latest successful main CI: #549 (c1eb40fc08c3624691b06f3533fe43ff7e924410)
 - Main CI #550 and #551 completed as failures. Both runs finished within seconds and their job step summaries/log blobs are currently unavailable through the GitHub integration, so the exact failure cause is not verified.
 - Do not burn Actions minutes on blind reruns. First establish whether this is an Actions/billing/runner-level block; GitHub Free includes 2,000 Actions minutes/month and usage can be blocked after quota exhaustion when no valid payment method/budget is available.
+
+## BINANCE RUNTIME RECOVERY CANDIDATE
+- Branch: hardening/binance-runtime-recovery-release-candidate
+- Adds bounded /fapi/v1/allOrders lookup by deterministic clientOrderId and createdAt.
+- Full and partial closes can be reconciled from authoritative broker history after an ambiguous timeout.
+- Reconciler requires exactly one attributable unresolved operation per trade and DB settlement is atomic.
+- Full recovery checks executed quantity and verified flat position; partial recovery checks executed quantity and remaining position quantity.
+- Canceled/expired historical orders are not treated as successful recovery; ambiguous cases remain blocked.
