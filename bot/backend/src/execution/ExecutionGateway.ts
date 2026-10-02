@@ -683,6 +683,7 @@ export class ExecutionGateway {
     orderId: number;
     executedQty: number;
     realizedProfit: number;
+    executedAt: number;
   }> {
     if (this.config.mode !== 'binance') {
       throw new Error('Binance full recovery requested outside Binance mode');
@@ -715,6 +716,7 @@ export class ExecutionGateway {
       orderId: recovered.orderId,
       executedQty: recovered.executedQty,
       realizedProfit,
+      executedAt: recovered.executedAt,
     };
   }
 
