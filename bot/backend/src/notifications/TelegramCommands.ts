@@ -78,13 +78,15 @@ export class TelegramCommands {
         const c   = this.engine.getConsensusStatus();
         const pos = this.engine.getPositionSummary();
         const rec = await (this.engine as any).exec?.getCurrentEquity?.().catch(() => null);
+        const emergency = this.engine.isEmergencyStopActive();
         send(m.chat.id,
           `📊 <b>Status</b> | ${this.engine.config.mode.toUpperCase()}\n` +
-          `💰 Equity: $${(rec ?? p.equity ?? 0).toFixed(2)}\n` +
-          `📅 Today: ${p.today?.trades ?? 0} trades | P&L: $${(p.today?.pnl ?? 0).toFixed(2)}\n` +
+          `💰 Equity: ${(rec ?? p.equity ?? 0).toFixed(2)}\n` +
+          `📅 Today: ${p.today?.trades ?? 0} trades | P&L: ${(p.today?.pnl ?? 0).toFixed(2)}\n` +
           `🧠 Strategies: ${c.active_count}/${c.total_count} active\n` +
           `📈 Positions: ${Object.keys(pos).length} open\n` +
-          `⏸ Paused: ${this.paused.size > 0 ? [...this.paused].join(', ') : 'none'}`);
+          `⏸ Paused: ${this.paused.size > 0 ? [...this.paused].join(', ') : 'none'}\n` +
+          `🚨 Emergency Stop: ${emergency ? 'ACTIVE' : 'off'}`);
       } catch (e: any) { send(m.chat.id, `Error: ${e.message}`); }
     });
 
