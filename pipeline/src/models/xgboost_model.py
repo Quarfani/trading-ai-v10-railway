@@ -285,14 +285,34 @@ class XGBoostModel(BaseModel):
         if not model_path.exists():
             return False
         try:
+            if not scaler_path.exists():
+                logger.error(
+                    f"Missing scaler artifact for {self.symbol}/{self.timeframe}: {scaler_path}"
+                )
+                return False
+
             with open(model_path, "rb") as f:
                 self._model = pickle.load(f)
-            if scaler_path.exists():
-                with open(scaler_path, "rb") as f:
-                    self._scaler = pickle.load(f)
+            with open(scaler_path, "rb") as f:
+                self._scaler = pickle.load(f)
+
+            if self._model is None or self._scaler is None:
+                return False
+
+            if not self.validate_loaded_metadata():
+                logger.error(
+                    f"Rejected XGBoost artifact metadata/checksum mismatch for "
+                    f"{self.symbol}/{self.timeframe}"
+                )
+                self._model = None
+                self._scaler = None
+                return False
+
             self._trained = True
             return True
         except Exception as e:
+            self._model = None
+            self._scaler = None
             logger.error(f"Failed to load XGBoost model: {e}")
             return False
 
