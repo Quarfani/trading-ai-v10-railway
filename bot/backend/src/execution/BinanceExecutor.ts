@@ -171,6 +171,53 @@ export class BinanceExecutor {
   }
 
 
+  async recoverSpotOcoByOperation(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{
+    orderListId: number;
+    listStatusType: string;
+    listOrderStatus: string;
+    orders: any[];
+  } | null> {
+    if (this.isFutures) return null;
+    try {
+      const listClientOrderId = this.makeOcoClientOrderId(
+        operationKey,
+        'LIST',
+      );
+      const list = await this.getSpotOcoByClientId(
+        symbol,
+        listClientOrderId,
+      );
+      if (!list) return null;
+
+      const listStatusType = String(list.listStatusType ?? '').toUpperCase();
+      const listOrderStatus = String(list.listOrderStatus ?? '').toUpperCase();
+      if (
+        !['EXEC_STARTED', 'EXECUTING', 'ALL_DONE'].includes(listStatusType) &&
+        !['EXECUTING', 'ALL_DONE'].includes(listOrderStatus)
+      ) {
+        return null;
+      }
+
+      const orders = Array.isArray(list.orders) ? list.orders : [];
+      if (orders.length < 2) return null;
+
+      return {
+        orderListId: Number(list.orderListId),
+        listStatusType,
+        listOrderStatus,
+        orders,
+      };
+    } catch (e: any) {
+      this.logger.warn(
+        `[Binance Spot] recoverSpotOcoByOperation failed: ${e?.message ?? e}`,
+      );
+      return null;
+    }
+  }
+
   async recoverProtectionByOperation(
     symbol: string,
     operationKey: string,
