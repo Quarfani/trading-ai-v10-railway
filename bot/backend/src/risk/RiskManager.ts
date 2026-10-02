@@ -75,6 +75,10 @@ export function validateRiskConfiguration(config: SystemConfig): string[] {
     const n = Number(value);
     if (!Number.isFinite(n) || n <= 0) errors.push(`${name} must be a finite positive number`);
   };
+  const nonNegative = (name: string, value: unknown) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) errors.push(`${name} must be a finite non-negative number`);
+  };
   const bounded01 = (name: string, value: unknown) => {
     const n = Number(value);
     if (!Number.isFinite(n) || n <= 0 || n > RISK_LIMITS.maxFraction) {
@@ -95,9 +99,9 @@ export function validateRiskConfiguration(config: SystemConfig): string[] {
   positive('maxExposure', config.maxExposure ?? 1);
   positive('maxLeverage', config.maxLeverage ?? 3);
   positive('riskPerTrade', config.riskPerTrade);
-  positive('maxSlippagePct', config.maxSlippagePct ?? 0.005);
-  positive('maxSlippagePips', config.maxSlippagePips ?? 3);
-  positive('dailyProfitTarget', config.dailyProfitTarget);
+  nonNegative('maxSlippagePct', config.maxSlippagePct ?? 0.005);
+  nonNegative('maxSlippagePips', config.maxSlippagePips ?? 3);
+  nonNegative('dailyProfitTarget', config.dailyProfitTarget);
 
   if (Number(config.riskPerTrade) > RISK_LIMITS.maxRiskPerTrade) {
     errors.push('riskPerTrade must not exceed the hard 2% per-trade risk cap');
