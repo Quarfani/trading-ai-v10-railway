@@ -109,7 +109,60 @@ async function main() {
     "restart modify must cancel both broker-side protective orders",
   );
 
-  console.log("Result: 8 passed, 0 failed");
+  const idempotent = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  let duplicatePosts = 0;
+  (idempotent as any).signedGet = async (_path: string, params: any) => {
+    const id = String(params.origClientOrderId);
+    return id.includes("tasl_")
+      ? {
+          orderId: 301,
+          status: "NEW",
+          side: "SELL",
+          type: "STOP_MARKET",
+          closePosition: "true",
+          stopPrice: "90",
+          origQty: "1",
+        }
+      : {
+          orderId: 302,
+          status: "NEW",
+          side: "SELL",
+          type: "TAKE_PROFIT_MARKET",
+          closePosition: "true",
+          stopPrice: "110",
+          origQty: "1",
+        };
+  };
+  (idempotent as any).signedPost = async () => {
+    duplicatePosts += 1;
+    throw new Error("duplicate SL/TP submission should never happen");
+  };
+  await (idempotent as any).placeSLTP(
+    {
+      symbol: "BTCUSDT",
+      side: "BUY",
+      price: 100,
+      sl: 90,
+      tp: 110,
+    } as any,
+    1,
+    1000,
+    { pip: 0.1, volumeStep: 0.001 } as any,
+    "existing-protection-operation",
+  );
+  assert(
+    duplicatePosts === 0,
+    "existing Binance SL/TP must be recovered instead of duplicated",
+  );
+  assert(
+    (idempotent as any).orderMap.get(1000)?.slOrderId === 301 &&
+      (idempotent as any).orderMap.get(1000)?.tpOrderId === 302,
+    "recovered Binance SL/TP identities must populate orderMap",
+  );
+
+  console.log("Result: 10 passed, 0 failed");
 }
 
 main().catch(error => {
