@@ -50,10 +50,13 @@ function signal(symbol: string): Signal {
   };
 }
 
+let tradeCounter = 0;
+
 function trade(symbol: string, volume: number): Trade {
+  tradeCounter += 1;
   return {
-    id: Math.floor(Math.random() * 1_000_000),
-    ticket: Math.floor(Math.random() * 1_000_000),
+    id: 1_000_000 + tradeCounter,
+    ticket: 2_000_000 + tradeCounter,
     symbol, timeframe: "H1", side: "BUY", volume,
     entry: symbol === "BTCUSDT" ? 50_000 : 2_500,
     sl: symbol === "BTCUSDT" ? 49_000 : 2_400,
