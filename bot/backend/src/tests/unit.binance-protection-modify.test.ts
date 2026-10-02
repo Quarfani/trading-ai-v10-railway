@@ -59,7 +59,17 @@ async function main() {
     "modify must pass the durable operation identity into protective-order creation",
   );
 
-  console.log("Result: 5 passed, 0 failed");
+  const rawProtectionId = (executor as any).makeProtectionClientOrderId(
+    "modify-operation-identity",
+    "SL",
+  );
+  assert(
+    rawProtectionId.length <= 32 &&
+      /^[.A-Z:/a-z0-9_-]{1,32}$/.test(rawProtectionId),
+    "Binance protection clientOrderId must satisfy the documented 32-char format",
+  );
+
+  console.log("Result: 6 passed, 0 failed");
 }
 
 main().catch(error => {
