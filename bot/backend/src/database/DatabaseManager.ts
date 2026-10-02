@@ -534,14 +534,58 @@ export class DatabaseManager {
       if (trade.status !== 'open') return false;
 
       if (trade.status === 'open') {
+        if (!Number.isFinite(profit) || !Number.isFinite(Number(trade.realizedProfit ?? 0))) {
+          throw new Error(`Invalid PnL for reconciled full-close trade id=${tradeId}`);
+        }
+
+        const cumulativeProfit = Number(trade.realizedProfit ?? 0) + Number(profit);
+        if (!Number.isFinite(cumulativeProfit)) {
+          throw new Error(`Cumulative PnL overflow for reconciled full-close trade id=${tradeId}`);
+        }
+
         const changed = this.db.prepare(
           `UPDATE trades
            SET status='closed', profit=?, closedAt=?, exitReason=?
            WHERE id=? AND status='open'`,
-        ).run(profit, closedAt, exitReason, tradeId).changes;
+        ).run(cumulativeProfit, closedAt, exitReason, tradeId).changes;
         if (changed !== 1) {
           throw new Error(`Could not persist reconciled full-close trade id=${tradeId}`);
         }
+
+        if (trade.mlPredictionId && trade.mlPredictionId.trim()) {
+          const actualLabel: -1 | 0 | 1 =
+            cumulativeProfit > 0
+              ? (trade.side === 'BUY' ? 1 : -1)
+              : cumulativeProfit < 0
+                ? (trade.side === 'BUY' ? -1 : 1)
+                : 0;
+
+          this.db.prepare(
+            `UPDATE model_decisions
+             SET outcomeLabel=?, outcomeProfit=?, outcomeRecordedAt=?
+             WHERE predictionId=?
+               AND outcomeRecordedAt IS NULL
+               AND predictedLabel IN (-1,0,1)`,
+          ).run(
+            actualLabel,
+            cumulativeProfit,
+            Date.now(),
+            trade.mlPredictionId.trim(),
+          );
+        }
+
+        const day = new Date(closedAt).toISOString().slice(0, 10);
+        const win = cumulativeProfit > 0 ? 1 : 0;
+        this.db.prepare(`
+          INSERT INTO daily_stats(day, trades, wins, losses, pnl)
+          VALUES (?,?,?,?,?)
+          ON CONFLICT(day) DO UPDATE SET
+            trades=daily_stats.trades + excluded.trades,
+            wins=daily_stats.wins + excluded.wins,
+            losses=daily_stats.losses + excluded.losses,
+            pnl=daily_stats.pnl + excluded.pnl
+        `).run(day, 1, win, 1 - win, cumulativeProfit);
+      }
 
         const day = new Date(closedAt).toISOString().slice(0, 10);
         const win = profit > 0 ? 1 : 0;
