@@ -41,12 +41,11 @@ class TestBaseModelInterface:
         assert X.shape[1] == len(FEATURE_COLS)
         assert y.shape[0] == len(df)
 
-    def test_prepare_xy_no_nan(self):
+    def test_prepare_xy_rejects_nan(self):
         df = make_labeled_df(100)
         df.iloc[10, 0] = np.nan  # inject NaN
-        X, y = BaseModel.prepare_xy(df)
-        assert not np.isnan(X).any()
-        assert not np.isinf(X).any()
+        with pytest.raises(ValueError, match="NaN|infinite"):
+            BaseModel.prepare_xy(df)
 
     def test_prepare_xy_dtypes(self):
         df = make_labeled_df(100)
@@ -289,7 +288,8 @@ class TestTrainingReport:
         report = TrainingReport(
             symbol="BTCUSDT", timeframe="1h", model_name="xgboost",
             total_samples=5000, train_samples=3500, val_samples=750, test_samples=750,
-            test_accuracy=0.578, test_f1_buy=0.55, test_f1_sell=0.49, test_f1_hold=0.60,
+            test_accuracy=0.578, test_majority_baseline=0.52,
+            test_f1_buy=0.55, test_f1_sell=0.49, test_f1_hold=0.60,
             wf_folds=[
                 WalkForwardFold(1,"2023-01","2023-06","2023-07","2023-09",0.55,0.52,0.48),
                 WalkForwardFold(2,"2023-01","2023-09","2023-10","2023-12",0.57,0.54,0.50),
