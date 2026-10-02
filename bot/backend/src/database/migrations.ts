@@ -410,7 +410,16 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE trades ADD COLUMN exitQuoteToAccount REAL;
     `
   },
+,
 
+  {
+    version: 15, name: 'execution_ledger_trade_id_index',
+    up: `
+      ALTER TABLE execution_ledger ADD COLUMN tradeId INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_execution_ledger_trade_status
+        ON execution_ledger(tradeId, status, updatedAt);
+    `
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
