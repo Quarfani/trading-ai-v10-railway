@@ -17,6 +17,26 @@ const clean = evaluateMarketDataQuality(
 assert(clean.passed, 'clean sequence should pass');
 assert(clean.score > 0.9, 'clean sequence should score highly');
 
+const invalidTimestamp = evaluateMarketDataQuality(
+  [{ ...candle(60_000), time: Number.NaN }],
+  'M1',
+);
+assert(!invalidTimestamp.passed, 'invalid candle timestamps must block');
+
+const invalidThreshold = evaluateMarketDataQuality(
+  [candle(60_000), candle(120_000)],
+  'M1',
+  { maxGapBars: Number.NaN, maxMissingRatio: 0.01 },
+);
+assert(!invalidThreshold.passed, 'invalid gap thresholds must block');
+
+const invalidLatency = evaluateMarketDataQuality(
+  [candle(60_000)],
+  'M1',
+  { maxLatencyMs: Number.NaN },
+);
+assert(!invalidLatency.passed, 'invalid latency threshold must block');
+
 const duplicate = evaluateMarketDataQuality(
   [candle(0), candle(60_000), candle(60_000)],
   'M1',
@@ -56,4 +76,4 @@ const forexWeekend = evaluateMarketDataQuality(
 );
 assert(forexWeekend.passed, 'scheduled Forex session gap should not hard-block');
 
-console.log('Result: 11 passed, 0 failed');
+console.log('Result: 14 passed, 0 failed');
