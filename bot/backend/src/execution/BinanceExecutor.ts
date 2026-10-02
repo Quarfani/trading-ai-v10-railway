@@ -688,9 +688,12 @@ export class BinanceExecutor {
         const recovered = await this.findOrderByClientId(signal.symbol, clientOrderId);
         if (recovered && !['CANCELED','REJECTED','EXPIRED'].includes(String(recovered.status ?? '').toUpperCase())) {
           const recoveredTicket = Number(recovered.orderId);
-          const fillPriceRecovered = Number(recovered.avgPrice ?? recovered.fills?.[0]?.price ?? signal.price);
+          const executedQtyRecovered = Number(
+            recovered.executedQty ?? recovered.origQty ?? quantity,
+          );
           let fillPriceRecovered = Number(
             recovered.avgPrice ?? recovered.fills?.[0]?.price ?? 0,
+          );
           );
           let entryCommissionRecovered = 0;
           let entryCommissionCurrencyRecovered: string | undefined;
