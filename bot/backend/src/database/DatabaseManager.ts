@@ -205,16 +205,21 @@ export class DatabaseManager {
       return false;
     }
     const now = Date.now();
+    const requestJson = entry.request ? JSON.stringify(entry.request) : null;
+    const tradeId = entry.request?.tradeId != null &&
+      Number.isFinite(Number(entry.request.tradeId))
+      ? Number(entry.request.tradeId)
+      : null;
     const result = this.db.prepare(`
       INSERT INTO execution_ledger
-        (executionId,operationKey,action,status,symbol,side,volume,signalId,strategyId,requestJson,createdAt,updatedAt)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        (executionId,operationKey,action,status,symbol,side,volume,signalId,strategyId,tradeId,requestJson,createdAt,updatedAt)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(operationKey) DO NOTHING
     `).run(
       entry.executionId, entry.operationKey, entry.action, entry.status,
       entry.symbol ?? null, entry.side ?? null, entry.volume ?? null,
-      entry.signalId ?? null, entry.strategyId ?? null,
-      entry.request ? JSON.stringify(entry.request) : null,
+      entry.signalId ?? null, entry.strategyId ?? null, tradeId,
+      requestJson,
       now, now,
     );
     return result.changes === 1;
@@ -228,12 +233,28 @@ export class DatabaseManager {
     tradeId: number,
     actions?: string[],
   ): any | null {
+    const actionFilter = actions?.length
+      ? ` AND action IN (${actions.map(() => '?').join(',')})`
+      : '';
+    const indexed = this.db.prepare(`
+      SELECT *
+      FROM execution_ledger
+      WHERE tradeId=?
+        AND status IN ('PENDING','UNKNOWN')${actionFilter}
+      ORDER BY updatedAt DESC, createdAt DESC
+      LIMIT 1
+    `).get(Number(tradeId), ...(actions ?? [])) as any | undefined;
+    if (indexed) return indexed;
+
+    // Backward-compatible fallback for pre-v15 rows that only stored tradeId
+    // inside requestJson.
     const rows = this.db.prepare(`
       SELECT *
       FROM execution_ledger
-      WHERE status IN ('PENDING','UNKNOWN')
+      WHERE tradeId IS NULL
+        AND status IN ('PENDING','UNKNOWN')${actionFilter}
       ORDER BY updatedAt DESC, createdAt DESC
-    `).all() as any[];
+    `).all(...(actions ?? [])) as any[];
 
     for (const row of rows) {
       if (!row.requestJson) continue;
@@ -244,7 +265,6 @@ export class DatabaseManager {
         continue;
       }
       if (Number(request?.tradeId) !== Number(tradeId)) continue;
-      if (actions?.length && !actions.includes(String(row.action))) continue;
       return row;
     }
     return null;
@@ -263,12 +283,27 @@ export class DatabaseManager {
     statuses: string[],
     actions?: string[],
   ): any | null {
+    const statusPlaceholders = statuses.map(() => '?').join(',');
+    const actionFilter = actions?.length
+      ? ` AND action IN (${actions.map(() => '?').join(',')})`
+      : '';
+    const indexed = this.db.prepare(`
+      SELECT *
+      FROM execution_ledger
+      WHERE tradeId=?
+        AND status IN (${statusPlaceholders})${actionFilter}
+      ORDER BY updatedAt DESC, createdAt DESC
+      LIMIT 1
+    `).get(Number(tradeId), ...statuses, ...(actions ?? [])) as any | undefined;
+    if (indexed) return indexed;
+
     const rows = this.db.prepare(`
       SELECT *
       FROM execution_ledger
-      WHERE status IN (${statuses.map(() => '?').join(',')})
+      WHERE tradeId IS NULL
+        AND status IN (${statusPlaceholders})${actionFilter}
       ORDER BY updatedAt DESC, createdAt DESC
-    `).all(...statuses) as any[];
+    `).all(...statuses, ...(actions ?? [])) as any[];
 
     for (const row of rows) {
       if (!row.requestJson) continue;
@@ -279,7 +314,6 @@ export class DatabaseManager {
         continue;
       }
       if (Number(request?.tradeId) !== Number(tradeId)) continue;
-      if (actions?.length && !actions.includes(String(row.action))) continue;
       return row;
     }
     return null;
