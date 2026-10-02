@@ -51,7 +51,7 @@ export class BinanceExecutor {
     });
   }
 
-  private async emergencyCloseAfterProtectionFailure(signal: Signal, quantity: number): Promise<void> {
+  private async emergencyCloseAfterProtectionFailure(signal: Signal, quantity: number, clientOrderId?: string): Promise<void> {
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const spec = getSymbolSpec(signal.symbol);
     const result = await this.signedPost(
@@ -62,6 +62,7 @@ export class BinanceExecutor {
         type: 'MARKET',
         quantity: this.formatQty(quantity, spec.volumeStep),
         ...(this.isFutures ? { reduceOnly: 'true' } : {}),
+        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
       },
     );
 
@@ -199,7 +200,11 @@ export class BinanceExecutor {
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
-        const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQty).catch(e => e);
+        const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+          signal,
+          executedQty,
+          clientOrderId ? makeBinanceClientOrderId(`${clientOrderId}:EMERGENCY_CLOSE`) : undefined,
+        ).catch(e => e);
         if (emergencyError) throw new Error(`Protection failed and emergency close failed for ${signal.symbol}`);
         if (this.isFutures) {
           const remaining = await this.getPosition(signal.symbol);
@@ -237,7 +242,11 @@ export class BinanceExecutor {
             if (this.isFutures) await this.placeSLTP(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
             else await this.placeOCO(signal, executedQtyRecovered, recoveredTicket, getSymbolSpec(signal.symbol));
           } catch (protectionError: any) {
-            const emergencyError = await this.emergencyCloseAfterProtectionFailure(signal, executedQtyRecovered).catch(e => e);
+            const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+              signal,
+              executedQtyRecovered,
+              clientOrderId ? makeBinanceClientOrderId(`${clientOrderId}:EMERGENCY_CLOSE`) : undefined,
+            ).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
             if (this.isFutures) {
               const remaining = await this.getPosition(signal.symbol);
