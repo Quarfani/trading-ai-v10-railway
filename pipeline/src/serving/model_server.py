@@ -260,6 +260,68 @@ class ModelServer:
         # Check for model degradation
         self._check_degradation(symbol, timeframe)
 
+    def record_prediction_outcome(
+        self,
+        symbol: str,
+        timeframe: str,
+        prediction_id: str,
+        predicted_signal: int,
+        actual_label: int,
+        profit: float,
+    ) -> None:
+        """Record a durable prediction outcome without requiring entry features."""
+        key = self._key(symbol, timeframe)
+
+        prediction_id = str(prediction_id).strip()
+        if not prediction_id or len(prediction_id) > 128:
+            logger.error(f"Rejected invalid prediction_id for {symbol}/{timeframe}")
+            return
+
+        if predicted_signal not in (-1, 0, 1) or actual_label not in (-1, 0, 1):
+            logger.error(
+                f"Rejected invalid prediction/actual label for {symbol}/{timeframe}: "
+                f"predicted={predicted_signal} actual={actual_label}"
+            )
+            return
+
+        profit_value = float(profit)
+        if not np.isfinite(profit_value):
+            logger.error(f"Rejected non-finite prediction outcome profit for {symbol}/{timeframe}")
+            return
+
+        with self._lock:
+            outcomes = self._outcomes.setdefault(key, [])
+            existing = next(
+                (
+                    item for item in outcomes
+                    if item.get("prediction_id") == prediction_id
+                ),
+                None,
+            )
+
+            if existing is not None:
+                if (
+                    existing.get("predicted_label") != predicted_signal or
+                    existing.get("actual_label") != actual_label or
+                    abs(float(existing.get("profit", 0.0)) - profit_value) > 1e-12
+                ):
+                    logger.error(
+                        f"Conflicting duplicate prediction outcome rejected: "
+                        f"{symbol}/{timeframe}/{prediction_id}"
+                    )
+                return
+
+            outcomes.append({
+                "prediction_id": prediction_id,
+                "predicted_label": predicted_signal,
+                "actual_label": actual_label,
+                "profit": profit_value,
+                "correct": predicted_signal == actual_label,
+                "ts": time.time(),
+            })
+
+        self._check_degradation(symbol, timeframe)
+
     def _trigger_online_update(self, symbol: str, timeframe: str) -> None:
         """Apply buffered samples to model via incremental learning."""
         key    = self._key(symbol, timeframe)
