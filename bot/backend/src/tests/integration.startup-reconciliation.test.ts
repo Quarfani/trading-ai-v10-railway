@@ -92,7 +92,52 @@ async function main() {
 
   const originalAxiosGet = axios.get;
   try {
-    const mt5CloseDb = await newDb();
+    const mt5ModifyStartupDb = await newDb();
+  const mt5ModifyStartupTradeId = mt5ModifyStartupDb.insertTrade({
+    ticket: 84, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
+    entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
+  });
+  mt5ModifyStartupDb.createExecutionLedger({
+    executionId: 'mt5-modify-startup',
+    operationKey: 'mt5-modify-startup-op',
+    action: 'MOVE_SL_TP',
+    status: 'UNKNOWN',
+    symbol: 'EURUSD',
+    side: 'BUY',
+    volume: 0.1,
+    request: { tradeId: mt5ModifyStartupTradeId, newSl: 1.095, newTp: 1.115 },
+  });
+  (axios.get as any) = async (url: string) => {
+    if (url.endsWith('/positions')) {
+      return {
+        data: {
+          ok: true,
+          positions: [{
+            ticket: 84, symbol: 'EURUSD', type: 'BUY', volume: 0.1,
+            sl: 1.095, tp: 1.115,
+          }],
+        },
+      };
+    }
+    throw new Error('unexpected URL');
+  };
+  await new StartupReconciler(
+    mt5Cfg,
+    mt5ModifyStartupDb,
+    new TelegramBot(mt5Cfg),
+  ).run();
+  assert(
+    mt5ModifyStartupDb.getExecutionByOperationKey('mt5-modify-startup-op').status === 'EXECUTED',
+    'MT5 startup reconciliation must resolve a verifiable MOVE_SL_TP operation',
+  );
+  assert(
+    mt5ModifyStartupDb.getOpenTrades()[0].sl === 1.095 &&
+    mt5ModifyStartupDb.getOpenTrades()[0].tp === 1.115,
+    'MT5 startup protective recovery must persist the broker SL/TP values',
+  );
+  mt5ModifyStartupDb.raw().close();
+
+  const mt5CloseDb = await newDb();
     const tradeId = mt5CloseDb.insertTrade({
       ticket: 77, symbol: 'EURUSD', timeframe: 'H1', side: 'BUY', volume: 0.1,
       entry: 1.1000, sl: 1.0900, tp: 1.1200, status: 'open', openedAt: Date.now(), source: 'TEST',
@@ -576,7 +621,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols = originalBalances;
   }
 
-  console.log('Result: 28 passed, 0 failed');
+  console.log('Result: 30 passed, 0 failed');
 }
 
 main().catch(error => {
