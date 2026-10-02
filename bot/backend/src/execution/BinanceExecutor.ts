@@ -556,13 +556,16 @@ export class BinanceExecutor {
       }
 
       const closeSide=pos.positionAmt>0?'SELL':'BUY';
+      const brokerClientOrderId = clientOrderId
+        ? this.closeClientOrderId(clientOrderId)
+        : undefined;
       const order=await this.signedPost('/fapi/v1/order',{
         symbol,
         side:closeSide,
         type:'MARKET',
         quantity:this.formatQty(qty,getSymbolSpec(symbol).volumeStep),
         reduceOnly:'true',
-        ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
+        ...(brokerClientOrderId ? { newClientOrderId: brokerClientOrderId } : {}),
       });
 
       const orderId=Number(order?.orderId);
@@ -662,6 +665,9 @@ export class BinanceExecutor {
 
         const closeQty = volume ?? Math.abs(pos.positionAmt);
         const closeSide = pos.positionAmt > 0 ? 'SELL' : 'BUY';
+        const brokerClientOrderId = clientOrderId
+          ? this.closeClientOrderId(clientOrderId)
+          : undefined;
 
         const closeOrder = await this.signedPost('/fapi/v1/order', {
           symbol,
@@ -672,7 +678,7 @@ export class BinanceExecutor {
             getSymbolSpec(symbol).volumeStep,
           ),
           reduceOnly: 'true',
-          ...(clientOrderId ? { newClientOrderId: clientOrderId } : {}),
+          ...(brokerClientOrderId ? { newClientOrderId: brokerClientOrderId } : {}),
         });
 
         const closeOrderId = Number(closeOrder?.orderId);
