@@ -146,7 +146,21 @@ export class KellyPositionSizer {
 
     const maxVolume = (base * config.riskPerTrade * 2) /
       (slDist * resolvedEconomics.contractSize * quoteToAccount);
-    if (!Number.isFinite(maxVolume) || maxVolume <= 0) {
+    if (
+      !Number.isFinite(maxVolume) ||
+      maxVolume <= 0 ||
+      maxVolume < resolvedEconomics.minVolume
+    ) {
+      this.logger.warn(
+        `[${symbol}] Tradable minimum volume exceeds calculated risk budget — sizing blocked`,
+      );
+      return { volume: 0, stats };
+    }
+
+    if (raw < resolvedEconomics.minVolume) {
+      this.logger.warn(
+        `[${symbol}] Calculated volume is below broker minimum — sizing blocked`,
+      );
       return { volume: 0, stats };
     }
 
