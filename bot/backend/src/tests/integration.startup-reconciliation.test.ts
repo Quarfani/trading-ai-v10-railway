@@ -494,10 +494,12 @@ async function main() {
     request: { tradeId: binanceRecoveryTradeId, exitPrice: 101, reason: 'MANUAL' },
   });
 
-  const futuresCfg = config() as SystemConfig;
+  const futuresCfg = { ...config(), mode: 'binance' } as SystemConfig;
+  const originalFuturesPing = (BinanceExecutor.prototype as any).ping;
   const originalGetAllPositions = (BinanceExecutor.prototype as any).getAllPositions;
   const originalRecoverOperation = (BinanceExecutor.prototype as any).recoverOperation;
   try {
+    (BinanceExecutor.prototype as any).ping = async () => true;
     (BinanceExecutor.prototype as any).getAllPositions = async () => [];
     (BinanceExecutor.prototype as any).recoverOperation = async (symbol: string, operationKey: string) => {
       assert(symbol === 'BTCUSDT', 'startup Binance recovery must use the trade symbol');
@@ -527,6 +529,7 @@ async function main() {
       'startup Binance reconciliation must resolve the exact broker operation',
     );
   } finally {
+    (BinanceExecutor.prototype as any).ping = originalFuturesPing;
     (BinanceExecutor.prototype as any).getAllPositions = originalGetAllPositions;
     (BinanceExecutor.prototype as any).recoverOperation = originalRecoverOperation;
     binanceRecoveryDb.raw().close();
@@ -552,12 +555,17 @@ async function main() {
   const originalModifyGetOpenOrders = (BinanceExecutor.prototype as any).getOpenOrders;
   const originalModifyRecoverProtection = (BinanceExecutor.prototype as any).recoverProtectionByOperation;
   try {
+    (BinanceExecutor.prototype as any).ping = async () => true;
     (BinanceExecutor.prototype as any).getAllPositions = async () => [{
       symbol: 'BTCUSDT',
       positionAmt: 1,
       entryPrice: 100,
       unrealizedProfit: 0,
     }];
+    (BinanceExecutor.prototype as any).getOpenOrders = async () => [
+      { side: 'SELL', type: 'STOP_MARKET', closePosition: true, stopPrice: '95' },
+      { side: 'SELL', type: 'TAKE_PROFIT_MARKET', closePosition: true, stopPrice: '110' },
+    ];
     (BinanceExecutor.prototype as any).recoverProtectionByOperation = async (symbol: string, operationKey: string) => {
       assert(symbol === 'BTCUSDT', 'startup protection recovery must use the trade symbol');
       assert(operationKey === 'binance-startup-modify-op', 'startup protection recovery must use the exact operation key');
@@ -580,6 +588,7 @@ async function main() {
       'resolving Binance MOVE_SL_TP must keep the broker-backed trade open',
     );
   } finally {
+    (BinanceExecutor.prototype as any).ping = originalFuturesPing;
     (BinanceExecutor.prototype as any).getAllPositions = originalModifyGetAllPositions;
     (BinanceExecutor.prototype as any).getOpenOrders = originalModifyGetOpenOrders;
     (BinanceExecutor.prototype as any).recoverProtectionByOperation = originalModifyRecoverProtection;

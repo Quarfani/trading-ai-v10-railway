@@ -36,13 +36,10 @@ async function main() {
   };
 
   // Simulate a process restart: the in-memory orderMap is empty, but the
-  // persisted trade side/volume are still available to the Gateway.
+  // persisted trade still lacks the exact OCO list identity needed for a safe close.
   const closed = await executor.closePosition(123, "BTCUSDT", 0.5, "BUY");
-  assert(closed.ok, "Spot position must remain closable after restart");
-  assert(closed.realizedProfit === null, "Spot close does not expose a futures-style realized PnL");
-  assert(closeRequest?.path === "/api/v3/order", "Spot close must use the Spot order endpoint");
-  assert(closeRequest?.params?.side === "SELL", "BUY trade must close with SELL");
-  assert(Number(closeRequest?.params?.quantity) === 0.5, "Spot restart close must use persisted trade volume");
+  assert(!closed.ok, "Spot restart close must fail closed without the exact OCO list identity");
+  assert(closeRequest === null, "Spot market close must not be sent while protective orders are unidentified");
 
   (executor as any).signedGet = async (path: string) => {
     assert(path === "/api/v3/account", "Spot equity must query the Spot account endpoint");

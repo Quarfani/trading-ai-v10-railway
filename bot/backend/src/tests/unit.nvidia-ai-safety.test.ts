@@ -6,6 +6,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const config = {
+  mode: 'paper',
   nvidia: {
     apiKey: 'test-key',
     baseUrl: 'https://nvidia.invalid',
@@ -85,6 +86,9 @@ async function main() {
       'malformed NVIDIA response must block live trading',
     );
 
+    (axios as any).post = async () => ({
+      data: { choices: [{ message: { content: '10' } }] },
+    });
     const maxScore = await ai.scoreSignal({
       ...signal,
       timestamp: Date.now(),

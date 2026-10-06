@@ -46,7 +46,7 @@ async function main() {
   } as any);
   paperDb.createExecutionLedger({
     executionId: "partial-open-1", operationKey: "partial-open-op", action: "PARTIAL_CLOSE",
-    status: "EXECUTED", symbol: "EURUSD", side: "BUY", volume: 0.4,
+    status: "PENDING", symbol: "EURUSD", side: "BUY", volume: 0.4,
     request: { tradeId: openId, volume: 0.4 },
   });
   paperDb.updateExecutionLedger("partial-open-1", {
@@ -65,7 +65,7 @@ async function main() {
   closedDb.updateTradeClose(closedId, 400, Date.now(), "MANUAL");
   closedDb.createExecutionLedger({
     executionId: "partial-closed-1", operationKey: "partial-closed-op", action: "PARTIAL_CLOSE",
-    status: "EXECUTED", symbol: "EURUSD", side: "BUY", volume: 0.04,
+    status: "PENDING", symbol: "EURUSD", side: "BUY", volume: 0.04,
     request: { tradeId: closedId, volume: 0.04 },
   });
   closedDb.updateExecutionLedger("partial-closed-1", {
@@ -86,7 +86,7 @@ async function main() {
   } as any);
   liveDb.createExecutionLedger({
     executionId: "live-partial-1", operationKey: "live-partial-op", action: "PARTIAL_CLOSE",
-    status: "EXECUTED", symbol: "EURUSD", side: "BUY", volume: 0.04,
+    status: "PENDING", symbol: "EURUSD", side: "BUY", volume: 0.04,
     request: { tradeId: liveTradeId, volume: 0.04 },
   });
   liveDb.updateExecutionLedger("live-partial-1", {

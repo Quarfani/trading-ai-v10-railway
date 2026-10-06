@@ -43,10 +43,11 @@ async function main() {
     getRate: async () => (++rateCalls === 1 ? 0.90 : 0.95),
   } as any;
   const paper = new ExecutionGateway(baseConfig("paper"), db, paperRates);
-  const first = await paper.execute(signal(1_800_000_000_001), 0.01, "H1");
+  const paperSignalTime = Date.now();
+  const first = await paper.execute(signal(paperSignalTime), 0.01, "H1");
   assert(first.success && first.trade, "first paper execution must succeed");
   assert(first.trade.entryQuoteToAccount === 0.90, "paper execution must persist entry FX rate");
-  const second = await paper.execute(signal(1_800_000_000_001), 0.01, "H1");
+  const second = await paper.execute(signal(paperSignalTime), 0.01, "H1");
   assert(second.success && second.trade, "executed operation must be replayable");
   assert(second.trade.ticket === first.trade.ticket, "replay must return the same ticket");
   assert(db.getRecentTrades(20).length === 1, "replay must not create a duplicate trade");
@@ -65,7 +66,7 @@ async function main() {
   (axios as any).post = async () => { postCalls += 1; throw new Error("simulated transport failure"); };
 
   try {
-    const liveSignal = signal(1_800_000_000_002, "EURUSD.a");
+    const liveSignal = signal(Date.now(), "EURUSD.a");
     const failed = await mt5.execute(liveSignal, 0.01, "H1");
     assert(!failed.success, "simulated MT5 failure must fail execution");
     assert(postCalls === 1, "first UNKNOWN operation must send exactly once");
@@ -103,7 +104,7 @@ async function main() {
   });
   try {
     const partial = await partialGateway.execute(
-      signal(1_800_000_000_003, "EURUSD.a"),
+      signal(Date.now(), "EURUSD.a"),
       0.10,
       "H1",
     );
@@ -252,10 +253,15 @@ async function main() {
     partialCalls += 1;
     return { data: { ok: true, remaining_volume: 0.06, profit: 3.75 } };
   };
-  const replayPartialTrade = {
-    id: 911, ticket: 911, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+  const replayPartialId = replayPartialDb.insertTrade({
+    ticket: 911, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
     volume: 0.10, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
-    openedAt: 1_800_000_000_011, source: "REPLAY_PARTIAL_TEST",
+    openedAt: Date.now(), source: "REPLAY_PARTIAL_TEST",
+  } as any);
+  const replayPartialTrade = {
+    id: replayPartialId, ticket: 911, symbol: "EURUSD.a", timeframe: "H1", side: "BUY",
+    volume: 0.10, entry: 1.1, sl: 1.09, tp: 1.12, status: "open",
+    openedAt: Date.now(), source: "REPLAY_PARTIAL_TEST",
   } as any;
   try {
     const partial1 = await replayPartialGateway.closePartial(replayPartialTrade, 0.04, 1.11, "PARTIAL");

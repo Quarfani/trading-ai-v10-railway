@@ -47,6 +47,12 @@ async function main() {
 
   (executor as any).signedGet = async (path: string, params: any) => {
     signedGets.push({ path, params });
+    if (path === "/api/v3/openOrders") {
+      return [
+        { symbol: params.symbol, orderId: 601, side: "SELL", type: "LIMIT_MAKER", status: "NEW", origQty: String(params.symbol === "ETHUSDT" ? 0.5 : 1), price: "110" },
+        { symbol: params.symbol, orderId: 602, side: "SELL", type: "STOP_LOSS_LIMIT", status: "NEW", origQty: String(params.symbol === "ETHUSDT" ? 0.5 : 1), stopPrice: "90", price: "89.95" },
+      ];
+    }
     throw new Error("no existing OCO");
   };
   (executor as any).signedPost = async (path: string, params: any) => {
@@ -96,6 +102,12 @@ async function main() {
   let recoveryPostCount = 0;
   let recoveryGetCount = 0;
   (recovered as any).signedGet = async (path: string, params: any) => {
+    if (path === "/api/v3/openOrders") {
+      return [
+        { symbol: "ETHUSDT", orderId: 601, side: "SELL", type: "LIMIT_MAKER", status: "NEW", origQty: "0.5", price: "110" },
+        { symbol: "ETHUSDT", orderId: 602, side: "SELL", type: "STOP_LOSS_LIMIT", status: "NEW", origQty: "0.5", stopPrice: "90", price: "89.95" },
+      ];
+    }
     recoveryGetCount += 1;
     assert(path === "/api/v3/orderList", "OCO recovery must query the order-list endpoint");
     assert(
@@ -125,8 +137,8 @@ async function main() {
   );
 
   const bad = makeExecutor();
-  (bad as any).signedGet = async () =>
-    activeOco(
+  (bad as any).signedGet = async (path: string) =>
+    path === "/api/v3/openOrders" ? [] : activeOco(
       (bad as any).makeOcoClientOrderId("bad-operation-key", "LIST"),
       0.5,
     );

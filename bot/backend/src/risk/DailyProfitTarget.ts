@@ -23,7 +23,7 @@ export class DailyProfitTarget {
       Number(currentEquity) > 0
     ) {
       const denominator = this.resolveDailyStartEquity(Number(currentEquity));
-      if (!(denominator > 0) || !Number.isFinite(denominator)) return false;
+      if (!(denominator > 0) || !Number.isFinite(denominator)) return true;
 
       const dailyChange = Number(currentEquity) - denominator;
       if (!Number.isFinite(dailyChange)) return false;
@@ -76,4 +76,3 @@ export class DailyProfitTarget {
     return currentEquity;
   }
 }
-

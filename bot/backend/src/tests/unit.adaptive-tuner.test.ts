@@ -13,7 +13,7 @@ async function main() {
   const add = (id: number, source: string, profit: number) => {
     db.raw().prepare(
       "INSERT INTO trades(ticket,symbol,timeframe,side,volume,entry,sl,tp,status,openedAt,closedAt,profit,source) " +
-      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(
       id,
       'EURUSD',
@@ -50,15 +50,15 @@ async function main() {
 
   assert(
     Math.abs(entries.get('TREND').metrics.expectancy - (200 / 11)) < 1e-12,
-    'AdaptiveTuner expectancy must be weighted by composite trade counts',
+    `AdaptiveTuner expectancy must be weighted by composite trade counts; got ${entries.get('TREND').metrics.expectancy}`,
   );
   assert(
     Math.abs(entries.get('RSI').metrics.expectancy - 10) < 1e-12,
     'RSI attribution must not include RSI_FAST trades',
   );
   assert(
-    Math.abs(entries.get('RSI_FAST').metrics.expectancy - 100) < 1e-12,
-    'RSI_FAST attribution must remain separate from RSI',
+    entries.get('RSI_FAST').metrics.expectancy === undefined,
+    'RSI_FAST metrics must remain unchanged until the minimum trade sample is reached',
   );
 
   db.raw().close();

@@ -7,7 +7,8 @@ function assert(condition: unknown, message: string): asserts condition {
 function candle(time:number, open=100, close=101): {
   time:number; open:number; high:number; low:number; close:number; volume:number;
 } {
-  return { time, open, high:Math.max(open,close)+1, low:Math.min(open,close)-1, close, volume:0 };
+  const fixtureBase = Date.now() - 60 * 60 * 60_000;
+  return { time: fixtureBase + time, open, high:Math.max(open,close)+1, low:Math.min(open,close)-1, close, volume:0 };
 }
 
 const clean = evaluateMarketDataQuality(

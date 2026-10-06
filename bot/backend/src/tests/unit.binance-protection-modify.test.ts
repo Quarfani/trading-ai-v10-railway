@@ -24,6 +24,12 @@ async function main() {
   (executor as any).getOpenOrders = async () => [
     { orderId: 102, type: "TAKE_PROFIT_MARKET" },
   ];
+  (executor as any).getProtectiveOrderIds = async () => [];
+  (executor as any).getPosition = async () => ({
+    positionAmt: 1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
 
   (executor as any).placeSLTP = async () => {
     throw new Error("must not replace protection while an old order remains");
@@ -81,6 +87,7 @@ async function main() {
     }
     return [];
   };
+  (executor as any).getProtectiveOrderIds = async () => [201, 202];
   (executor as any).signedDelete = async (_path: string, params: any) => {
     restartDeleted.push(Number(params.orderId));
     if (restartDeleted.length === 2) verificationPass = true;
