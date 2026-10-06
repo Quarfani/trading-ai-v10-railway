@@ -3,7 +3,7 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: 97a176f066848d1fa90d6e3eb8585fcaf50be650 (GitHub main baseline inspected on 2026-10-06; follow-up changes are in the review branch `fix/binance-close-reconciliation-validation`)
+Current head: 268b18168a0e39e1e30758d0b6281b5b061303b2 (review branch `fix/binance-close-reconciliation-validation`; based on main 97a176f066848d1fa90d6e3eb8585fcaf50be650)
 Current verified status: Local validation on the follow-up changes passed TypeScript typecheck and the focused Binance close-protection suite. The full backend suite completed with 605 passed and 19 failed. No green GitHub Actions run exists; Actions capacity is exhausted, so do not rerun workflows until capacity is restored.
 
 ## TARGET
@@ -171,4 +171,3 @@ Recent important commits in this development line include:
 
 ## FINAL RULE
 Never infer “internet is closed” from a single tool failure. Verify the specific service/tool limitation separately before reporting connectivity problems.
-
