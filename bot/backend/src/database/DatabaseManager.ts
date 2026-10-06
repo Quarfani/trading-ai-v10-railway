@@ -620,19 +620,6 @@ export class DatabaseManager {
         `).run(day, 1, win, 1 - win, cumulativeProfit);
       }
 
-        const day = new Date(closedAt).toISOString().slice(0, 10);
-        const win = profit > 0 ? 1 : 0;
-        this.db.prepare(`
-          INSERT INTO daily_stats(day, trades, wins, losses, pnl)
-          VALUES (?,?,?,?,?)
-          ON CONFLICT(day) DO UPDATE SET
-            trades=daily_stats.trades + excluded.trades,
-            wins=daily_stats.wins + excluded.wins,
-            losses=daily_stats.losses + excluded.losses,
-            pnl=daily_stats.pnl + excluded.pnl
-        `).run(day, 1, win, 1 - win, profit);
-      }
-
       const ledgerChanged = this.db.prepare(`
         UPDATE execution_ledger
         SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
@@ -913,3 +900,4 @@ export class DatabaseManager {
     `).run(key, value);
   }
 }
+

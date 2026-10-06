@@ -52,6 +52,16 @@ async function main() {
     source: "CUMULATIVE_PNL_TEST",
     realizedProfit: 300,
   } as any);
+  db.createExecutionLedger({
+    executionId: "cumulative-open-execution",
+    operationKey: "cumulative-open-operation",
+    action: "OPEN",
+    status: "EXECUTED",
+    symbol: "BTCUSDT",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId },
+  });
 
   (gateway as any).binance.closePosition = async () => ({
     ok: true,
@@ -95,3 +105,4 @@ main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
+

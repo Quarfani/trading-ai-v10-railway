@@ -37,8 +37,9 @@ async function main() {
   );
 
   (executor as any).getOpenOrders = async () => [];
+  let closePositionCalls = 0;
   (executor as any).getPosition = async () => ({
-    positionAmt: 0,
+    positionAmt: ++closePositionCalls === 1 ? 1 : 0,
     entryPrice: 100,
     unrealizedProfit: 0,
   });
@@ -99,8 +100,23 @@ async function main() {
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
   } as any);
   (spotPnl as any).getOpenOrders = async () => [];
-  (spotPnl as any).getSpotOcoByClientId = async () => null;
-  (spotPnl as any).getPosition = async () => ({ positionAmt: 0.5, entryPrice: 0, unrealizedProfit: 0 });
+  (spotPnl as any).recoverSpotOcoByOperation = async () => ({
+    orderListId: 6001,
+    listStatusType: "EXEC_STARTED",
+    listOrderStatus: "EXECUTING",
+    orders: [{ orderId: 6002 }, { orderId: 6003 }],
+  });
+  (spotPnl as any).getSpotOcoByClientId = async () => ({
+    listStatusType: "ALL_DONE",
+    listOrderStatus: "ALL_DONE",
+    orders: [{ orderId: 6002 }, { orderId: 6003 }],
+  });
+  let spotPositionReads = 0;
+  (spotPnl as any).getPosition = async () => ({
+    positionAmt: ++spotPositionReads === 1 ? 0.5 : 0,
+    entryPrice: 0,
+    unrealizedProfit: 0,
+  });
   let postCalls = 0;
   (spotPnl as any).signedPost = async (_path: string, payload: any) => {
     postCalls += 1;
@@ -117,9 +133,10 @@ async function main() {
   };
   (spotPnl as any).signedGet = async (path: string) => {
     if (path === "/api/v3/account") {
+      const baseBalance = spotPositionReads <= 1 ? "0.5" : "0";
       return {
         balances: [
-          { asset: "BTC", free: "0", locked: "0" },
+          { asset: "BTC", free: baseBalance, locked: "0" },
         ],
       };
     }
@@ -137,7 +154,7 @@ async function main() {
     0.5,
     "BUY",
     "spot-pnl-close",
-    undefined,
+    "spot-open-operation",
     100,
   );
   assert(spotProfit.ok, "Spot close with authoritative fills must succeed");
@@ -154,7 +171,7 @@ async function main() {
   const spot = new BinanceExecutor({
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
   } as any);
-  const canceledSpot: number[] = [];
+  const canceledSpotLists: number[] = [];
   let spotPostSubmitted = false;
   (spot as any).recoverSpotOcoByOperation = async (symbol: string, operationKey: string) => {
     assert(symbol === "BTCUSDT", "Spot close recovery must use the trade symbol");
@@ -170,10 +187,20 @@ async function main() {
     };
   };
   (spot as any).signedDelete = async (_path: string, params: any) => {
-    canceledSpot.push(Number(params.orderId));
-    return {};
+    canceledSpotLists.push(Number(params.orderListId));
+    return {
+      listClientOrderId: (spot as any).makeOcoClientOrderId(
+        "open-spot-operation",
+        "LIST",
+      ),
+    };
   };
+  (spot as any).getSpotOcoByClientId = async () => null;
   (spot as any).getOpenOrders = async () => [];
+  (spot as any).signedGet = async (path: string) => {
+    assert(path === "/api/v3/myTrades", "Spot exit PnL must use authoritative trade fills");
+    return [{ price: "110", qty: "0.1", commission: "0.01", commissionAsset: "USDT" }];
+  };
   let spotPositionCalls = 0;
   (spot as any).getPosition = async () => {
     spotPositionCalls += 1;
@@ -188,7 +215,6 @@ async function main() {
       orderId: 8803,
       status: "FILLED",
       executedQty: "0.1",
-      fills: [{ price: "110", qty: "0.1" }],
     };
   };
 
@@ -199,11 +225,12 @@ async function main() {
     "BUY",
     "close-spot-operation",
     "open-spot-operation",
+    100,
   );
   assert(spotClosed.ok, "Spot close must succeed after exact OCO recovery/cancellation");
   assert(
-    canceledSpot.includes(8801) && canceledSpot.includes(8802),
-    "Spot close after restart must cancel both recovered OCO legs",
+    canceledSpotLists.includes(555),
+    "Spot close after restart must cancel the exact recovered OCO list",
   );
   assert(
     spotPostSubmitted,
@@ -218,20 +245,15 @@ async function main() {
     entryPrice: 100,
     unrealizedProfit: 0,
   });
-  let flatRejected = false;
-  try {
-    await executor.closePosition(
-      1001,
-      "BTCUSDT",
-      1,
-      "BUY",
-      "flat-position-new-operation",
-    );
-  } catch {
-    flatRejected = true;
-  }
+  const alreadyFlat = await executor.closePosition(
+    1001,
+    "BTCUSDT",
+    1,
+    "BUY",
+    "flat-position-new-operation",
+  );
   assert(
-    flatRejected,
+    !alreadyFlat.ok,
     "a new Binance close operation must not infer success from an already-flat position",
   );
 
@@ -243,3 +265,4 @@ main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
+

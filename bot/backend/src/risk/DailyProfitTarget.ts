@@ -1,8 +1,10 @@
 import { DatabaseManager } from '../database/DatabaseManager';
 import { SystemConfig } from '../types/trading.types';
 import { TelegramBot } from '../notifications/TelegramBot';
+import { Logger } from '../utils/Logger';
 
 export class DailyProfitTarget {
+  private logger = new Logger('DailyProfitTarget');
   private notified = '';
 
   constructor(
@@ -74,3 +76,4 @@ export class DailyProfitTarget {
     return currentEquity;
   }
 }
+

@@ -3,8 +3,8 @@
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
 Branch: main
-Current head: a7a7ba613bb09e0ec756869178a3b52a04900572
-Current verified status: The code changes in this development line have NOT been validated by a green GitHub Actions run. GitHub Actions capacity is exhausted, so do not burn minutes on blind reruns.
+Current head: 97a176f066848d1fa90d6e3eb8585fcaf50be650 (GitHub main baseline inspected on 2026-10-06; follow-up changes are in the review branch `fix/binance-close-reconciliation-validation`)
+Current verified status: Local validation on the follow-up changes passed TypeScript typecheck and the focused Binance close-protection suite. The full backend suite completed with 605 passed and 19 failed. No green GitHub Actions run exists; Actions capacity is exhausted, so do not rerun workflows until capacity is restored.
 
 ## TARGET
 Adaptive quantitative trading decision system for Crypto + Forex + Gold + Oil with:
@@ -128,7 +128,7 @@ Focused tests were added for:
 IMPORTANT: test files contain human-readable Result counters, but because CI/local execution is unavailable in this environment, those counters are not evidence that the suites passed. Do not claim green tests until actually executed.
 
 ## KNOWN LIMITATIONS / NEXT ENGINEERING TARGETS
-1. Fix/verify all current TypeScript/Python tests by actual execution once a runnable local environment or GitHub Actions capacity is available.
+1. Diagnose and resolve the 19 failing backend tests from the 2026-10-06 local full-suite run; rerun the full suite after fixes. The summary was `605 passed, 19 failed`.
 2. Audit Binance Spot OCO restart recovery separately. Futures protective-order recovery is now broker-identity based; Spot OCO recovery may still rely more heavily on in-memory order mapping.
 3. Audit Binance protective-order creation itself for partial failure between SL and TP creation; ensure a half-created protection set is either rolled back or remains explicitly UNKNOWN/blocked.
 4. Audit emergency-close recovery after a protection failure so the emergency-close operation can itself be reconciled from broker history after a process crash.
@@ -138,7 +138,7 @@ IMPORTANT: test files contain human-readable Result counters, but because CI/loc
 8. Real broker E2E/soak evidence remains outstanding for non-USD conversions, restart interruption, broker latency, and long-run protection/reconciliation behavior.
 
 ## IMMEDIATE NEXT TASK
-Audit Binance Spot accounting semantics for entry/exit commission and multi-trade same-asset inventory, then audit all UNKNOWN close reconciliation paths for exact broker evidence. Continue fail-closed behavior and do not mutate local state on unattributed broker actions.
+Audit entry-protection emergency-close recovery after a process crash, then diagnose the 19 full-suite failures. Keep UNKNOWN operations fail-closed and do not mutate local state on unattributed broker actions.
 
 ## LATEST CHECKPOINT
 - Spot OCO cancellation now uses the exact OCO list identity and verifies the list is fully done and all legs are no longer open before manual market close.
@@ -146,13 +146,16 @@ Audit Binance Spot accounting semantics for entry/exit commission and multi-trad
 - Binance Spot close now requires authoritative fills via /api/v3/myTrades and computes exit PnL in the quote asset from fill price/qty/commission. Unknown third-asset commissions fail closed.
 - ExecutionGateway passes local trade entry price/side into Binance close and startup/runtime recovery so Spot close PnL can be recovered after restart.
 - Unattributed broker-side Binance partial reductions no longer rewrite local trade volume; reconciliation blocks for manual reconciliation instead.
+- Local regression fixes on 2026-10-06: removed a duplicated `daily_stats` SQL block that caused a syntax error; defined executed quantity for Futures full/partial close responses; corrected recovered Spot commission union narrowing; aligned startup reconciliation with the public Spot OCO/open-order recovery methods; and added the missing DailyProfitTarget logger.
+- Updated regression fixtures for exact OCO identity/fill evidence, open protective-order validation, and OPEN execution-ledger identity on cumulative close PnL.
+- Validation on 2026-10-06: backend TypeScript typecheck passed; focused Binance close-protection tests passed (11/11); full backend suite completed with 605 passed and 19 failed. Failures remain and must be fixed before claiming the suite is green. GitHub Actions was not run because the monthly quota is exhausted.
 - Binance Futures SL/TP creation is recover-before-create and recover-after-timeout; Spot OCO creation is operation-key idempotent and restart-recoverable.
 - Ensemble/model artifact validation, baseline-aware training recommendation, NVIDIA fail-closed live behavior, daily equity anchor corruption handling, correlation fail-closed behavior, and PositionSizer stop-direction validation are all in the current development line.
 - CI/local green validation is still outstanding. No claim of passing tests is valid until execution is available.
 
 ## RESUME PROCEDURE
 1. Read this file first.
-2. Verify current main SHA.
+2. Verify `main` and the follow-up review branch heads.
 3. Inspect latest GitHub Actions status only if capacity is restored; do not spend minutes on blind reruns.
 4. Continue with the IMMEDIATE NEXT TASK above.
 5. Before any interruption, update this file with the latest HEAD and exact next task.
@@ -168,3 +171,4 @@ Recent important commits in this development line include:
 
 ## FINAL RULE
 Never infer “internet is closed” from a single tool failure. Verify the specific service/tool limitation separately before reporting connectivity problems.
+
