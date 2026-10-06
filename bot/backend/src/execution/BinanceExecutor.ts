@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 17975)
-Total output lines: 2210
-
 /**
  * BINANCE EXECUTOR — v9.0 (COMPLETE FIX)
  * ═══════════════════════════════════════════════════════════════════════
@@ -785,7 +782,708 @@ export class BinanceExecutor {
 
     } catch (e: any) {
       if (clientOrderId) {
-        const recovered = await this.findOrderByClientId(signal.symbol,…5975 tokens truncated…n could not be verified for ${symbol}`,
+        const recovered = await this.findOrderByClientId(signal.symbol, clientOrderId);
+        if (recovered && !['CANCELED','REJECTED','EXPIRED'].includes(String(recovered.status ?? '').toUpperCase())) {
+          const recoveredTicket = Number(recovered.orderId);
+          const executedQtyRecovered = Number(
+            recovered.executedQty ?? recovered.origQty ?? quantity,
+          );
+          let fillPriceRecovered = Number(
+            recovered.avgPrice ?? recovered.fills?.[0]?.price ?? 0,
+          );
+          let entryCommissionRecovered = 0;
+          let entryCommissionCurrencyRecovered: string | undefined;
+          try {
+            const summary = this.isFutures
+              ? await this.getFuturesOrderFillSummary(
+                  signal.symbol,
+                  recoveredTicket,
+                  executedQtyRecovered,
+                )
+              : await this.getSpotOrderFillSummary(
+                  signal.symbol,
+                  recoveredTicket,
+                  executedQtyRecovered,
+                );
+            if (!summary) {
+              throw new Error(
+                this.isFutures
+                  ? 'Futures entry fill summary unavailable'
+                  : 'Spot entry fill summary unavailable',
+              );
+            }
+            fillPriceRecovered = summary.avgPrice;
+            entryCommissionRecovered = 'commission' in summary
+              ? summary.commission
+              : summary.feeQuote;
+            entryCommissionCurrencyRecovered = summary.currency;
+          } catch (summaryError: any) {
+              const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+                signal,
+                executedQtyRecovered,
+                clientOrderId,
+              ).catch(e => e);
+              if (emergencyError) {
+                throw new Error(
+                  `Recovered Binance entry accounting failed and emergency close failed: ${summaryError?.message ?? summaryError}`,
+                );
+              }
+              return null;
+            }
+          if (!(fillPriceRecovered > 0) || !Number.isFinite(fillPriceRecovered)) {
+            throw new Error('Recovered Binance order returned invalid fill price');
+          }
+          if (!(executedQtyRecovered > 0) || !Number.isFinite(executedQtyRecovered)) {
+            throw new Error('Recovered Binance order returned invalid executed quantity');
+          }
+          this.logger.warn(`[Binance] Recovered ambiguous order ${clientOrderId} as ticket=${recoveredTicket}`);
+          try {
+            if (this.isFutures) await this.placeSLTP(
+              signal,
+              executedQtyRecovered,
+              recoveredTicket,
+              getSymbolSpec(signal.symbol),
+              clientOrderId,
+            );
+            else await this.placeOCO(
+              signal,
+              executedQtyRecovered,
+              recoveredTicket,
+              getSymbolSpec(signal.symbol),
+              clientOrderId,
+            );
+          } catch (protectionError: any) {
+            const emergencyError = await this.emergencyCloseAfterProtectionFailure(
+              signal,
+              executedQtyRecovered,
+              clientOrderId,
+            ).catch(e => e);
+            if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
+            if (this.isFutures) {
+              const remaining = await this.getPosition(signal.symbol);
+              if (remaining && Math.abs(remaining.positionAmt) > 0) throw new Error(`Recovered order remained unprotected: ${signal.symbol}`);
+            }
+            return null;
+          }
+          return {
+            ticket: recoveredTicket,
+            symbol: signal.symbol,
+            side: signal.side,
+            volume: executedQtyRecovered,
+            entry: fillPriceRecovered,
+            sl: signal.sl,
+            tp: signal.tp,
+            status: 'open',
+            openedAt: Date.now(),
+            source: signal.source,
+            ...(entryCommissionRecovered > 0
+              ? {
+                  commission: entryCommissionRecovered,
+                  commissionCurrency: entryCommissionCurrencyRecovered,
+                }
+              : {}),
+          };
+        }
+      }
+      this.logger.error(`placeMarketOrder failed: ${e.response?.data ?? e.message}`);
+      return null;
+    }
+  }
+
+  // ─── [FIX-1] Futures SL + TP orders ──────────────────────────────────
+
+  private validateFuturesProtectionPair(
+    signal: Signal,
+    quantity: number,
+    slPrice: string,
+    tpPrice: string,
+    recovered: { sl: any | null; tp: any | null },
+  ): { slOrderId: number; tpOrderId: number } | null {
+    const sl = recovered?.sl;
+    const tp = recovered?.tp;
+    if (!sl || !tp) return null;
+
+    const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
+    const expectedQty = Number(quantity);
+    const qtyTolerance = Math.max(
+      getSymbolSpec(signal.symbol).volumeStep,
+      Math.abs(expectedQty) * 0.0001,
+    );
+
+    const slQty = Number(sl.origQty ?? sl.quantity ?? expectedQty);
+    const tpQty = Number(tp.origQty ?? tp.quantity ?? expectedQty);
+    if (
+      !(expectedQty > 0) ||
+      !Number.isFinite(expectedQty) ||
+      !Number.isFinite(slQty) ||
+      !Number.isFinite(tpQty) ||
+      Math.abs(slQty - expectedQty) > qtyTolerance ||
+      Math.abs(tpQty - expectedQty) > qtyTolerance
+    ) {
+      return null;
+    }
+
+    if (
+      String(sl.status ?? '').toUpperCase() !== 'NEW' ||
+      String(tp.status ?? '').toUpperCase() !== 'NEW' ||
+      String(sl.side ?? '').toUpperCase() !== closeSide ||
+      String(tp.side ?? '').toUpperCase() !== closeSide ||
+      String(sl.type ?? '').toUpperCase() !== 'STOP_MARKET' ||
+      String(tp.type ?? '').toUpperCase() !== 'TAKE_PROFIT_MARKET' ||
+      String(sl.closePosition).toLowerCase() !== 'true' ||
+      String(tp.closePosition).toLowerCase() !== 'true'
+    ) {
+      return null;
+    }
+
+    const slTolerance = Math.max(1e-8, Math.abs(Number(signal.sl)) * 1e-6);
+    const tpTolerance = Math.max(1e-8, Math.abs(Number(signal.tp)) * 1e-6);
+    if (
+      !Number.isFinite(Number(sl.stopPrice)) ||
+      !Number.isFinite(Number(tp.stopPrice)) ||
+      Math.abs(Number(sl.stopPrice) - Number(signal.sl)) > slTolerance ||
+      Math.abs(Number(tp.stopPrice) - Number(signal.tp)) > tpTolerance
+    ) {
+      return null;
+    }
+
+    const slOrderId = Number(sl.orderId);
+    const tpOrderId = Number(tp.orderId);
+    if (
+      !(slOrderId > 0) ||
+      !(tpOrderId > 0) ||
+      !Number.isFinite(slOrderId) ||
+      !Number.isFinite(tpOrderId)
+    ) {
+      return null;
+    }
+
+    return { slOrderId, tpOrderId };
+  }
+
+  private async placeSLTP(
+    signal:   Signal,
+    quantity: number,
+    ticket:   number,
+    spec:     ReturnType<typeof getSymbolSpec>,
+    protectionKey?: string,
+  ): Promise<void> {
+    const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
+    const qty       = this.formatQty(quantity, spec.volumeStep);
+    const slPrice   = this.formatPrice(signal.sl, spec.pip);
+    const tpPrice   = this.formatPrice(signal.tp, spec.pip);
+
+    if (protectionKey) {
+      const recovered = await this.recoverProtectionByOperation(
+        signal.symbol,
+        protectionKey,
+      );
+      const recoveredIds = this.validateFuturesProtectionPair(
+        signal,
+        quantity,
+        slPrice,
+        tpPrice,
+        recovered,
+      );
+      if (recoveredIds) {
+        this.orderMap.set(ticket, {
+          slOrderId: recoveredIds.slOrderId,
+          tpOrderId: recoveredIds.tpOrderId,
+          closeSide,
+          quantity,
+        });
+        this.logger.info(
+          `[Binance] Recovered existing SL/TP before create: ${signal.symbol} ticket=${ticket}`,
+        );
+        return;
+      }
+    }
+
+    const ids: OpenOrderIds = {};
+    const slClientOrderId = protectionKey
+      ? this.makeProtectionClientOrderId(protectionKey, 'SL')
+      : undefined;
+    const tpClientOrderId = protectionKey
+      ? this.makeProtectionClientOrderId(protectionKey, 'TP')
+      : undefined;
+
+    try {
+      const slOrder = await this.signedPost('/fapi/v1/order', {
+        symbol:           signal.symbol,
+        side:             closeSide,
+        type:             'STOP_MARKET',
+        stopPrice:        slPrice,
+        closePosition:    'true',
+        workingType:      'MARK_PRICE',
+        ...(slClientOrderId ? { newClientOrderId: slClientOrderId } : {}),
+      });
+      ids.slOrderId = Number(slOrder.orderId);
+      if (!(ids.slOrderId > 0) || !Number.isFinite(ids.slOrderId)) {
+        throw new Error('Binance SL placement returned invalid orderId');
+      }
+      this.logger.info(
+        `[Binance] SL placed: ${signal.symbol} stopPrice=${slPrice} orderId=${ids.slOrderId}`,
+      );
+    } catch (e: any) {
+      if (protectionKey) {
+        const recovered = await this.recoverProtectionByOperation(
+          signal.symbol,
+          protectionKey,
+        );
+        const recoveredIds = this.validateFuturesProtectionPair(
+          signal,
+          quantity,
+          slPrice,
+          tpPrice,
+          recovered,
+        );
+        if (recoveredIds) {
+          this.orderMap.set(ticket, {
+            slOrderId: recoveredIds.slOrderId,
+            tpOrderId: recoveredIds.tpOrderId,
+            closeSide,
+            quantity,
+          });
+          return;
+        }
+      }
+      throw new Error(
+        `SL placement failed: ${e.response?.data?.msg ?? e.message}`,
+      );
+    }
+
+    try {
+      const tpOrder = await this.signedPost('/fapi/v1/order', {
+        symbol:           signal.symbol,
+        side:             closeSide,
+        type:             'TAKE_PROFIT_MARKET',
+        stopPrice:        tpPrice,
+        closePosition:    'true',
+        workingType:      'MARK_PRICE',
+        ...(tpClientOrderId ? { newClientOrderId: tpClientOrderId } : {}),
+      });
+      ids.tpOrderId = Number(tpOrder.orderId);
+      if (!(ids.tpOrderId > 0) || !Number.isFinite(ids.tpOrderId)) {
+        throw new Error('Binance TP placement returned invalid orderId');
+      }
+      this.logger.info(
+        `[Binance] TP placed: ${signal.symbol} stopPrice=${tpPrice} orderId=${ids.tpOrderId}`,
+      );
+    } catch (e: any) {
+      if (protectionKey) {
+        const recovered = await this.recoverProtectionByOperation(
+          signal.symbol,
+          protectionKey,
+        );
+        const recoveredIds = this.validateFuturesProtectionPair(
+          signal,
+          quantity,
+          slPrice,
+          tpPrice,
+          recovered,
+        );
+        if (recoveredIds) {
+          this.orderMap.set(ticket, {
+            slOrderId: recoveredIds.slOrderId,
+            tpOrderId: recoveredIds.tpOrderId,
+            closeSide,
+            quantity,
+          });
+          return;
+        }
+      }
+
+      if (ids.slOrderId) {
+        await this.signedDelete('/fapi/v1/order', {
+          symbol: signal.symbol,
+          orderId: ids.slOrderId,
+        }).catch(() => {});
+      }
+      throw new Error(
+        `TP placement failed: ${e.response?.data?.msg ?? e.message}`,
+      );
+    }
+
+    if (protectionKey) {
+      const confirmed = await this.recoverProtectionByOperation(
+        signal.symbol,
+        protectionKey,
+      );
+      const confirmedIds = this.validateFuturesProtectionPair(
+        signal,
+        quantity,
+        slPrice,
+        tpPrice,
+        confirmed,
+      );
+      if (!confirmedIds) {
+        throw new Error(
+          `Binance SL/TP created but final protection state could not be verified for ${signal.symbol}`,
+        );
+      }
+      ids.slOrderId = confirmedIds.slOrderId;
+      ids.tpOrderId = confirmedIds.tpOrderId;
+    }
+
+    ids.closeSide = closeSide;
+    ids.quantity = quantity;
+    this.orderMap.set(ticket, ids);
+  }
+
+  // ─── Spot OCO (SL + TP combined) ─────────────────────────────────────
+
+  private async verifySpotOcoOpenLegs(
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    quantity: number,
+    sl: number,
+    tp: number,
+    orderIds: { slOrderId: number; tpOrderId: number },
+    volumeStep: number,
+  ): Promise<boolean> {
+    const openOrders = await this.getOpenOrders(symbol);
+    const byId = new Map(openOrders.map((order: any) => [Number(order.orderId), order]));
+    const slOrder = byId.get(orderIds.slOrderId);
+    const tpOrder = byId.get(orderIds.tpOrderId);
+    if (!slOrder || !tpOrder) return false;
+
+    const closeSide = side === 'BUY' ? 'SELL' : 'BUY';
+    const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+    const qtyTolerance = Math.max(volumeStep, Math.abs(quantity) * 0.0001);
+    const slQty = Number(slOrder.origQty ?? slOrder.quantity);
+    const tpQty = Number(tpOrder.origQty ?? tpOrder.quantity);
+
+    return (
+      String(slOrder.symbol ?? '').toUpperCase() === String(symbol).toUpperCase() &&
+      String(tpOrder.symbol ?? '').toUpperCase() === String(symbol).toUpperCase() &&
+      String(slOrder.side ?? '').toUpperCase() === closeSide &&
+      String(tpOrder.side ?? '').toUpperCase() === closeSide &&
+      String(slOrder.type ?? '').toUpperCase() === 'STOP_LOSS_LIMIT' &&
+      String(tpOrder.type ?? '').toUpperCase() === 'LIMIT_MAKER' &&
+      String(slOrder.status ?? '').toUpperCase() === 'NEW' &&
+      String(tpOrder.status ?? '').toUpperCase() === 'NEW' &&
+      Number.isFinite(slQty) &&
+      Number.isFinite(tpQty) &&
+      Math.abs(slQty - quantity) <= qtyTolerance &&
+      Math.abs(tpQty - quantity) <= qtyTolerance &&
+      Number.isFinite(Number(slOrder.stopPrice)) &&
+      Number.isFinite(Number(tpOrder.price)) &&
+      Math.abs(Number(slOrder.stopPrice) - sl) <= tolerance(sl) &&
+      Math.abs(Number(tpOrder.price) - tp) <= tolerance(tp)
+    );
+  }
+
+  private async placeOCO(
+    signal:       Signal,
+    quantity:     number,
+    ticket:       number,
+    spec:         ReturnType<typeof getSymbolSpec>,
+    protectionKey?: string,
+  ): Promise<void> {
+    const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
+
+    const tpPrice = this.formatPrice(signal.tp, spec.pip);
+    const slPrice = this.formatPrice(signal.sl, spec.pip);
+    const slLimit = signal.side === 'BUY'
+      ? this.formatPrice(signal.sl * 0.9995, spec.pip)
+      : this.formatPrice(signal.sl * 1.0005, spec.pip);
+
+    const listClientOrderId = protectionKey
+      ? this.makeOcoClientOrderId(protectionKey, 'LIST')
+      : `tao_${ticket}`;
+    const aboveClientOrderId = protectionKey
+      ? this.makeOcoClientOrderId(protectionKey, 'ABOVE')
+      : `taa_${ticket}`;
+    const belowClientOrderId = protectionKey
+      ? this.makeOcoClientOrderId(protectionKey, 'BELOW')
+      : `tab_${ticket}`;
+
+    const validateOco = (oco: any): {
+      listId: number;
+      slOrderId: number;
+      tpOrderId: number;
+    } => {
+      const status = String(oco?.listStatusType ?? '').toUpperCase();
+      const listStatus = String(oco?.listOrderStatus ?? '').toUpperCase();
+      if (
+        !['EXEC_STARTED', 'EXECUTING'].includes(status) &&
+        !['EXECUTING'].includes(listStatus)
+      ) {
+        throw new Error(
+          `Binance Spot OCO list is not an active protection state: status=${status} listStatus=${listStatus}`,
+        );
+      }
+
+      const returnedListId = String(oco?.listClientOrderId ?? '');
+      if (returnedListId !== listClientOrderId) {
+        throw new Error(
+          `Binance Spot OCO identity mismatch: expected=${listClientOrderId} got=${returnedListId}`,
+        );
+      }
+
+      const reports = Array.isArray(oco?.orderReports)
+        ? oco.orderReports
+        : [];
+      const listedOrders = Array.isArray(oco?.orders)
+        ? oco.orders
+        : [];
+      const legs = reports.length >= 2 ? reports : listedOrders;
+      if (legs.length < 2) {
+        throw new Error('Binance Spot OCO requires two order legs');
+      }
+
+      const findLeg = (clientId: string, fallbackType: string) =>
+        legs.find(
+          (r: any) =>
+            Number(r.orderId) > 0 &&
+            (
+              String(r.clientOrderId ?? '') === clientId ||
+              String(r.type ?? '').toUpperCase() === fallbackType
+            ),
+        );
+
+      const tpReport = findLeg(aboveClientOrderId, 'LIMIT_MAKER');
+      const slReport = findLeg(belowClientOrderId, 'STOP_LOSS_LIMIT');
+      if (!tpReport || !slReport) {
+        throw new Error('Binance Spot OCO legs could not be identified');
+      }
+
+      if (
+        reports.length >= 2 &&
+        (
+          String(tpReport.side ?? '').toUpperCase() !== closeSide ||
+          String(slReport.side ?? '').toUpperCase() !== closeSide
+        )
+      ) {
+        throw new Error('Binance Spot OCO protection legs have an unexpected side');
+      }
+
+      const expectedQty = Number(quantity);
+      const tpQty = Number(tpReport.origQty ?? tpReport.quantity ?? expectedQty);
+      const slQty = Number(slReport.origQty ?? slReport.quantity ?? expectedQty);
+      if (
+        !(expectedQty > 0) ||
+        !Number.isFinite(expectedQty) ||
+        !Number.isFinite(tpQty) ||
+        !Number.isFinite(slQty) ||
+        Math.abs(tpQty - expectedQty) > Math.max(spec.volumeStep, expectedQty * 0.0001) ||
+        Math.abs(slQty - expectedQty) > Math.max(spec.volumeStep, expectedQty * 0.0001)
+      ) {
+        throw new Error('Binance Spot OCO leg quantities do not match the executed entry quantity');
+      }
+
+      const tpId = Number(tpReport.orderId);
+      const slId = Number(slReport.orderId);
+      const listId = Number(oco.orderListId);
+      if (
+        !(tpId > 0) ||
+        !(slId > 0) ||
+        !(listId > 0) ||
+        !Number.isFinite(tpId) ||
+        !Number.isFinite(slId) ||
+        !Number.isFinite(listId)
+      ) {
+        throw new Error('Binance Spot OCO returned invalid order/list identities');
+      }
+
+      return {
+        listId,
+        tpOrderId: tpId,
+        slOrderId: slId,
+      };
+    };
+
+    // After a timeout, the OCO request may have reached Binance even when the
+    // client never received the response. Recover the exact list before
+    // creating anything new.
+    if (protectionKey) {
+      const recovered = await this.getSpotOcoByClientId(
+        signal.symbol,
+        listClientOrderId,
+      ).catch(() => null);
+      if (recovered) {
+        const ids = validateOco(recovered);
+        const verified = await this.verifySpotOcoOpenLegs(
+          signal.symbol,
+          signal.side,
+          quantity,
+          signal.sl,
+          signal.tp,
+          ids,
+          spec.volumeStep,
+        );
+        if (!verified) {
+          throw new Error(
+            `Binance Spot OCO list exists but active legs are not both valid for ${signal.symbol}`,
+          );
+        }
+        this.orderMap.set(ticket, {
+          slOrderId: ids.slOrderId,
+          tpOrderId: ids.tpOrderId,
+          orderListId: ids.listId,
+          closeSide,
+          quantity,
+        });
+        return;
+      }
+    }
+
+    let oco: any;
+    try {
+      oco = await this.signedPost('/api/v3/orderList/oco', {
+        symbol:             signal.symbol,
+        side:               closeSide,
+        quantity:           this.formatQty(quantity, spec.volumeStep),
+        listClientOrderId,
+        aboveClientOrderId,
+        belowClientOrderId,
+        aboveType:           'LIMIT_MAKER',
+        abovePrice:          tpPrice,
+        belowType:           'STOP_LOSS_LIMIT',
+        belowStopPrice:      slPrice,
+        belowPrice:          slLimit,
+        belowTimeInForce:    'GTC',
+      });
+    } catch (e: any) {
+      if (protectionKey) {
+        const recovered = await this.getSpotOcoByClientId(
+          signal.symbol,
+          listClientOrderId,
+        ).catch(() => null);
+        if (recovered) {
+          const ids = validateOco(recovered);
+          if (!(await this.verifySpotOcoOpenLegs(
+            signal.symbol,
+            signal.side,
+            quantity,
+            signal.sl,
+            signal.tp,
+            ids,
+            spec.volumeStep,
+          ))) {
+            throw new Error(
+              `Recovered Binance Spot OCO legs are not both valid for ${signal.symbol}`,
+            );
+          }
+          this.orderMap.set(ticket, {
+            slOrderId: ids.slOrderId,
+            tpOrderId: ids.tpOrderId,
+            orderListId: ids.listId,
+            closeSide,
+            quantity,
+          });
+          return;
+        }
+      }
+      throw new Error(
+        `Binance Spot OCO placement failed: ${e?.response?.data?.msg ?? e?.message ?? e}`,
+      );
+    }
+
+    let ids: { listId: number; slOrderId: number; tpOrderId: number };
+    try {
+      ids = validateOco(oco);
+    } catch (validationError) {
+      if (protectionKey) {
+        const recovered = await this.getSpotOcoByClientId(
+          signal.symbol,
+          listClientOrderId,
+        ).catch(() => null);
+        if (recovered) {
+          ids = validateOco(recovered);
+        } else {
+          throw validationError;
+        }
+      } else {
+        throw validationError;
+      }
+    }
+
+    this.orderMap.set(ticket, {
+      slOrderId: ids.slOrderId,
+      tpOrderId: ids.tpOrderId,
+      orderListId: ids.listId,
+      closeSide,
+      quantity,
+    });
+
+    this.logger.info(
+      `[Binance Spot] OCO placed/recovered: ${signal.symbol} TP=${tpPrice} SL=${slPrice} list=${ids.listId}`,
+    );
+  }
+
+  // ─── Modify SL/TP ─────────────────────────────────────────────────────
+
+  private async cancelSpotProtectionByOperation(
+    symbol: string,
+    operationKey: string,
+  ): Promise<void> {
+    const list = await this.recoverSpotOcoByOperation(symbol, operationKey);
+    if (!list) {
+      throw new Error(
+        `Binance Spot OCO could not be recovered before closing ${symbol}`,
+      );
+    }
+
+    const status = String(list.listStatusType).toUpperCase();
+    const listStatus = String(list.listOrderStatus).toUpperCase();
+    if (
+      !['EXEC_STARTED', 'EXECUTING'].includes(status) &&
+      !['EXECUTING'].includes(listStatus)
+    ) {
+      throw new Error(
+        `Binance Spot OCO is not active before close for ${symbol}: ${status}/${listStatus}`,
+      );
+    }
+
+    const listClientOrderId = this.makeOcoClientOrderId(operationKey, 'LIST');
+    const listId = Number(list.orderListId);
+    if (!(listId > 0) || !Number.isFinite(listId)) {
+      throw new Error(
+        `Binance Spot OCO has invalid orderListId before close for ${symbol}`,
+      );
+    }
+
+    let cancelResponse: any;
+    try {
+      cancelResponse = await this.signedDelete('/api/v3/orderList', {
+        symbol,
+        orderListId: listId,
+      });
+    } catch {
+      // A timeout can happen after Binance accepted the cancellation. Query
+      // the same order list before deciding that cancellation failed.
+      cancelResponse = null;
+    }
+
+    if (
+      cancelResponse &&
+      String(cancelResponse?.listClientOrderId ?? '') !== listClientOrderId
+    ) {
+      throw new Error(
+        `Binance Spot OCO cancellation identity mismatch for ${symbol}`,
+      );
+    }
+
+    const after = await this.getSpotOcoByClientId(
+      symbol,
+      listClientOrderId,
+    );
+    if (!after) {
+      // Some deployments do not return an order list once it is finished.
+      const openOrders = await this.getOpenOrders(symbol);
+      const liveIds = new Set(
+        (Array.isArray(list.orders) ? list.orders : [])
+          .map((order: any) => Number(order.orderId))
+          .filter((id: number) => Number.isFinite(id) && id > 0),
+      );
+      if (
+        [...liveIds].some(id =>
+          openOrders.some((order: any) => Number(order.orderId) === id),
+        )
+      ) {
+        throw new Error(
+          `Binance Spot OCO cancellation could not be verified for ${symbol}`,
         );
       }
       return;
@@ -1509,4 +2207,3 @@ export class BinanceExecutor {
     return price.toFixed(d);
   }
 }
-
