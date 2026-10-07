@@ -549,6 +549,21 @@ export class DatabaseManager {
     result: unknown,
     brokerOrderId?: string | number,
   ): boolean {
+    const resultObject = result && typeof result === 'object'
+      ? result as { quoteToAccount?: unknown; exitQuoteToAccount?: unknown }
+      : null;
+    const rawExitQuoteToAccount =
+      resultObject?.exitQuoteToAccount ?? resultObject?.quoteToAccount;
+    const exitQuoteToAccount = rawExitQuoteToAccount == null
+      ? null
+      : Number(rawExitQuoteToAccount);
+    if (
+      exitQuoteToAccount != null &&
+      (!(exitQuoteToAccount > 0) || !Number.isFinite(exitQuoteToAccount))
+    ) {
+      throw new Error(`Invalid exit quote conversion for reconciled full-close trade id=${tradeId}`);
+    }
+
     const tx = this.db.transaction(() => {
       const trade = this.db.prepare(
         `SELECT status, side, realizedProfit, mlPredictionId FROM trades WHERE id=? LIMIT 1`,
@@ -578,9 +593,10 @@ export class DatabaseManager {
 
         const changed = this.db.prepare(
           `UPDATE trades
-           SET status='closed', profit=?, closedAt=?, exitReason=?
+           SET status='closed', profit=?, closedAt=?, exitReason=?,
+               exitQuoteToAccount=COALESCE(?, exitQuoteToAccount)
            WHERE id=? AND status='open'`,
-        ).run(cumulativeProfit, closedAt, exitReason, tradeId).changes;
+        ).run(cumulativeProfit, closedAt, exitReason, exitQuoteToAccount, tradeId).changes;
         if (changed !== 1) {
           throw new Error(`Could not persist reconciled full-close trade id=${tradeId}`);
         }
@@ -618,19 +634,6 @@ export class DatabaseManager {
             losses=daily_stats.losses + excluded.losses,
             pnl=daily_stats.pnl + excluded.pnl
         `).run(day, 1, win, 1 - win, cumulativeProfit);
-      }
-
-        const day = new Date(closedAt).toISOString().slice(0, 10);
-        const win = profit > 0 ? 1 : 0;
-        this.db.prepare(`
-          INSERT INTO daily_stats(day, trades, wins, losses, pnl)
-          VALUES (?,?,?,?,?)
-          ON CONFLICT(day) DO UPDATE SET
-            trades=daily_stats.trades + excluded.trades,
-            wins=daily_stats.wins + excluded.wins,
-            losses=daily_stats.losses + excluded.losses,
-            pnl=daily_stats.pnl + excluded.pnl
-        `).run(day, 1, win, 1 - win, profit);
       }
 
       const ledgerChanged = this.db.prepare(`

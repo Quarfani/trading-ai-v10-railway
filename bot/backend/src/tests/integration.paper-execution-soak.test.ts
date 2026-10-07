@@ -30,7 +30,7 @@ function makeSignal(i: number): Signal {
     confidence: 0.80, sl: i % 2 === 0 ? entry - 0.005 : entry + 0.005,
     tp: i % 2 === 0 ? entry + 0.010 : entry - 0.010,
     source: "PAPER_SOAK", reason: "gateway-soak",
-    timestamp: 1_900_000_000_000 + i, timeframe: "H1",
+    timestamp: Date.now() - (100 - i) * 1_000, timeframe: "H1",
   };
 }
 
@@ -77,7 +77,7 @@ async function main() {
 
     console.log("Result: 8 passed, 0 failed");
   } finally {
-    if (fs.existsSync(dbPath)) fs.rmSync(dir, { recursive: true, force: true });
+    if (fs.existsSync(dbPath)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

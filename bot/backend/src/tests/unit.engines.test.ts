@@ -142,7 +142,7 @@ console.log('\n═══ PositionSizer ═══');
   const testDb:any = { getSetting: () => null, setSetting: () => {}, raw: () => ({ prepare: () => ({ get: () => ({ trades: 0, wins: 0, avgWin: 0, avgLoss: 1 }) }) }) };
   const sizer = new PositionSizer({ riskPerTrade: 0.01, accountBalance: 10000, mode: 'paper', compounding: { enabled: false } } as any, testDb);
 
-  const vol = sizer.size('EURUSD', 'BUY', 1.0800, 1.0750, 10000);
+  const vol = sizer.size('EURUSD', 'BUY', 1.0800, 1.0750, 50, 10000);
   assert(vol > 0,    'EURUSD: volume > 0');
   assert(vol <= 100, 'EURUSD: volume ≤ max');
   assert(vol >= 0.01,'EURUSD: volume ≥ min');

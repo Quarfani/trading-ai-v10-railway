@@ -23,7 +23,7 @@ for (const t of tests) {
   const source = fs.readFileSync(file, 'utf8');
 
   // Jest suites contain describe/test/it blocks.
-  const isJest = /\b(describe|test|it)\s*\(/.test(source);
+  const isJest = /^\s*(describe|test|it)\s*\(/m.test(source);
 
   console.log(`\n?  ${t} [${isJest ? 'JEST' : 'TS-NODE'}]`);
 

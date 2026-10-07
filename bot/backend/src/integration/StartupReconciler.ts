@@ -816,7 +816,7 @@ export class StartupReconciler {
         const operationKey = String(openOperation.operationKey);
 
 
-        const list = await exec.recoverBinanceSpotOco(
+        const list = await exec.recoverSpotOcoByOperation(
           t.symbol,
           operationKey,
         );
@@ -844,7 +844,7 @@ export class StartupReconciler {
           );
         }
 
-        const openOrders = await exec.getBinanceOpenOrders(t.symbol);
+        const openOrders = await exec.getOpenOrders(t.symbol);
         const byId = new Map(
           openOrders.map((order: any) => [Number(order.orderId), order]),
         );
@@ -977,3 +977,4 @@ export class StartupReconciler {
     }
   }
 }
+

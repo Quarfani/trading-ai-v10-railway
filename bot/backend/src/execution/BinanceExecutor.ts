@@ -813,7 +813,7 @@ export class BinanceExecutor {
               );
             }
             fillPriceRecovered = summary.avgPrice;
-            entryCommissionRecovered = this.isFutures
+            entryCommissionRecovered = 'commission' in summary
               ? summary.commission
               : summary.feeQuote;
             entryCommissionCurrencyRecovered = summary.currency;
@@ -1666,6 +1666,7 @@ export class BinanceExecutor {
         throw new Error('Binance partial close returned invalid orderId');
       }
 
+      const executedQty = Number(order?.executedQty ?? order?.origQty ?? 0);
       const status = String(order?.status ?? '').toUpperCase();
       if (status && status !== 'FILLED') {
         throw new Error(`Binance partial close was not fully filled: status=${status}`);
@@ -1826,6 +1827,9 @@ export class BinanceExecutor {
           throw new Error('Binance full close returned invalid orderId');
         }
 
+        const executedQty = Number(
+          closeOrder?.executedQty ?? closeOrder?.origQty ?? 0,
+        );
         const closeStatus = String(closeOrder?.status ?? '').toUpperCase();
         const quantityTolerance = Math.max(
           getSymbolSpec(symbol).volumeStep,

@@ -10,7 +10,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const candles: Candle[] = Array.from({ length: 260 }, (_, i) => {
   const base = 1.1000 + i * 0.0001;
   return {
-    time: i * 3_600_000,
+    time: Date.now() - (260 - i) * 3_600_000,
     open: base,
     high: base + 0.001,
     low: base - 0.001,

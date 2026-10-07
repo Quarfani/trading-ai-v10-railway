@@ -69,7 +69,7 @@ export class AdaptiveTuner {
           AVG(profit) as avg_profit,
           MAX(CASE WHEN profit < 0 THEN ABS(profit) ELSE 0 END) as max_loss
         FROM trades WHERE status='closed' AND closedAt > ?
-        GROUP BY source HAVING total >= 8
+        GROUP BY source
       `).all(cutoff) as Array<{
         source: string; total: number; wins: number;
         avg_profit: number; max_loss: number;

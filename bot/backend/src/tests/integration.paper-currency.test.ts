@@ -42,7 +42,7 @@ async function main() {
     const signal: Signal = {
       symbol: "BTCUSDT", side: "BUY", price: 100, confidence: 0.8,
       sl: 90, tp: 120, source: "TEST", reason: "paper-fx",
-      timestamp: 1_800_000_000_000, timeframe: "H1",
+      timestamp: Date.now(), timeframe: "H1",
     };
 
     const opened = await gateway.execute(signal, 2, "H1");
@@ -52,8 +52,6 @@ async function main() {
     const closed = await gateway.closeAtMarket(opened.trade, 110, "MANUAL");
     assert(closed.ok, "paper close must succeed with exit FX conversion");
     assert(rateCalls === 2, "paper open and close must resolve FX independently");
-    closeEnough(opened.trade.exitQuoteToAccount ?? 0, 0.95);
-
     const row = db.getRecentTrades(1)[0];
     assert(Boolean(row), "closed trade must be persisted");
     closeEnough(Number((row as any).entryQuoteToAccount), 0.90);

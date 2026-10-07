@@ -132,6 +132,10 @@ async function main() {
       entryPrice: 100,
       unrealizedProfit: 0,
     }),
+    getBinanceOpenOrders: async () => [
+      { orderId: 7003, side: "SELL", type: "STOP_MARKET", closePosition: "true", stopPrice: "90" },
+      { orderId: 7004, side: "SELL", type: "TAKE_PROFIT_MARKET", closePosition: "true", stopPrice: "120" },
+    ],
     recoverBinanceExecution: async (_symbol: string, operationKey: string) => {
       assert(operationKey === "binance-partial-op", "partial recovery must use the exact operation key");
       return {
@@ -452,3 +456,4 @@ main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
+
