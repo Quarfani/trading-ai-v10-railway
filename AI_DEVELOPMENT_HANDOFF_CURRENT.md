@@ -2,7 +2,7 @@
 
 ## PROJECT
 Repository: Quarfani/trading-ai-v10-railway
-Branch: `fix/binance-close-reconciliation-validation` (draft PR #2; base `main` at 97a176f066848d1fa90d6e3eb8585fcaf50be650)
+Branch: `fix/binance-close-reconciliation-validation` (draft PR #2; base `main` at 97a176f066848d1fa90d6e3eb8585fcaf50be650; verify the live branch head from PR #2 when resuming)
 Current verified status: Local TypeScript typecheck passed; the full backend suite passed with 790 passed, 0 failed in 759.1 seconds. Focused Binance close-protection, startup reconciliation, paper-FX conversion, and paper soak suites also passed. GitHub Actions capacity is exhausted; do not rerun workflows until capacity is restored.
 
 ## TARGET
