@@ -843,9 +843,13 @@ export class StartupReconciler {
       );
     }
 
+    // Binance commonly lists account-currency conversion pairs with the
+    // account asset as base and the trading quote asset (for example USDT)
+    // as quote. Load that orientation first; the resolver below inverts it
+    // when computing the original quote-to-account direction.
     const series = await loadHistoricalCurrencySeries(
-      quote,
       account,
+      quote,
       async (symbol, count) => {
         const candles = await scanner.fetchCandles(symbol, 'D1', count);
         return candles.map(candle => ({
