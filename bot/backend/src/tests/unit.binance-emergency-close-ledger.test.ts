@@ -67,12 +67,24 @@ async function main() {
     assert(persistedRequest.positionBeforeSignedAmount === 1, "signed pre-close inventory must be durable before order submission");
     exactClientOrderIds.push(String(payload?.newClientOrderId ?? ""));
     assert(Boolean(payload?.newClientOrderId), "emergency order must carry a deterministic clientOrderId");
-    return { orderId: 902, status: "FILLED", executedQty: "1" };
+    return {
+      symbol: "BTCUSDT",
+      clientOrderId: String(payload?.newClientOrderId ?? ""),
+      orderId: 902,
+      status: "FILLED",
+      executedQty: "1",
+    };
   };
 
   (executor as any).findOrderByClientId = async (_symbol: string, clientOrderId: string) => {
     assert(clientOrderId === exactClientOrderIds[0], "recovery must query the exact submitted clientOrderId");
-    return { orderId: 902, status: "FILLED", executedQty: "1" };
+    return {
+      symbol: "BTCUSDT",
+      clientOrderId,
+      orderId: 902,
+      status: "FILLED",
+      executedQty: "1",
+    };
   };
 
   const signal = {
