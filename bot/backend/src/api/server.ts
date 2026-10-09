@@ -29,6 +29,10 @@ const BacktestSchema = z.object({
   timeframe: z.enum(['M1','M5','M15','M30','H1','H4','D1']),
   count:     z.number().int().min(300).max(5000).optional(),
 });
+const MonteCarloSchema = z.object({
+  simulations: z.number().int().min(100).max(10_000).optional(),
+  trades: z.number().int().min(10).max(250).optional(),
+});
 const NoteSchema      = z.object({ note: z.string().max(500) });
 const EmergencySchema = z.object({ reason: z.string().max(200).optional() });
 const ResumeSchema    = z.object({ approver: z.string().max(100).optional() });
@@ -245,7 +249,7 @@ export function createApi(engine: TradingEngine) {
   });
 
   // ── [FIX+NEW] Backtest (async) ────────────────────────────────────────
-  app.post('/api/backtest', validate(BacktestSchema), async (req: Request, res: Response) => {
+  app.post('/api/backtest', rateLimit(5, 'research'), validate(BacktestSchema), async (req: Request, res: Response) => {
     try {
       const { symbol, timeframe, count = 1000 } = req.body;
       const candles = await engine['scanner'].fetchCandles(symbol, timeframe, count);
@@ -302,7 +306,7 @@ export function extendApiV8(app: Express, engine: any) {
   });
 
   // Monte Carlo
-  app.post('/api/montecarlo', async (req: any, res: any) => {
+  app.post('/api/montecarlo', rateLimit(5, 'research'), validate(MonteCarloSchema), async (req: any, res: any) => {
     try {
       const trades = engine['db'].getRecentClosedTrades(200)
         .filter((t: any) => t.profit !== undefined);
@@ -315,7 +319,7 @@ export function extendApiV8(app: Express, engine: any) {
   });
 
   // Walk-Forward (async, returns cached result or triggers new run)
-  app.post('/api/walkforward', requireRole('admin'), async (req: any, res: any) => {
+  app.post('/api/walkforward', requireRole('admin'), rateLimit(1, 'walkforward'), async (req: any, res: any) => {
     try {
       // WFO temporarily sets strategy parameters in process.env. Never allow
       // that research mutation while the live/paper execution loop is active.
@@ -397,7 +401,7 @@ export function extendApiV8(app: Express, engine: any) {
     });
   });
 
-  app.post('/api/ml/train', requireRole('admin'), async (req: any, res: any) => {
+  app.post('/api/ml/train', requireRole('admin'), rateLimit(1, 'ml-training'), async (req: any, res: any) => {
     const ml = engine['mlPipeline'];
     if (!ml) return res.status(503).json({ error: 'ML not ready' });
     const r = await ml.train();
