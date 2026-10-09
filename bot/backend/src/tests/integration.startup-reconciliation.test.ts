@@ -816,6 +816,52 @@ async function main() {
     interruptedProtectionDb.raw().close();
   }
 
+  const quantityDriftExecutor = new BinanceExecutor(futuresCfg);
+  const quantityDriftKey = 'restore-after-quantity-drift';
+  const quantityDriftIds = {
+    sl: (quantityDriftExecutor as any).makeProtectionClientOrderId(quantityDriftKey, 'SL'),
+    tp: (quantityDriftExecutor as any).makeProtectionClientOrderId(quantityDriftKey, 'TP'),
+  };
+  let restoredQuantity = 0;
+  (quantityDriftExecutor as any).getPosition = async () => ({
+    positionAmt: 0.6,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  (quantityDriftExecutor as any).cancelProtectionByOperationKey = async () => {};
+  (quantityDriftExecutor as any).getOpenAlgoOrders = async () => [];
+  (quantityDriftExecutor as any).placeSLTP = async (
+    _signal: any,
+    quantity: number,
+  ) => {
+    restoredQuantity = quantity;
+  };
+  (quantityDriftExecutor as any).recoverProtectionByOperation = async () => ({
+    sl: {
+      symbol: 'BTCUSDT', orderId: 9501, clientOrderId: quantityDriftIds.sl,
+      side: 'SELL', type: 'STOP_MARKET', closePosition: true,
+      stopPrice: '90', status: 'NEW',
+    },
+    tp: {
+      symbol: 'BTCUSDT', orderId: 9502, clientOrderId: quantityDriftIds.tp,
+      side: 'SELL', type: 'TAKE_PROFIT_MARKET', closePosition: true,
+      stopPrice: '120', status: 'NEW',
+    },
+  });
+  const quantityDriftRestored = await quantityDriftExecutor.restoreProtectionPairForReconciliation(
+    604,
+    'BTCUSDT',
+    'BUY',
+    1,
+    quantityDriftKey,
+    90,
+    120,
+  );
+  assert(quantityDriftRestored,
+    'protection restoration must succeed when the broker position quantity differs from the saved quantity');
+  assert(restoredQuantity === 0.6,
+    'restored closePosition orders must be validated against the current live quantity, not stale saved quantity');
+
   const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
   const originalPing = (BinanceExecutor.prototype as any).ping;
   const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
@@ -940,7 +986,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getOpenOrders = originalSpotOpenOrders;
   }
 
-  console.log('Result: 37 passed, 0 failed');
+  console.log('Result: 38 passed, 0 failed');
 }
 
 main().catch(error => {
