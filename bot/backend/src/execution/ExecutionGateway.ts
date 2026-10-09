@@ -474,6 +474,52 @@ export class ExecutionGateway {
     return row?.operationKey ? String(row.operationKey) : undefined;
   }
 
+  private getProtectionOperationKeyForTrade(tradeId: number): string | undefined {
+    const unresolved = this.db.getLatestUnresolvedExecutionForTrade(
+      tradeId,
+      ['MOVE_SL_TP'],
+    );
+    if (unresolved) {
+      this.logger.error(
+        `Unresolved SL/TP modification ${unresolved.operationKey} blocks broker close for trade id=${tradeId}`,
+      );
+      return undefined;
+    }
+
+    const openOperationKey = this.getOpenOperationKeyForTrade(tradeId);
+    if (!openOperationKey) return undefined;
+
+    const rows = this.db.raw().prepare(`
+      SELECT operationKey, requestJson, tradeId
+      FROM execution_ledger
+      WHERE action='MOVE_SL_TP'
+        AND status='EXECUTED'
+        AND (tradeId=? OR tradeId IS NULL)
+      ORDER BY updatedAt DESC, executionId DESC
+      LIMIT 100
+    `).all(tradeId) as Array<{
+      operationKey: string;
+      requestJson?: string | null;
+      tradeId?: number | null;
+    }>;
+
+    for (const row of rows) {
+      try {
+        const request = JSON.parse(String(row.requestJson ?? 'null'));
+        if (
+          Number(row.tradeId ?? request?.tradeId) === tradeId &&
+          Number(request?.tradeId) === tradeId
+        ) {
+          return String(row.operationKey);
+        }
+      } catch {
+        // Ignore malformed historical rows when selecting the active protection identity.
+      }
+    }
+
+    return openOperationKey;
+  }
+
   private async closeBrokerTrade(
     t: Trade,
     operationKey: string,
@@ -514,6 +560,14 @@ export class ExecutionGateway {
           `Binance close blocked because authoritative OPEN operation identity is unavailable for trade id=${t.id}`,
         );
       }
+      const protectionOperationKey = t.id
+        ? this.getProtectionOperationKeyForTrade(t.id)
+        : undefined;
+      if (t.id && !protectionOperationKey) {
+        throw new Error(
+          `Binance close blocked because the current protection operation identity is unavailable for trade id=${t.id}`,
+        );
+      }
 
       const result = await this.binance.closePosition(
         t.ticket,
@@ -521,7 +575,7 @@ export class ExecutionGateway {
         t.volume,
         t.side,
         this.makeClientOrderId(operationKey),
-        openOperationKey,
+        protectionOperationKey,
         t.entry,
       );
 
