@@ -331,6 +331,56 @@ export class StartupReconciler {
         (trade.side === 'SELL' && !(newSl > trade.entry && newTp < trade.entry))
       ) continue;
 
+      // The replacement pair is now authoritatively recovered. A process may
+      // have stopped after creating it but before canceling the previous pair.
+      // Retire only the previous operation's exact Algo IDs before settling the
+      // modification; never sweep symbol-wide or manually created protection.
+      const previousMoveRows = this.db.raw().prepare(`
+        SELECT operationKey, requestJson, tradeId
+        FROM execution_ledger
+        WHERE action='MOVE_SL_TP'
+          AND status='EXECUTED'
+          AND (tradeId=? OR tradeId IS NULL)
+        ORDER BY updatedAt DESC, executionId DESC
+        LIMIT 100
+      `).all(tradeId) as Array<{
+        operationKey: string;
+        requestJson?: string | null;
+        tradeId?: number | null;
+      }>;
+      let previousProtectionKey: string | null = null;
+      for (const previous of previousMoveRows) {
+        if (String(previous.operationKey) === String(row.operationKey)) continue;
+        try {
+          const previousRequest = JSON.parse(String(previous.requestJson ?? 'null'));
+          if (
+            Number(previous.tradeId ?? previousRequest?.tradeId) === tradeId &&
+            Number(previousRequest?.tradeId) === tradeId
+          ) {
+            previousProtectionKey = String(previous.operationKey);
+            break;
+          }
+        } catch {
+          // Malformed history cannot authorize cancellation of any broker order.
+        }
+      }
+      if (!previousProtectionKey) {
+        const openOperation = this.db.getLatestExecutedOpenOperationForTrade(tradeId);
+        if (openOperation && !openOperation.conflict) {
+          previousProtectionKey = String(openOperation.operationKey);
+        }
+      }
+      if (
+        previousProtectionKey &&
+        previousProtectionKey !== String(row.operationKey)
+      ) {
+        await exec.cancelProtectionByOperationKey(
+          String(trade.symbol),
+          String(trade.side).toUpperCase() as 'BUY' | 'SELL',
+          previousProtectionKey,
+        );
+      }
+
       const resolved = this.db.resolveReconciledSLTP(
         tradeId,
         String(row.executionId),
