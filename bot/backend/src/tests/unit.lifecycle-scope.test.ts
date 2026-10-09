@@ -103,8 +103,8 @@ async function main() {
   assert(brokerSuffix.allowed, "broker suffix should normalize to the canonical symbol");
 
   store.save({
-    strategyId: "scope-testnet",
-    name: "TREND_TESTNET",
+    strategyId: "scope-trend",
+    name: "TREND",
     version: "1.0.0",
     enabled: true,
     lifecycle: "TESTNET",
@@ -116,7 +116,7 @@ async function main() {
       sessions: [],
     },
     requiredData: ["OHLCV"],
-    parametersVersion: "p1",
+    parametersVersion: "p2",
     riskProfile: {
       baseRiskFraction: 0.005,
       minimumRiskReward: 1.5,
@@ -125,13 +125,12 @@ async function main() {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   } as any);
-  orchestrator.registry.register({
-    name: "TREND_TESTNET",
-    generate_signal: () => ({ signal: "NONE" } as any),
-  } as any);
 
-  const testnetAllowed = orchestrator.isExecutionLifecycleEligible(
-    "TREND_TESTNET",
+  // Recreate the registry so it reloads the newly persisted lifecycle metadata.
+  const testnetOrchestrator = new ConsensusOrchestrator(db);
+
+  const testnetAllowed = testnetOrchestrator.isExecutionLifecycleEligible(
+    "TREND",
     "binance",
     "BTCUSDT",
     "H1",
@@ -140,8 +139,8 @@ async function main() {
   );
   assert(testnetAllowed.allowed, "a TESTNET strategy should be eligible for the explicit Testnet stage");
 
-  const testnetNotProduction = orchestrator.isExecutionLifecycleEligible(
-    "TREND_TESTNET",
+  const testnetNotProduction = testnetOrchestrator.isExecutionLifecycleEligible(
+    "TREND",
     "binance",
     "BTCUSDT",
     "H1",
@@ -150,8 +149,8 @@ async function main() {
   );
   assert(!testnetNotProduction.allowed, "a TESTNET strategy must not be eligible for the PRODUCTION stage");
 
-  const testnetDefaultRemainsProductionGate = orchestrator.isExecutionLifecycleEligible(
-    "TREND_TESTNET",
+  const testnetDefaultRemainsProductionGate = testnetOrchestrator.isExecutionLifecycleEligible(
+    "TREND",
     "binance",
     "BTCUSDT",
     "H1",
