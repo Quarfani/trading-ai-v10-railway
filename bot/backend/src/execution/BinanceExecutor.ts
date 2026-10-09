@@ -2563,6 +2563,13 @@ export class BinanceExecutor {
       this.logger.warn(`modifyPosition blocked: durable recovery callback is required for ${symbol}`);
       return false;
     }
+    if (
+      !(newSl > 0) || !(newTp > 0) ||
+      !Number.isFinite(newSl) || !Number.isFinite(newTp)
+    ) {
+      this.logger.warn(`modifyPosition blocked: requested SL/TP targets are invalid for ${symbol}`);
+      return false;
+    }
 
     let position: any = null;
     let quantity = 0;
@@ -2614,6 +2621,14 @@ export class BinanceExecutor {
       quantity = Math.abs(Number(position.positionAmt));
       if (!(quantity > 0) || !Number.isFinite(quantity)) {
         throw new Error(`Binance position quantity is invalid for ${symbol}`);
+      }
+      const entryPrice = Number(position.entryPrice);
+      if (
+        !(entryPrice > 0) || !Number.isFinite(entryPrice) ||
+        (side === 'BUY' && !(newSl < entryPrice && newTp > entryPrice)) ||
+        (side === 'SELL' && !(newSl > entryPrice && newTp < entryPrice))
+      ) {
+        throw new Error(`Requested SL/TP direction is invalid relative to the live entry price for ${symbol}`);
       }
 
       const oldPair = await this.recoverProtectionByOperation(symbol, currentProtectionKey);
