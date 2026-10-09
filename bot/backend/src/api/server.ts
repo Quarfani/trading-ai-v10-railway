@@ -16,6 +16,7 @@ import { TradingEngine }       from '../core/TradingEngine';
 import { Logger }              from '../utils/Logger';
 import { authMiddleware, login, requireRole } from './auth';
 import { rateLimit }           from './rateLimit';
+import { boundedQueryNumber, parseTimeframeQuery } from './queryValidation';
 import { exportTradesCSV, getEquityCurve } from '../analytics/CsvExporter';
 import { Backtester }          from '../backtest/Backtester';
 import { marketRegimeDetector } from '../core/MarketRegimeDetector';
@@ -113,7 +114,7 @@ export function createApi(engine: TradingEngine) {
   );
 
   app.get('/api/consensus/log', (req: Request, res: Response) => {
-    const n = Math.min(200, Math.max(1, Number(req.query.n ?? 50)));
+    const n = boundedQueryNumber(req.query.n, 50, 1, 200);
     res.json({ log: engine.getConsensusLog(n) });
   });
 
@@ -124,7 +125,7 @@ export function createApi(engine: TradingEngine) {
 
   // ── Trades ────────────────────────────────────────────────────────────
   app.get('/api/trades', (req: Request, res: Response) => {
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 50)));
+    const limit = boundedQueryNumber(req.query.limit, 50, 1, 500);
     res.json({ trades: engine['db'].getRecentTrades(limit) });
   });
 
@@ -201,13 +202,13 @@ export function createApi(engine: TradingEngine) {
   );
 
   app.get('/api/signals', (req: Request, res: Response) => {
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50)));
+    const limit = boundedQueryNumber(req.query.limit, 50, 1, 200);
     res.json({ signals: engine['db'].getRecentSignals(limit) });
   });
 
   // [FIX] getRecentAudits is on DB, not engine
   app.get('/api/decisions', (req: Request, res: Response) => {
-    const hours = Math.min(48, Math.max(0.1, Number(req.query.hours ?? 1)));
+    const hours = boundedQueryNumber(req.query.hours, 1, 0.1, 48, false);
     res.json({ decisions: engine['db'].getRecentAudits(hours) });
   });
 
@@ -222,7 +223,8 @@ export function createApi(engine: TradingEngine) {
   app.get('/api/regime/:symbol', (req: Request, res: Response) => {
     const symbolParam = req.params.symbol;
     const sym = (Array.isArray(symbolParam) ? symbolParam[0] : symbolParam).toUpperCase();
-    const tf  = (req.query.tf as string ?? 'H1').toUpperCase();
+    const tf = parseTimeframeQuery(req.query.tf);
+    if (!tf) return res.status(400).json({ error: 'Invalid timeframe' });
     const candleMap = engine['candleMap'] as Record<string, any[]>;
     const candles   = candleMap?.[sym];
     if (!candles || candles.length < 50) {
@@ -384,7 +386,7 @@ export function extendApiV8(app: Express, engine: any) {
 
   // Trade journal
   app.get('/api/journal', (req: any, res: any) => {
-    const limit = Math.min(100, Number(req.query.limit ?? 50));
+    const limit = boundedQueryNumber(req.query.limit, 50, 1, 100);
     res.json({ entries: engine['tradeJournal']?.getEntries(limit) ?? [] });
   });
 
