@@ -578,6 +578,7 @@ export class DatabaseManager {
       !(closedAt >= openedAt) || !Number.isFinite(closedAt) ||
       !Number.isFinite(entryFee) || entryFee < 0 ||
       !Number.isFinite(entryRealized) ||
+      Math.abs(entryRealized + entryFee) > Math.max(1e-7, entryFee * 1e-9) ||
       !Number.isFinite(exitProfit) ||
       !Number.isFinite(finalProfit) ||
       Math.abs(finalProfit - (entryRealized + exitProfit)) > Math.max(1e-7, Math.abs(finalProfit) * 1e-9) ||
