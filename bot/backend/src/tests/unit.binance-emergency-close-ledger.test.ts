@@ -1,6 +1,9 @@
 const { BinanceExecutor } = require("../execution/BinanceExecutor");
 
+let assertions = 0;
+
 function assert(condition: unknown, message: string): asserts condition {
+  assertions += 1;
   if (!condition) throw new Error(message);
 }
 
@@ -25,6 +28,12 @@ async function main() {
         brokerOrderId: null,
         error: null,
       };
+      return true;
+    },
+    updateExecutionRequest(executionId: string, request: any) {
+      if (!ledger || ledger.executionId !== executionId) return false;
+      if (ledger.status === "EXECUTED" || ledger.status === "FAILED") return false;
+      ledger = { ...ledger, requestJson: JSON.stringify(request) };
       return true;
     },
     updateExecutionLedger(executionId: string, patch: any) {
@@ -119,7 +128,7 @@ async function main() {
   assert(ledger.status === "UNKNOWN", "recovery evidence must not bypass atomic accounting settlement");
   assert(positionReads === 3, "recovery must query and validate the post-close inventory again");
 
-  console.log("Result: 16 assertions passed, 0 failed");
+  console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
 main().catch(error => {
