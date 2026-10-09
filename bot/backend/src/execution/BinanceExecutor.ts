@@ -2432,60 +2432,166 @@ export class BinanceExecutor {
       .filter((id: number) => Number.isFinite(id) && id > 0);
   }
 
-  async modifyPosition(
-    ticket:number,
-    symbol:string,
-    side:'BUY'|'SELL',
-    newSl:number,
-    newTp:number,
-    protectionKey?: string,
-  ):Promise<boolean>{
-    if(!this.isFutures)return false;
-    try{
-      const ids=this.orderMap.get(ticket);
-      const trackedIds=[ids?.slOrderId,ids?.tpOrderId].filter(
-        (id): id is number => Number.isFinite(id),
-      );
-      const brokerIds = await this.getProtectiveOrderIds(symbol, side);
-      const oldIds = [...new Set([...trackedIds, ...brokerIds])];
+  private async cancelFuturesProtectionPairByOperation(
+    symbol: string,
+    entrySide: 'BUY' | 'SELL',
+    operationKey: string,
+  ): Promise<void> {
+    if (!this.isFutures) {
+      throw new Error('Futures protection cancellation called for a non-Futures executor');
+    }
+    if (!operationKey || !operationKey.trim()) {
+      throw new Error('Exact prior protection operation key is required');
+    }
 
-      for(const orderId of oldIds) {
-        await this.signedDelete('/fapi/v1/algoOrder',{symbol,algoId:orderId});
+    const closeSide = entrySide === 'BUY' ? 'SELL' : 'BUY';
+    const terminalCanceledStatuses = new Set([
+      'CANCELED', 'EXPIRED', 'REJECTED',
+    ]);
+
+    for (const kind of ['SL', 'TP'] as const) {
+      const expectedClientAlgoId = this.makeProtectionClientOrderId(operationKey, kind);
+      const order = await this.getAlgoOrderByClientIdStrict(symbol, expectedClientAlgoId);
+      if (!order) continue;
+
+      const algoId = Number(order.orderId);
+      const expectedType = kind === 'SL' ? 'STOP_MARKET' : 'TAKE_PROFIT_MARKET';
+      const status = String(order.status ?? '').trim().toUpperCase();
+      if (
+        !(algoId > 0) ||
+        !Number.isFinite(algoId) ||
+        String(order.symbol ?? '').trim().toUpperCase() !== String(symbol).trim().toUpperCase() ||
+        String(order.clientOrderId ?? '') !== expectedClientAlgoId ||
+        String(order.side ?? '').trim().toUpperCase() !== closeSide ||
+        String(order.type ?? '').trim().toUpperCase() !== expectedType ||
+        String(order.closePosition).trim().toLowerCase() !== 'true'
+      ) {
+        throw new Error(
+          `Prior operation-owned Futures ${kind} identity/shape mismatch for ${symbol}; refusing cancellation`,
+        );
       }
 
-      if (oldIds.length) {
-        const remaining = await this.getOpenAlgoOrders(symbol);
-        const stillOpen = remaining.some((order: any) =>
-          oldIds.includes(Number(order.orderId)),
+      if (terminalCanceledStatuses.has(status)) continue;
+      if (status !== 'NEW') {
+        throw new Error(
+          `Prior operation-owned Futures ${kind} has status=${status || 'UNKNOWN'} for ${symbol}; trigger/execution cannot be ruled out`,
         );
-        if (stillOpen) {
+      }
+
+      try {
+        const response = await this.signedDelete('/fapi/v1/algoOrder', {
+          symbol,
+          algoId,
+        });
+        if (
+          response?.algoId != null &&
+          Number(response.algoId) !== algoId
+        ) {
+          throw new Error(`Prior Futures ${kind} cancellation returned a different algoId`);
+        }
+        if (
+          response?.clientAlgoId != null &&
+          String(response.clientAlgoId) !== expectedClientAlgoId
+        ) {
+          throw new Error(`Prior Futures ${kind} cancellation returned a different clientAlgoId`);
+        }
+      } catch (cancelError: any) {
+        const confirmed = await this.getAlgoOrderByClientIdStrict(
+          symbol,
+          expectedClientAlgoId,
+        );
+        const confirmedStatus = String(confirmed?.status ?? '').trim().toUpperCase();
+        if (!confirmed || !terminalCanceledStatuses.has(confirmedStatus)) {
           throw new Error(
-            `protective order cancellation not verified for ${symbol}`,
+            `Prior Futures ${kind} cancellation is ambiguous for ${symbol}/${expectedClientAlgoId}: ${String(cancelError?.message ?? cancelError)}`,
           );
         }
       }
 
-      const position = await this.getPosition(symbol);
-      if (!position) {
+      const confirmed = await this.getAlgoOrderByClientIdStrict(
+        symbol,
+        expectedClientAlgoId,
+      );
+      const confirmedStatus = String(confirmed?.status ?? '').trim().toUpperCase();
+      if (
+        !confirmed ||
+        String(confirmed.symbol ?? '').trim().toUpperCase() !== String(symbol).trim().toUpperCase() ||
+        String(confirmed.clientOrderId ?? '') !== expectedClientAlgoId ||
+        !terminalCanceledStatuses.has(confirmedStatus)
+      ) {
         throw new Error(
-          `Binance position state unavailable while modifying ${symbol}`,
+          `Prior Futures ${kind} cancellation was not authoritatively verified for ${symbol}`,
         );
       }
-      const quantity=ids?.quantity ?? Math.abs(position.positionAmt ?? 0);
-      if(!(quantity>0)) return false;
+    }
 
-      const sig={
+    const openAlgoOrders = await this.getOpenAlgoOrders(symbol);
+    const priorIds = new Set([
+      this.makeProtectionClientOrderId(operationKey, 'SL'),
+      this.makeProtectionClientOrderId(operationKey, 'TP'),
+    ]);
+    if (openAlgoOrders.some((order: any) => priorIds.has(String(order.clientOrderId ?? '')))) {
+      throw new Error(`Prior operation-owned Futures protection remains open for ${symbol}`);
+    }
+  }
+
+  async modifyPosition(
+    ticket: number,
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    newSl: number,
+    newTp: number,
+    protectionKey?: string,
+    currentProtectionKey?: string,
+  ): Promise<boolean> {
+    if (!this.isFutures) return false;
+    if (!protectionKey || !protectionKey.trim()) return false;
+    if (!currentProtectionKey || !currentProtectionKey.trim()) {
+      this.logger.warn(
+        `modifyPosition blocked: exact current protection identity is unavailable for ${symbol}`,
+      );
+      return false;
+    }
+    if (protectionKey === currentProtectionKey) {
+      this.logger.warn(
+        `modifyPosition blocked: current and replacement protection identities are identical for ${symbol}`,
+      );
+      return false;
+    }
+
+    try {
+      const position = await this.getPosition(symbol);
+      if (!position) {
+        throw new Error(`Binance position state unavailable while modifying ${symbol}`);
+      }
+      if (
+        !Number.isFinite(Number(position.positionAmt)) ||
+        position.positionAmt === 0 ||
+        (side === 'BUY' && position.positionAmt <= 0) ||
+        (side === 'SELL' && position.positionAmt >= 0)
+      ) {
+        throw new Error(
+          `Binance position side does not match the trade being modified for ${symbol}`,
+        );
+      }
+
+      const quantity = Math.abs(Number(position.positionAmt));
+      if (!(quantity > 0) || !Number.isFinite(quantity)) return false;
+
+      const sig = {
         symbol,
         side,
-        price:0,
-        confidence:1,
-        sl:newSl,
-        tp:newTp,
-        source:'modify',
-        reason:'modify',
-        timestamp:Date.now(),
+        price: Number(position.entryPrice ?? 0),
+        confidence: 1,
+        sl: newSl,
+        tp: newTp,
+        source: 'modify',
+        reason: 'modify',
+        timestamp: Date.now(),
       } as Signal;
 
+      // Keep the old, verified protection active until both replacement Algo
+      // orders have been created and recovered with their exact identities.
       await this.placeSLTP(
         sig,
         quantity,
@@ -2493,9 +2599,17 @@ export class BinanceExecutor {
         getSymbolSpec(symbol),
         protectionKey,
       );
+
+      // Only cancel the former operation's SL/TP. Never sweep other orders
+      // on the symbol merely because they share a side or closePosition flag.
+      await this.cancelFuturesProtectionPairByOperation(
+        symbol,
+        side,
+        currentProtectionKey,
+      );
       return true;
-    }catch(e:any){
-      this.logger.warn(`modifyPosition failed: ${e?.message??e}`);
+    } catch (e: any) {
+      this.logger.warn(`modifyPosition failed: ${e?.message ?? e}`);
       return false;
     }
   }
