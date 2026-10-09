@@ -1631,7 +1631,7 @@ export class StartupReconciler {
         request: any;
       } | null = null;
       const moveRows = this.db.raw().prepare(`
-        SELECT operationKey, requestJson, tradeId
+        SELECT operationKey, requestJson, tradeId, status
         FROM execution_ledger
         WHERE action='MOVE_SL_TP'
           AND status IN ('EXECUTED','FAILED')
