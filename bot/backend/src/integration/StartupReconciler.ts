@@ -812,6 +812,14 @@ export class StartupReconciler {
         if (!request || request.schemaVersion !== 1) {
           throw new Error('Emergency-close request schema is missing or unsupported');
         }
+        if (
+          request.protectionCleanupState !==
+          'VERIFIED_NO_OPERATION_OWNED_ORDERS_ACTIVE'
+        ) {
+          throw new Error(
+            'Emergency-close ledger has no durable proof that operation-owned protection orders were canceled/terminal before market close; operator reconciliation is required',
+          );
+        }
         if (request.submissionState === 'PRECHECK_NOT_STARTED') {
           throw new Error('Emergency-close precheck failed before any broker order was armed; operator reconciliation is required and no automatic resend is allowed');
         }
