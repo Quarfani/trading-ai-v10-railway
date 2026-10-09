@@ -1,9 +1,13 @@
 # AI DEVELOPMENT HANDOFF CURRENT
 
 ## PROJECT
-Repository: Quarfani/trading-ai-v10-railway
-Branch: `fix/binance-close-reconciliation-validation` (draft PR #2; base `main` at 97a176f066848d1fa90d6e3eb8585fcaf50be650; verify the live branch head from PR #2 when resuming)
-Current verified status: Local TypeScript typecheck passed; the full backend suite passed with 790 passed, 0 failed in 759.1 seconds. Focused Binance close-protection, startup reconciliation, paper-FX conversion, and paper soak suites also passed. GitHub Actions capacity is exhausted; do not rerun workflows until capacity is restored.
+Repository: `Quarfani/trading-ai-v10-railway`
+Current phase branch: `phase1/durable-emergency-close-intent`
+Phase base: `41b0457f48cb38f27a8879604b87e1b4d73d5559`
+Last source-code commit before this handoff refresh: `eb0b3c1f8a4fc035653cd778fd81c3ea3ec85dda` (the handoff update itself creates a later documentation commit; verify live HEAD before editing).
+Existing draft PR #2 remains separate and unchanged: `https://github.com/Quarfani/trading-ai-v10-railway/pull/2`; `main` was not modified or merged.
+
+**Current status:** Phase 2 emergency-close recovery implementation has been added on the phase branch. Static source checks passed, but TypeScript typecheck and tests were NOT run in this environment. This is not a deployable/release-approved state. GitHub Actions capacity is exhausted; do not rerun Actions unless the quota is restored.
 
 ## TARGET
 Adaptive quantitative trading decision system for Crypto + Forex + Gold + Oil with:
@@ -132,32 +136,29 @@ IMPORTANT: test files contain human-readable Result counters, but because CI/loc
 3. Audit Binance protective-order creation itself for partial failure between SL and TP creation; ensure a half-created protection set is either rolled back or remains explicitly UNKNOWN/blocked.
 4. Audit emergency-close recovery after a protection failure so the emergency-close operation can itself be reconciled from broker history after a process crash.
 5. Add prediction-level IDs to Python ModelServer outcome records if true live model-accuracy degradation monitoring is desired; do not re-enable auto-retraining based only on win-rate.
-6. Review TypeScript MLTrainingPipeline because it is now leak-resistant but its historical training rows still use simplified placeholder technical features; production deployment relies on the Python pipeline, so these two paths should eventually be consolidated.
-7. Perform a final consistency pass between README/deployment profiles and the new fail-closed risk semantics.
-8. Real broker E2E/soak evidence remains outstanding for non-USD conversions, restart interruption, broker latency, and long-run protection/reconciliation behavior.
+6. Review TypeScript MLTrainingPipeline because it is now leak-resistant but its historical training rows still use simplified placeholder technical features; production deployment relies on the Python pipeline, so these two paths should eventually be con## IMMEDIATE NEXT TASK
+1. In a runnable checkout of this exact branch, run `cd bot/backend && npm run typecheck`.
+2. Run the focused test `npx ts-node --transpile-only src/tests/integration.protection-failure-emergency-reconciliation.test.ts` and `npx ts-node --transpile-only src/tests/unit.binance-emer## LATEST CHECKPOINT — 2026-10-09 PHASE 2 IMPLEMENTATION
+- Branch: `phase1/durable-emergency-close-intent`. Phase base `41b0457f48cb38f27a8879604b87e1b4d73d5559`; verify the live branch head before resuming. Last code commit before this documentation refresh: `eb0b3c1f8a4fc035653cd778fd81c3ea3ec85dda`.
+- Phase 2 code changes: `BinanceExecutor` now offers exact operation-keyed fill recovery, validates broker-reported clientOrderId/symbol/status/quantity, persists signed position snapshots, requires durable operation identity for live entries using the injected database, and records protection-failure emergency-close intent before sending the emergency market order.
+- Emergency CLOSE recovery is wired into startup reconciliation for both Spot and Futures. It matches the parent OPEN key and child `PROTECTION_FAIL_CLOSE` ledger, recovers the exact entry and exit fills, verifies the post-close signed inventory delta, recovers fees/PnL, applies account-currency conversion, and atomically settles a newly reconstructed closed trade plus both ledger records, daily stats, and ML outcome where present.
+- Futures fill accounting now refuses to subtract commission from realized PnL if fee asset does not equal the symbol quote asset. Ambiguous evidence remains `UNKNOWN`; startup remains blocked rather than blindly sending another order.
+- Added `bot/backend/src/tests/integration.protection-failure-emergency-reconciliation.test.ts` for exact fill recovery, Spot/Futures settlement, missing-fill fail-closed behavior, idempotent repeat reconciliation, and atomic rollback if child settlement fails. The previous emergency intent test remains.
+- **NOT VERIFIED:** backend typecheck, focused tests, full backend suite, frontend build, browser E2E, and broker E2E were not run. GitHub Actions was not run because quota is exhausted. No test counter is proof of passing tests. The source should be treated as implementation-in-progress until real commands pass.
+- **Accounting caveat:** recovery currently applies the quote-to-account rate available during startup reconciliation to the recovered emergency-close accounting. Exact historical conversion-time evidence was not persisted for this emergency path; verify/improve historical-rate handling for non-USD accounts before release.
+- **Operational caveat:** if the pre-close broker-position query fails before the emergency intent can be constructed, the parent OPEN remains unresolved and startup is fail-closed, but no child emergency ledger may exist. Test this path and consider adding a durable incident/intent for precheck failures.
+- Spot OCO partial-protection-failure audit, frontend build/browser validation, real-broker E2E/soak, README/deployment consistency, secret/artifact sweep, release repository creation, and Railway setup remain outstanding. Do not deploy from this branch.
 
-## IMMEDIATE NEXT TASK
-Complete a durable, operation-keyed recovery path for emergency closes triggered by protection failure, including process interruption and exact broker fill/position reconciliation. Keep UNKNOWN operations fail-closed and do not mutate local state on unattributed broker actions.
-
-## LATEST CHECKPOINT
-- Spot OCO cancellation now uses the exact OCO list identity and verifies the list is fully done and all legs are no longer open before manual market close.
-- Spot close post-state now verifies the exact inventory delta (before - executedQty = after) instead of requiring total asset inventory to reach zero, so multiple same-asset holdings are supported without false residual failures.
-- Binance Spot close now requires authoritative fills via /api/v3/myTrades and computes exit PnL in the quote asset from fill price/qty/commission. Unknown third-asset commissions fail closed.
-- ExecutionGateway passes local trade entry price/side into Binance close and startup/runtime recovery so Spot close PnL can be recovered after restart.
-- Unattributed broker-side Binance partial reductions no longer rewrite local trade volume; reconciliation blocks for manual reconciliation instead.
-- Local regression fixes on 2026-10-06: removed a duplicated `daily_stats` SQL block that caused a syntax error; defined executed quantity for Futures full/partial close responses; corrected recovered Spot commission union narrowing; aligned startup reconciliation with the public Spot OCO/open-order recovery methods; and added the missing DailyProfitTarget logger.
-- Updated regression fixtures for exact OCO identity/fill evidence, open protective-order validation, and OPEN execution-ledger identity on cumulative close PnL.
-- Validation on 2026-10-06: backend TypeScript typecheck passed; full backend suite passed (790/790, 0 failed, 759.1s); focused Binance close-protection (11/11), startup reconciliation (36/36), paper FX currency conversion (10/10), and paper execution soak (8/8) passed. GitHub Actions was not run because the monthly quota is exhausted.
-- Binance Futures SL/TP creation is recover-before-create and recover-after-timeout; Spot OCO creation is operation-key idempotent and restart-recoverable.
+ Spot OCO creation is operation-key idempotent and restart-recoverable.
 - Ensemble/model artifact validation, baseline-aware training recommendation, NVIDIA fail-closed live behavior, daily equity anchor corruption handling, correlation fail-closed behavior, and PositionSizer stop-direction validation are all in the current development line.
 - CI/local green validation is still outstanding. No claim of passing tests is valid until execution is available.
 
 ## RESUME PROCEDURE
-1. Read this file first.
-2. Verify `main` and the follow-up review branch heads.
-3. Inspect latest GitHub Actions status only if capacity is restored; do not spend minutes on blind reruns.
-4. Continue with the IMMEDIATE NEXT TASK above.
-5. Before any interruption, update this file with the latest HEAD and exact next task.
+1. Read this file and `Trading_AI_Phase2_Report_2026-10-09.md` first.
+2. Verify the live head of `phase1/durable-emergency-close-intent`, compare it to the recorded source commit, and ensure `main` / draft PR #2 remain untouched.
+3. Continue with the IMMEDIATE NEXT TASK above; do not rerun GitHub Actions while its quota is exhausted.
+4. Run real local typecheck and test commands; if execution is unavailable, report the exact blocked validation rather than claiming a pass.
+5. Before any interruption, update this file and create a new report with exact code commit, tests actually run, results, known risks, and next task.
 
 ## DEVELOPMENT HISTORY / RECENT HEADS
 Recent important commits in this development line include:
