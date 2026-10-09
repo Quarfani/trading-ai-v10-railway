@@ -897,8 +897,8 @@ export class StartupReconciler {
           throw new Error('Parent OPEN request JSON is malformed');
         }
         const parentSignal = parentRequest?.signal;
-        const rawTimeframe = parentRequest.timeframe ?? signal.timeframe;
-        if (!isTimeframe(String(rawTimeframe ?? ''))) {
+        const timeframe = String(parentRequest.timeframe ?? signal.timeframe ?? '');
+        if (!isTimeframe(timeframe)) {
           throw new Error('Emergency-close recovery has no valid original OPEN timeframe');
         }
         if (
@@ -1047,7 +1047,7 @@ export class StartupReconciler {
         const trade = {
           ticket: entryFill.orderId,
           symbol,
-          timeframe: String(parentRequest.timeframe ?? signal.timeframe) as any,
+          timeframe,
           side: side as 'BUY' | 'SELL',
           volume: entryFill.executedQty,
           entry: entryFill.avgPrice,
