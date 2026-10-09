@@ -819,22 +819,28 @@ export class BinanceExecutor {
     sl: any | null;
     tp: any | null;
   }> {
-    try {
-      const sl = await this.findOrderByClientId(
+    if (!operationKey || !operationKey.trim()) {
+      throw new Error('Futures protection recovery requires its original operation key');
+    }
+    if (!this.isFutures) {
+      const [sl, tp] = await Promise.all([
+        this.findOrderByClientId(symbol, this.makeProtectionClientOrderId(operationKey, 'SL')),
+        this.findOrderByClientId(symbol, this.makeProtectionClientOrderId(operationKey, 'TP')),
+      ]);
+      return { sl: sl ?? null, tp: tp ?? null };
+    }
+
+    const [sl, tp] = await Promise.all([
+      this.getAlgoOrderByClientIdStrict(
         symbol,
         this.makeProtectionClientOrderId(operationKey, 'SL'),
-      );
-      const tp = await this.findOrderByClientId(
+      ),
+      this.getAlgoOrderByClientIdStrict(
         symbol,
         this.makeProtectionClientOrderId(operationKey, 'TP'),
-      );
-      return { sl: sl ?? null, tp: tp ?? null };
-    } catch (e: any) {
-      this.logger.warn(
-        `[Binance] recoverProtectionByOperation failed: ${e?.message ?? e}`,
-      );
-      return { sl: null, tp: null };
-    }
+      ),
+    ]);
+    return { sl, tp };
   }
 
   clientOrderIdForOperationKey(operationKey: string): string {
@@ -1155,6 +1161,80 @@ export class BinanceExecutor {
     return order;
   }
 
+  private normalizeFuturesAlgoOrder(order: any): any {
+    const clientAlgoId = String(order?.clientAlgoId ?? '');
+    return {
+      ...order,
+      orderId: Number(order?.algoId),
+      clientOrderId: clientAlgoId,
+      origClientOrderId: clientAlgoId,
+      status: String(order?.algoStatus ?? '').toUpperCase(),
+      type: String(order?.orderType ?? '').toUpperCase(),
+      stopPrice: order?.triggerPrice,
+      origQty: order?.quantity,
+      closePosition: order?.closePosition,
+    };
+  }
+
+  private async getAlgoOrderByClientIdStrict(
+    symbol: string,
+    clientAlgoId: string,
+  ): Promise<any | null> {
+    let order: any;
+    try {
+      order = await this.signedGet('/fapi/v1/algoOrder', {
+        symbol,
+        clientAlgoId,
+      });
+    } catch (error: any) {
+      if (this.isBinanceOrderNotFoundError(error)) return null;
+      throw new Error(
+        `Binance exact algo-order lookup failed for ${symbol}/${clientAlgoId}: ${String(error?.message ?? error)}`,
+      );
+    }
+
+    if (!order || typeof order !== 'object') {
+      throw new Error(`Binance exact algo-order lookup returned invalid data for ${symbol}/${clientAlgoId}`);
+    }
+    const orderSymbol = String(order.symbol ?? '').trim().toUpperCase();
+    const actualClientAlgoId = String(order.clientAlgoId ?? '');
+    const algoId = Number(order.algoId);
+    if (
+      actualClientAlgoId !== clientAlgoId ||
+      orderSymbol !== String(symbol).trim().toUpperCase() ||
+      !(algoId > 0) ||
+      !Number.isFinite(algoId) ||
+      String(order.algoType ?? 'CONDITIONAL').toUpperCase() !== 'CONDITIONAL'
+    ) {
+      throw new Error(`Binance exact algo-order identity mismatch for ${symbol}/${clientAlgoId}`);
+    }
+    return this.normalizeFuturesAlgoOrder(order);
+  }
+
+  async getOpenAlgoOrders(symbol: string): Promise<any[]> {
+    const response = await this.signedGet('/fapi/v1/openAlgoOrders', {
+      symbol,
+      algoType: 'CONDITIONAL',
+    });
+    if (!Array.isArray(response)) {
+      throw new Error(`Binance open algo-order response is invalid for ${symbol}`);
+    }
+
+    return response.map((order: any) => {
+      const normalized = this.normalizeFuturesAlgoOrder(order);
+      if (
+        String(normalized.symbol ?? '').trim().toUpperCase() !== String(symbol).trim().toUpperCase() ||
+        !(normalized.orderId > 0) ||
+        !Number.isFinite(normalized.orderId) ||
+        !String(normalized.clientOrderId ?? '').trim() ||
+        String(order.algoType ?? 'CONDITIONAL').toUpperCase() !== 'CONDITIONAL'
+      ) {
+        throw new Error(`Binance open algo-order identity is invalid for ${symbol}`);
+      }
+      return normalized;
+    });
+  }
+
   private async getSpotOcoByClientIdStrict(
     symbol: string,
     listClientOrderId: string,
@@ -1216,113 +1296,121 @@ export class BinanceExecutor {
         { kind: 'SL' as const, type: 'STOP_MARKET' },
         { kind: 'TP' as const, type: 'TAKE_PROFIT_MARKET' },
       ];
-      const ownedOrderIds = new Set<number>();
+      const ownedAlgoIds = new Set<number>();
 
       for (const spec of protectionSpecs) {
-        const clientOrderId = this.makeProtectionClientOrderId(operationKey, spec.kind);
-        const order = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+        const clientAlgoId = this.makeProtectionClientOrderId(operationKey, spec.kind);
+        const order = await this.getAlgoOrderByClientIdStrict(symbol, clientAlgoId);
         if (!order) continue;
 
-        const orderId = Number(order.orderId);
+        const algoId = Number(order.orderId);
         const status = String(order.status ?? '').trim().toUpperCase();
         if (
-          !(orderId > 0) || !Number.isFinite(orderId) ||
+          !(algoId > 0) || !Number.isFinite(algoId) ||
           String(order.symbol ?? '').trim().toUpperCase() !== symbol ||
-          String(order.clientOrderId ?? order.origClientOrderId ?? '') !== clientOrderId ||
+          String(order.clientOrderId ?? '') !== clientAlgoId ||
           String(order.side ?? '').trim().toUpperCase() !== closeSide ||
           String(order.type ?? '').trim().toUpperCase() !== spec.type ||
           String(order.closePosition).trim().toLowerCase() !== 'true'
         ) {
           throw new Error(
-            `Operation-owned Binance Futures ${spec.kind} identity/shape mismatch for ${symbol}; refusing market close`,
+            `Operation-owned Binance Futures ${spec.kind} algo-order identity/shape mismatch for ${symbol}; refusing market close`,
           );
         }
 
-        ownedOrderIds.add(orderId);
-        if (status === 'FILLED' || status === 'PARTIALLY_FILLED') {
+        ownedAlgoIds.add(algoId);
+        if (status === 'FILLED' || status === 'PARTIALLY_FILLED' || status === 'TRIGGERED' || status === 'FINISHED') {
           throw new Error(
-            `Operation-owned Binance Futures ${spec.kind} is ${status} for ${symbol}; position may already have changed`,
+            `Operation-owned Binance Futures ${spec.kind} algo-order is ${status} for ${symbol}; position may already have changed`,
           );
         }
         if (terminalOrderStatuses.has(status)) continue;
         if (status !== 'NEW') {
           throw new Error(
-            `Operation-owned Binance Futures ${spec.kind} has unsupported status=${status || 'UNKNOWN'} for ${symbol}`,
+            `Operation-owned Binance Futures ${spec.kind} algo-order has unsupported status=${status || 'UNKNOWN'} for ${symbol}`,
           );
         }
 
         let cancelResponse: any = null;
         try {
-          cancelResponse = await this.signedDelete('/fapi/v1/order', {
+          cancelResponse = await this.signedDelete('/fapi/v1/algoOrder', {
             symbol,
-            orderId,
+            algoId,
           });
         } catch (cancelError: any) {
-          const afterError = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+          const afterError = await this.getAlgoOrderByClientIdStrict(symbol, clientAlgoId);
           const afterErrorStatus = String(afterError?.status ?? '').trim().toUpperCase();
           if (!afterError || !terminalOrderStatuses.has(afterErrorStatus)) {
             throw new Error(
-              `Binance Futures ${spec.kind} cancellation is ambiguous for ${symbol}/${clientOrderId}: ${String(cancelError?.message ?? cancelError)}`,
+              `Binance Futures ${spec.kind} algo-order cancellation is ambiguous for ${symbol}/${clientAlgoId}: ${String(cancelError?.message ?? cancelError)}`,
             );
           }
         }
 
         if (cancelResponse) {
-          const returnedId = Number(cancelResponse.orderId);
-          const returnedClientId = String(
-            cancelResponse.clientOrderId ?? cancelResponse.origClientOrderId ?? '',
-          );
+          const returnedId = Number(cancelResponse.algoId);
+          const returnedClientAlgoId = String(cancelResponse.clientAlgoId ?? '');
           if (
-            (Number.isFinite(returnedId) && returnedId > 0 && returnedId !== orderId) ||
-            (returnedClientId && returnedClientId !== clientOrderId) ||
-            (cancelResponse.symbol &&
-              String(cancelResponse.symbol).trim().toUpperCase() !== symbol)
+            (Number.isFinite(returnedId) && returnedId > 0 && returnedId !== algoId) ||
+            (returnedClientAlgoId && returnedClientAlgoId !== clientAlgoId)
           ) {
             throw new Error(
-              `Binance Futures ${spec.kind} cancellation identity mismatch for ${symbol}`,
+              `Binance Futures ${spec.kind} algo-order cancellation identity mismatch for ${symbol}`,
             );
           }
         }
 
-        const confirmed = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+        const confirmed = await this.getAlgoOrderByClientIdStrict(symbol, clientAlgoId);
         const confirmedStatus = String(confirmed?.status ?? '').trim().toUpperCase();
         if (
           !confirmed ||
           confirmedStatus === 'FILLED' ||
           confirmedStatus === 'PARTIALLY_FILLED' ||
+          confirmedStatus === 'TRIGGERED' ||
+          confirmedStatus === 'FINISHED' ||
           !terminalOrderStatuses.has(confirmedStatus)
         ) {
           throw new Error(
-            `Binance Futures ${spec.kind} cancellation could not be authoritatively confirmed for ${symbol}`,
+            `Binance Futures ${spec.kind} algo-order cancellation could not be authoritatively confirmed for ${symbol}`,
           );
         }
       }
 
-      const openOrders = await this.getOpenOrders(symbol);
-      const liveOwned = openOrders.filter((order: any) => {
-        const clientId = String(order.clientOrderId ?? order.origClientOrderId ?? '');
-        const orderId = Number(order.orderId);
+      const openAlgoOrders = await this.getOpenAlgoOrders(symbol);
+      const liveOwned = openAlgoOrders.filter((order: any) => {
+        const clientId = String(order.clientOrderId ?? '');
+        const algoId = Number(order.orderId);
         return (
-          ownedOrderIds.has(orderId) ||
+          ownedAlgoIds.has(algoId) ||
           clientId === this.makeProtectionClientOrderId(operationKey, 'SL') ||
           clientId === this.makeProtectionClientOrderId(operationKey, 'TP')
         );
       });
       if (liveOwned.length > 0) {
-        throw new Error(`Operation-owned Binance Futures protection is still open for ${symbol}`);
+        throw new Error(`Operation-owned Binance Futures algo protection is still open for ${symbol}`);
       }
+      if (openAlgoOrders.length > 0) {
+        const outstanding = openAlgoOrders.map((order: any) =>
+          String(order.clientOrderId ?? order.orderId ?? 'unknown'),
+        ).join(',');
+        throw new Error(
+          `Unrelated Binance Futures algo orders remain open for ${symbol} (${outstanding}); they were not canceled and emergency close is blocked`,
+        );
+      }
+
+      const openOrders = await this.getOpenOrders(symbol);
       if (openOrders.length > 0) {
         const outstanding = openOrders.map((order: any) =>
           String(order.clientOrderId ?? order.origClientOrderId ?? order.orderId ?? 'unknown'),
         ).join(',');
         throw new Error(
-          `Unrelated Binance Futures orders remain open for ${symbol} (${outstanding}); they were not canceled and emergency close is blocked`,
+          `Unrelated Binance Futures regular orders remain open for ${symbol} (${outstanding}); they were not canceled and emergency close is blocked`,
         );
       }
       return;
     }
 
-    const listClientOrderId = this.makeOcoClientOrderId(operationKey, 'LIST');
+        const listClientOrderId = this.makeOcoClientOrderId(operationKey, 'LIST');
     const list = await this.getSpotOcoByClientIdStrict(symbol, listClientOrderId);
     if (list) {
       const listStatus = String(list.listStatusType ?? '').trim().toUpperCase();
@@ -1792,21 +1880,27 @@ export class BinanceExecutor {
       : undefined;
 
     try {
-      const slOrder = await this.signedPost('/fapi/v1/order', {
+      const slOrder = await this.signedPost('/fapi/v1/algoOrder', {
+        algoType: 'CONDITIONAL',
         symbol:           signal.symbol,
         side:             closeSide,
         type:             'STOP_MARKET',
-        stopPrice:        slPrice,
+        triggerPrice:     slPrice,
         closePosition:    'true',
         workingType:      'MARK_PRICE',
-        ...(slClientOrderId ? { newClientOrderId: slClientOrderId } : {}),
+        ...(slClientOrderId ? { clientAlgoId: slClientOrderId } : {}),
       });
-      ids.slOrderId = Number(slOrder.orderId);
-      if (!(ids.slOrderId > 0) || !Number.isFinite(ids.slOrderId)) {
-        throw new Error('Binance SL placement returned invalid orderId');
+      ids.slOrderId = Number(slOrder.algoId);
+      if (
+        !(ids.slOrderId > 0) ||
+        !Number.isFinite(ids.slOrderId) ||
+        (slClientOrderId && String(slOrder.clientAlgoId ?? '') !== slClientOrderId) ||
+        (slOrder.symbol && String(slOrder.symbol).trim().toUpperCase() !== String(signal.symbol).trim().toUpperCase())
+      ) {
+        throw new Error('Binance SL algo placement returned invalid identity');
       }
       this.logger.info(
-        `[Binance] SL placed: ${signal.symbol} stopPrice=${slPrice} orderId=${ids.slOrderId}`,
+        `[Binance] SL algo placed: ${signal.symbol} triggerPrice=${slPrice} algoId=${ids.slOrderId}`,
       );
     } catch (e: any) {
       if (protectionKey) {
@@ -1837,21 +1931,27 @@ export class BinanceExecutor {
     }
 
     try {
-      const tpOrder = await this.signedPost('/fapi/v1/order', {
+      const tpOrder = await this.signedPost('/fapi/v1/algoOrder', {
+        algoType: 'CONDITIONAL',
         symbol:           signal.symbol,
         side:             closeSide,
         type:             'TAKE_PROFIT_MARKET',
-        stopPrice:        tpPrice,
+        triggerPrice:     tpPrice,
         closePosition:    'true',
         workingType:      'MARK_PRICE',
-        ...(tpClientOrderId ? { newClientOrderId: tpClientOrderId } : {}),
+        ...(tpClientOrderId ? { clientAlgoId: tpClientOrderId } : {}),
       });
-      ids.tpOrderId = Number(tpOrder.orderId);
-      if (!(ids.tpOrderId > 0) || !Number.isFinite(ids.tpOrderId)) {
-        throw new Error('Binance TP placement returned invalid orderId');
+      ids.tpOrderId = Number(tpOrder.algoId);
+      if (
+        !(ids.tpOrderId > 0) ||
+        !Number.isFinite(ids.tpOrderId) ||
+        (tpClientOrderId && String(tpOrder.clientAlgoId ?? '') !== tpClientOrderId) ||
+        (tpOrder.symbol && String(tpOrder.symbol).trim().toUpperCase() !== String(signal.symbol).trim().toUpperCase())
+      ) {
+        throw new Error('Binance TP algo placement returned invalid identity');
       }
       this.logger.info(
-        `[Binance] TP placed: ${signal.symbol} stopPrice=${tpPrice} orderId=${ids.tpOrderId}`,
+        `[Binance] TP algo placed: ${signal.symbol} triggerPrice=${tpPrice} algoId=${ids.tpOrderId}`,
       );
     } catch (e: any) {
       if (protectionKey) {
@@ -1878,9 +1978,9 @@ export class BinanceExecutor {
       }
 
       if (ids.slOrderId) {
-        await this.signedDelete('/fapi/v1/order', {
+        await this.signedDelete('/fapi/v1/algoOrder', {
           symbol: signal.symbol,
-          orderId: ids.slOrderId,
+          algoId: ids.slOrderId,
         }).catch(() => {});
       }
       throw new Error(
@@ -2309,7 +2409,8 @@ export class BinanceExecutor {
     symbol: string,
     side: 'BUY' | 'SELL',
   ): Promise<number[]> {
-    const openOrders = await this.getOpenOrders(symbol);
+    if (!this.isFutures) return [];
+    const openOrders = await this.getOpenAlgoOrders(symbol);
     const closeSide = side === 'BUY' ? 'SELL' : 'BUY';
     return openOrders
       .filter((order: any) => {
@@ -2344,11 +2445,11 @@ export class BinanceExecutor {
       const oldIds = [...new Set([...trackedIds, ...brokerIds])];
 
       for(const orderId of oldIds) {
-        await this.signedDelete('/fapi/v1/order',{symbol,orderId});
+        await this.signedDelete('/fapi/v1/algoOrder',{symbol,algoId:orderId});
       }
 
       if (oldIds.length) {
-        const remaining = await this.getOpenOrders(symbol);
+        const remaining = await this.getOpenAlgoOrders(symbol);
         const stillOpen = remaining.some((order: any) =>
           oldIds.includes(Number(order.orderId)),
         );
@@ -2559,13 +2660,15 @@ export class BinanceExecutor {
 
       for (const orderId of oldOrderIds) {
         await this.signedDelete(
-          this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
-          { symbol, orderId },
+          this.isFutures ? '/fapi/v1/algoOrder' : '/api/v3/order',
+          this.isFutures ? { symbol, algoId: orderId } : { symbol, orderId },
         );
       }
 
       if (oldOrderIds.length) {
-        const openOrders = await this.getOpenOrders(symbol);
+        const openOrders = this.isFutures
+          ? await this.getOpenAlgoOrders(symbol)
+          : await this.getOpenOrders(symbol);
         const staleProtectiveOrders = openOrders.filter((order: any) =>
           oldOrderIds.includes(Number(order.orderId)),
         );
