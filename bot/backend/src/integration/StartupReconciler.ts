@@ -564,6 +564,92 @@ export class StartupReconciler {
       const live = bySymbol.get(String(trade.symbol).toUpperCase());
       if (!live || Math.abs(Number(live.positionAmt)) < 0.0001) continue;
 
+      const phase = String(request?.phase ?? '');
+      if (phase === 'RESTORE_VERIFIED' || phase === 'OLD_PAIR_RETAINED') {
+        const activeKey = String(request?.activeProtectionKey ?? '').trim();
+        const oldProtection = request?.oldProtection ?? {};
+        const activeSl = Number(oldProtection.slPrice);
+        const activeTp = Number(oldProtection.tpPrice);
+        if (
+          !activeKey ||
+          !(activeSl > 0) || !(activeTp > 0) ||
+          !Number.isFinite(activeSl) || !Number.isFinite(activeTp)
+        ) {
+          throw new Error(`Binance protection recovery state is incomplete for trade id=${tradeId}; startup remains blocked`);
+        }
+
+        const activePair = await exec.recoverProtectionByOperation(
+          String(trade.symbol),
+          activeKey,
+        );
+        const activeOpenOrders = await exec.getOpenAlgoOrders(String(trade.symbol));
+        const activeIds = new Set([
+          String((activePair?.sl as any)?.clientOrderId ?? ''),
+          String((activePair?.tp as any)?.clientOrderId ?? ''),
+        ]);
+        const activeSlOrder = activeOpenOrders.find((order: any) =>
+          String(order.clientOrderId ?? '') === [...activeIds][0],
+        );
+        const activeTpOrder = activeOpenOrders.find((order: any) =>
+          String(order.clientOrderId ?? '') === [...activeIds][1],
+        );
+        const closeSide = String(trade.side).toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
+        const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+        const activePairValid =
+          !!activePair?.sl && !!activePair?.tp &&
+          !!activeSlOrder && !!activeTpOrder &&
+          String(activePair.sl.status ?? '').toUpperCase() === 'NEW' &&
+          String(activePair.tp.status ?? '').toUpperCase() === 'NEW' &&
+          String(activeSlOrder.side ?? '').toUpperCase() === closeSide &&
+          String(activeTpOrder.side ?? '').toUpperCase() === closeSide &&
+          String(activeSlOrder.type ?? '').toUpperCase() === 'STOP_MARKET' &&
+          String(activeTpOrder.type ?? '').toUpperCase() === 'TAKE_PROFIT_MARKET' &&
+          String(activeSlOrder.closePosition).toLowerCase() === 'true' &&
+          String(activeTpOrder.closePosition).toLowerCase() === 'true' &&
+          Number.isFinite(Number(activeSlOrder.stopPrice)) &&
+          Number.isFinite(Number(activeTpOrder.stopPrice)) &&
+          Math.abs(Number(activeSlOrder.stopPrice) - activeSl) <= tolerance(activeSl) &&
+          Math.abs(Number(activeTpOrder.stopPrice) - activeTp) <= tolerance(activeTp);
+
+        if (!activePairValid) {
+          throw new Error(`Binance ${phase} state does not have a verified active protection pair for trade id=${tradeId}; startup remains blocked`);
+        }
+
+        const requestedKey = String(request?.newProtectionKey ?? row.operationKey);
+        const requestedIds = new Set([
+          String(request?.requestedProtection?.slClientAlgoId ?? ''),
+          String(request?.requestedProtection?.tpClientAlgoId ?? ''),
+        ]);
+        if (requestedIds.size > 0 && !requestedIds.has('')) {
+          const stillOpen = activeOpenOrders.some((order: any) =>
+            requestedIds.has(String(order.clientOrderId ?? '')),
+          );
+          if (stillOpen) {
+            throw new Error(`Partial replacement protection remains open for trade id=${tradeId}; startup remains blocked`);
+          }
+        }
+
+        const failed = this.db.updateExecutionLedger(String(row.executionId), {
+          status: 'FAILED',
+          result: {
+            broker: 'binance',
+            startupReconciliation: true,
+            phase,
+            activeProtectionKey: activeKey,
+            activeSl,
+            activeTp,
+          },
+          error: `Requested SL/TP change did not complete; verified prior/restored protection remains active (phase=${phase})`,
+        });
+        if (!failed) {
+          throw new Error(`Could not settle recovered Binance protection state for trade id=${tradeId}`);
+        }
+        this.logger.warn(
+          `[Binance] startup verified ${phase} protection for trade id=${tradeId}; requested SL/TP change remains failed`,
+        );
+        continue;
+      }
+
       const newSl = Number(request?.newSl);
       const newTp = Number(request?.newTp);
       if (
