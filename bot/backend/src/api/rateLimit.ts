@@ -19,7 +19,7 @@ const logger    = new Logger('RateLimit');
 const state     = new Map<string, IPState>();
 const WHITELIST = new Set(['127.0.0.1', '::1', 'localhost']);
 
-export function rateLimit(maxPerMin = 100) {
+export function rateLimit(maxPerMin = 100, namespace = 'global') {
   const WINDOW_MS = 60_000;
   const BURST_MS  = 5_000;
   const BURST_MAX = 20;
@@ -31,11 +31,12 @@ export function rateLimit(maxPerMin = 100) {
     // Whitelist
     if (WHITELIST.has(ip)) return next();
 
+    const stateKey = `${namespace}:${ip}`;
     const now  = Date.now();
-    let   info = state.get(ip);
+    let   info = state.get(stateKey);
     if (!info) {
       info = { requests: [], violations: 0, bannedUntil: 0 };
-      state.set(ip, info);
+      state.set(stateKey, info);
     }
 
     // Banned?
