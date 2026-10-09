@@ -53,6 +53,8 @@ SESSION_SECRET
 
 with unique random secrets. Use at least 12 characters for the dashboard password and at least 32 characters for the session secret.
 
+The example enables `TRUST_RAILWAY_X_REAL_IP=true` for rate limiting through Railway's **public HTTP ingress**. Railway documents `X-Real-IP` as the client address at that edge. Private `railway.internal` requests bypass edge header sanitization, so do not accept calls from untrusted private services while this setting is enabled. Authenticate any private callers explicitly; do not reuse the public-edge trust assumption for raw private-network traffic.
+
 If you use the Windows PowerShell MEGA backup agent, generate a separate random `BACKUP_API_TOKEN` with at least 32 characters and set the same secret in both Railway service variables and `pipeline/.env` on Windows. The Windows script intentionally refuses to run if that token is missing. Do not commit either copy.
 
 Do not add Binance API keys to this paper profile.
