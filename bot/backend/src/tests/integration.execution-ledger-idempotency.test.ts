@@ -5,7 +5,10 @@ import { PaperTrader } from "../integration/PaperTrader";
 import { SystemConfig, Signal } from "../types/trading.types";
 import { clearBrokerContracts, registerBrokerContract } from "../market/MarketCatalog";
 
+let assertions = 0;
+
 function assert(condition: unknown, message: string): asserts condition {
+  assertions += 1;
   if (!condition) throw new Error(message);
 }
 
@@ -833,7 +836,72 @@ async function main() {
   );
   claimDb.raw().close();
 
-  console.log("Result: 40 passed, 0 failed");
+  const emergencyReplayDb = new DatabaseManager(":memory:");
+  await emergencyReplayDb.initialize();
+  const emergencyReplayGateway = new ExecutionGateway(
+    baseConfig("paper"),
+    emergencyReplayDb,
+    { getRate: async () => 1 } as any,
+  );
+  const emergencySignal = signal(991122, "EURUSD");
+  const emergencyOperationKey = (emergencyReplayGateway as any).stableKey("OPEN", {
+    account: "ledger-test",
+    mode: "paper",
+    symbol: emergencySignal.symbol,
+    side: emergencySignal.side,
+    timestamp: emergencySignal.timestamp,
+    timeframe: "H1",
+    volume: 0.01,
+    source: emergencySignal.source,
+    sl: emergencySignal.sl,
+    tp: emergencySignal.tp,
+  });
+  assert(emergencyReplayDb.createExecutionLedger({
+    executionId: "emergency-replay-1",
+    operationKey: emergencyOperationKey,
+    action: "OPEN",
+    status: "PENDING",
+    symbol: emergencySignal.symbol,
+    side: emergencySignal.side,
+    volume: 0.01,
+    request: { timeframe: "H1", signal: emergencySignal, volume: 0.01 },
+  }), "emergency replay parent OPEN ledger should be created");
+  assert(emergencyReplayDb.updateExecutionLedger("emergency-replay-1", {
+    status: "EXECUTED",
+    result: {
+      id: 501,
+      ticket: 777,
+      symbol: emergencySignal.symbol,
+      side: emergencySignal.side,
+      volume: 0.01,
+      entry: emergencySignal.price,
+      sl: emergencySignal.sl,
+      tp: emergencySignal.tp,
+      status: "closed",
+      openedAt: emergencySignal.timestamp,
+      closedAt: emergencySignal.timestamp + 1,
+      profit: -0.2,
+      source: emergencySignal.source,
+      emergencyProtectionFailure: true,
+    },
+  }), "emergency replay parent ledger should settle to EXECUTED");
+  const emergencyReplay = await emergencyReplayGateway.execute(
+    emergencySignal,
+    0.01,
+    "H1",
+  );
+  assert(!emergencyReplay.success, "emergency-closed OPEN replay must not report a successful new entry");
+  assert(
+    String(emergencyReplay.error).includes("closed after a protection failure"),
+    "emergency-closed replay should explain why no new entry was sent",
+  );
+  assert(
+    emergencyReplayDb.getRecentTrades(10).length === 0,
+    "emergency-closed replay must not insert another local trade",
+  );
+  emergencyReplayDb.raw().close();
+
+  console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
 main().catch(error => {
