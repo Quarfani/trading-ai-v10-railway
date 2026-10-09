@@ -107,6 +107,18 @@ function main(): void {
       'Cloud Testnet must require Binance market/execution symbols',
     );
 
+    expectRejected(
+      { DEPLOYMENT_PROFILE: 'production', MODE: 'binance', DATA_SOURCE: 'mt5', BINANCE_ENV: 'mainnet', LIVE_TRADING_ACK: 'I_UNDERSTAND_LIVE_RISK' },
+      'MODE=binance requires DATA_SOURCE=binance',
+      'Binance execution must reject MT5 market data configuration',
+    );
+
+    expectRejected(
+      { DEPLOYMENT_PROFILE: 'production', MODE: 'mt5', DATA_SOURCE: 'binance', MT5_LIVE_TRADING_ACK: 'I_UNDERSTAND_MT5_LIVE_RISK' },
+      'MODE=mt5 requires DATA_SOURCE=mt5',
+      'MT5 execution must reject Binance market data configuration',
+    );
+
     setBase({ DEPLOYMENT_PROFILE: 'cloud-testnet', MODE: 'binance', BINANCE_ENV: 'testnet' });
     const testnet = loadConfig();
     assert(
@@ -145,7 +157,7 @@ function main(): void {
     );
 
     expectRejected(
-      { DEPLOYMENT_PROFILE: 'production', MODE: 'mt5', MT5_LIVE_TRADING_ACK: '' },
+      { DEPLOYMENT_PROFILE: 'production', MODE: 'mt5', DATA_SOURCE: 'mt5', MT5_LIVE_TRADING_ACK: '' },
       'MT5_LIVE_TRADING_ACK=I_UNDERSTAND_MT5_LIVE_RISK',
       'MT5 execution must require its own explicit live acknowledgment',
     );
