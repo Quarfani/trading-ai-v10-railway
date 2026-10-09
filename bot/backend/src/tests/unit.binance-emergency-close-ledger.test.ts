@@ -164,6 +164,7 @@ async function verifySpotOcoCleanupIsOperationScoped() {
       assert(path === "/api/v3/orderList", "Spot cleanup must cancel the operation-owned OCO list");
       assert(Number(params?.orderListId) === 930, "Spot cleanup must use the exact recovered OCO list id");
       assert(listClientOrderId === (executor as any).makeOcoClientOrderId(operationKey, "LIST"), "OCO list identity must be derived from the original operation key");
+      deletedOrderIds.push(Number(params?.orderListId));
       listCanceled = true;
       for (const [key, order] of orders) orders.set(key, { ...order, status: "CANCELED" });
       return { listClientOrderId, orderListId: 930 };
@@ -172,22 +173,6 @@ async function verifySpotOcoCleanupIsOperationScoped() {
       assert(symbol === "BTCUSDT", "Spot cleanup verification must be symbol-scoped");
       const active = [...orders.values()].filter(order => order.status === "NEW");
       return withUnrelatedOrder ? [...active, unrelated] : active;
-    };
-    (executor as any).cancelSpotProtectionByOperation = async (
-      symbol: string,
-      requestedKey: string,
-    ) => {
-      assert(symbol === "BTCUSDT", "Spot OCO cancellation must target the matching symbol");
-      assert(requestedKey === operationKey, "Spot OCO cancellation must use the original OPEN operation key");
-      assert(String(currentList().listStatusType) === "EXECUTING", "Spot OCO should be active before cancellation");
-      const response = await (executor as any).signedDelete("/api/v3/orderList", {
-        symbol,
-        orderListId: 930,
-      });
-      assert(response.listClientOrderId === listClientOrderId, "Spot OCO cancellation response must preserve exact list identity");
-      const after = currentList();
-      assert(after.listStatusType === "ALL_DONE", "Spot OCO cancellation must be confirmed terminal");
-      assert((await (executor as any).getOpenOrders(symbol)).every((order: any) => order.orderId !== 920 && order.orderId !== 921), "owned OCO legs must no longer be open");
     };
 
     let threw = false;
@@ -215,7 +200,7 @@ async function verifySpotOcoCleanupIsOperationScoped() {
   const blocked = await runCase(true);
   assert(blocked.threw, "emergency close must be blocked when unrelated Spot orders remain open");
   assert(blocked.listCanceled, "the owned OCO should be canceled even when a separate unrelated order causes a safety block");
-  assert(blocked.deletedOrderIds.length === 0, "Spot cleanup must not issue individual cancellation requests against unrelated or unrelated-list order IDs");
+  assert(blocked.deletedOrderIds.length === 1 && blocked.deletedOrderIds[0] === 930, "Spot cleanup must cancel only the exact owned OCO list, never an unrelated order");
 }
 
 async function main() {
