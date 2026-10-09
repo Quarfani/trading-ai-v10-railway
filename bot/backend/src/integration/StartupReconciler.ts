@@ -1417,29 +1417,70 @@ export class StartupReconciler {
         throw new Error(`Binance volume mismatch ${t.symbol}: DB=${t.volume} broker=${volume}`);
       if (!(p.entryPrice > 0)) throw new Error(`Binance entry price invalid for ${t.symbol}`);
 
+      const openOperation = this.db.getLatestExecutedOpenOperationForTrade(t.id);
+      if (!openOperation || openOperation.conflict) {
+        throw new Error(
+          openOperation?.conflict
+            ? `Conflicting Binance Futures OPEN identities for trade id=${t.id}; manual reconciliation is required.`
+            : `Binance Futures trade id=${t.id} lacks an authoritative OPEN operation key.`,
+        );
+      }
+      const operationKey = String(openOperation.operationKey);
+      const recoveredProtection = await exec.recoverProtectionByOperation(
+        t.symbol,
+        operationKey,
+      );
       const openOrders = await exec.getOpenAlgoOrders(t.symbol);
+      const byId = new Map(
+        openOrders.map((order: any) => [Number(order.orderId), order]),
+      );
       const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
-      const matching = openOrders.filter((o: any) => String(o.side).toUpperCase() === closeSide);
       const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
-      const stopOrders = matching.filter((o: any) =>
-        String(o.type ?? '').toUpperCase() === 'STOP_MARKET' &&
-        String(o.closePosition).toLowerCase() === 'true' &&
-        String(o.status ?? '').toUpperCase() === 'NEW',
+      const slId = Number(recoveredProtection.sl?.orderId ?? 0);
+      const tpId = Number(recoveredProtection.tp?.orderId ?? 0);
+      const sl = byId.get(slId) as any;
+      const tp = byId.get(tpId) as any;
+      const exactProtectionValid =
+        slId > 0 &&
+        tpId > 0 &&
+        slId !== tpId &&
+        !!sl &&
+        !!tp &&
+        String(sl.clientOrderId ?? '') === exec.protectionClientOrderIdForOperationKey(operationKey, 'SL') &&
+        String(tp.clientOrderId ?? '') === exec.protectionClientOrderIdForOperationKey(operationKey, 'TP') &&
+        String(sl.side ?? '').toUpperCase() === closeSide &&
+        String(tp.side ?? '').toUpperCase() === closeSide &&
+        String(sl.type ?? '').toUpperCase() === 'STOP_MARKET' &&
+        String(tp.type ?? '').toUpperCase() === 'TAKE_PROFIT_MARKET' &&
+        String(sl.status ?? '').toUpperCase() === 'NEW' &&
+        String(tp.status ?? '').toUpperCase() === 'NEW' &&
+        String(sl.closePosition).toLowerCase() === 'true' &&
+        String(tp.closePosition).toLowerCase() === 'true';
+      const slOk =
+        exactProtectionValid &&
+        Number.isFinite(Number(sl.stopPrice)) &&
+        Math.abs(Number(sl.stopPrice) - t.sl) <= tolerance(t.sl);
+      const tpOk =
+        exactProtectionValid &&
+        Number.isFinite(Number(tp.stopPrice)) &&
+        Math.abs(Number(tp.stopPrice) - t.tp) <= tolerance(t.tp);
+      if (!slOk || !tpOk) {
+        throw new Error(
+          `Binance Futures operation-keyed Algo protection missing/mismatched for trade id=${t.id} symbol=${t.symbol}`,
+        );
+      }
+      const additionalPositionClosingAlgos = openOrders.filter((order: any) =>
+        Number(order.orderId) !== slId &&
+        Number(order.orderId) !== tpId &&
+        String(order.side ?? '').toUpperCase() === closeSide &&
+        String(order.closePosition).toLowerCase() === 'true' &&
+        ['STOP_MARKET', 'TAKE_PROFIT_MARKET'].includes(String(order.type ?? '').toUpperCase()),
       );
-      const takeOrders = matching.filter((o: any) =>
-        String(o.type ?? '').toUpperCase() === 'TAKE_PROFIT_MARKET' &&
-        String(o.closePosition).toLowerCase() === 'true' &&
-        String(o.status ?? '').toUpperCase() === 'NEW',
-      );
-      const slOk = stopOrders.some((o: any) =>
-        Number.isFinite(Number(o.stopPrice)) &&
-        Math.abs(Number(o.stopPrice) - t.sl) <= tolerance(t.sl),
-      );
-      const tpOk = takeOrders.some((o: any) =>
-        Number.isFinite(Number(o.stopPrice)) &&
-        Math.abs(Number(o.stopPrice) - t.tp) <= tolerance(t.tp),
-      );
-      if (!slOk || !tpOk) throw new Error(`Binance protective orders missing/mismatched for ${t.symbol}`);
+      if (additionalPositionClosingAlgos.length > 0) {
+        throw new Error(
+          `Unattributed Binance Futures position-closing Algo orders exist for ${t.symbol}; startup requires manual reconciliation.`,
+        );
+      }
       if (
         (t.side === 'BUY' && !(t.sl < p.entryPrice && t.tp > p.entryPrice)) ||
         (t.side === 'SELL' && !(t.sl > p.entryPrice && t.tp < p.entryPrice))
