@@ -160,6 +160,12 @@ try {
   delete process.env.COST_USOIL_IMPACT_BPS;
   delete process.env.COST_USOIL_HOLDING_RATE_DAY;
 
+  process.env.COST_USOIL_SPREAD_PIPS = '2';
+  const mixed = getCostProfile('USOIL', { priceIncrement: 0.01 });
+  assert(mixed.source === 'MIXED',
+    'a profile mixing explicit overrides with repository defaults must be labelled MIXED');
+  delete process.env.COST_USOIL_SPREAD_PIPS;
+
   let strictRejected = false;
   try {
     getCostProfile('USOIL', {
@@ -193,4 +199,4 @@ try {
   }
 }
 
-console.log('Result: 20 passed, 0 failed');
+console.log('Result: 21 passed, 0 failed');
