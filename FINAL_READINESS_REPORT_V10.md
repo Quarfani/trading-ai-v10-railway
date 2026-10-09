@@ -78,3 +78,38 @@ This status supersedes earlier statements in this historical report about missin
 - No new GitHub repository or Railway deployment has been created. No real trading enabled.
 
 **Release disposition: NOT COMPLETE / NO-GO** until clean local installs, complete tests/builds, Testnet and restore/recovery evidence, and the release checklist pass.
+
+## Phase 9 — Continued source hardening (2026-10-09)
+
+### Changes made on the development branch
+
+- **Consensus correctness:** a single vote may use half the configured aggregate-weight threshold only when it is the only vote and its confidence is at least 0.72. The ordinary threshold remains in force for medium-confidence votes; a 0.56-confidence single vote below the configured weight threshold still results in NO_TRADE. Malformed confidence values and non-finite/zero strategy weights are ignored, and non-finite aggregate weights fail closed.
+- **Final portfolio risk:** post-risk sizing multipliers cannot increase the originally approved volume. After absolute per-trade risk is re-applied, the engine re-checks gross exposure/leverage and portfolio heat against the final volume and executable entry price immediately before execution.
+- **Rate-limit abuse resistance:** caller-supplied `X-Forwarded-For` is ignored; proxy-derived client identity is opt-in. Proxy header values cannot receive the localhost exemption. Both the rate-limit state and login-attempt state have capacity limits; active bans are retained and new identities are rejected when capacity remains full.
+- **Configuration safety:** credential placeholders are rejected at startup. Live broker mode and market-data source must match. Local, cloud Paper, Railway Paper, Binance Testnet, and production profiles have explicit constraints; Binance mainnet and MT5 have separate live acknowledgments. Consensus weighting/dominance/sample-window configuration is range checked.
+- **API resource controls:** heavy research endpoints have separate rate-limit buckets and bounded schemas; numeric query limits and timeframe query values are parsed before reaching SQL or analytics.
+- **Research accounting/resource cleanup:** backtest SQLite filenames include UUIDs; the database connection and temporary file are cleaned in a `finally` block. Mixed explicit/default transaction cost assumptions are labelled `MIXED`, not fully explicit.
+- **Documentation/local Paper profile:** the local example now uses Binance public Spot data with Paper execution and ML/WFO disabled. README, environment, security, deployment, and Testnet instructions were aligned to Paper-first use.
+
+### Test coverage added or extended (written, not executed as a full repository suite)
+
+- Strategy consensus: a high-confidence single-vote case, a medium-confidence single-vote case, invalid confidence values, and non-finite established-strategy weights.
+- Final-volume portfolio exposure and heat revalidation.
+- Login and request rate-limit capacity behavior under high-cardinality IP traffic.
+- Proxy-header loopback spoofing.
+- Numeric/timeframe API query validation.
+- Credential/deployment profile and consensus configuration validation.
+- Backtest temporary-database cleanup and cost-profile classification.
+
+### Verification status
+
+- Current source/test candidate: `05f937e892522ec38440ddcfc50212d0aade4341`. `main` remains `97a176f066848d1fa90d6e3eb8585fcaf50be650`; no merge or deployment has been performed.
+- The repository tree contains **121 backend `.test.ts` files** and both backend/frontend `package-lock.json` files. The tree contains no tracked real `.env` file.
+- GitHub check runs for the source/test candidate: **0**. GitHub Actions were not launched.
+- Backend `npm run typecheck`, `npm test`, backend build, frontend build, Python tests, dependency audit, Docker builds, Testnet E2E, Paper soak, and backup/restore drills remain **NOT RUN**.
+- I attempted to retrieve the repository archive for local validation, but the archive downloader/tool path rejected the URL. This is a limitation of this execution environment; it is not evidence that the user's Internet connection is down. GitHub source operations remained available.
+
+### Release disposition
+
+**NOT COMPLETE / NO-GO for Testnet or real-money execution.** The changes improve fail-closed behavior but are not validated by a clean local build/test run or broker E2E. Do not create the new public repository or deploy to Railway until the candidate passes the actual release checklist.
+
