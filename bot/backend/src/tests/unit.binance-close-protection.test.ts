@@ -21,9 +21,10 @@ async function main() {
   let marketCloseSubmitted = false;
   let closeClientOrderId = "";
   (executor as any).signedDelete = async () => ({});
-  (executor as any).getOpenOrders = async () => [
-    { orderId: 702, type: "TAKE_PROFIT_MARKET" },
+  (executor as any).getOpenAlgoOrders = async () => [
+    { orderId: 702, algoId: 702, clientOrderId: "ta_tp_open", status: "NEW", type: "TAKE_PROFIT_MARKET", closePosition: "true", symbol: "BTCUSDT" },
   ];
+  (executor as any).getOpenOrders = async () => [];
   (executor as any).signedPost = async (_path: string, payload: any) => {
     marketCloseSubmitted = true;
     closeClientOrderId = String(payload?.newClientOrderId ?? "");
@@ -39,6 +40,7 @@ async function main() {
     "blocked full close must not submit a Binance clientOrderId before stale protection is cleared",
   );
 
+  (executor as any).getOpenAlgoOrders = async () => [];
   (executor as any).getOpenOrders = async () => [];
   let closePositionCalls = 0;
   (executor as any).getPosition = async () => ({
@@ -76,14 +78,25 @@ async function main() {
   
   (executor as any).orderMap.clear();
   let restartPostSubmitted = false;
-  (executor as any).getOpenOrders = async () => [
-    { orderId: 801, side: "SELL", type: "STOP_MARKET", closePosition: "true" },
-    { orderId: 802, side: "SELL", type: "TAKE_PROFIT_MARKET", closePosition: "true" },
-  ];
-  (executor as any).signedDelete = async () => ({});
+  const restartAlgoOrders = new Map<number, any>([
+    [801, { symbol: "BTCUSDT", orderId: 801, algoId: 801, clientOrderId: "ta_sl_restart", status: "NEW", type: "STOP_MARKET", closePosition: "true", side: "SELL" }],
+    [802, { symbol: "BTCUSDT", orderId: 802, algoId: 802, clientOrderId: "ta_tp_restart", status: "NEW", type: "TAKE_PROFIT_MARKET", closePosition: "true", side: "SELL" }],
+  ]);
+  (executor as any).getOpenAlgoOrders = async () => [...restartAlgoOrders.values()];
+  (executor as any).getOpenOrders = async () => [];
+  (executor as any).signedDelete = async (path: string, params: any) => {
+    assert(path === "/fapi/v1/algoOrder", "restart close must cancel protections using the Algo API");
+    const algoId = Number(params?.algoId);
+    restartAlgoOrders.delete(algoId);
+    return { algoId };
+  };
   (executor as any).signedGet = async () => [
     { realizedPnl: "10", commission: "0.10", commissionAsset: "USDT" },
   ];
+  (executor as any).signedPost = async () => {
+    restartPostSubmitted = true;
+    throw new Error("close must not be posted when position state is unavailable");
+  };
   (executor as any).getPosition = async () => null;
 
   const unavailable = await executor.closePosition(
