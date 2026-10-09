@@ -2631,7 +2631,12 @@ export class BinanceExecutor {
       positionAmt: Number(p.positionAmt),
       entryPrice: Number(p.entryPrice),
       unrealizedProfit: Number(p.unRealizedProfit),
-    })).filter(p => Number.isFinite(p.positionAmt) && Number.isFinite(p.entryPrice) && Number.isFinite(p.unrealizedProfit));
+    })).filter(p =>
+      Number.isFinite(p.positionAmt) &&
+      Number.isFinite(p.entryPrice) &&
+      Number.isFinite(p.unrealizedProfit) &&
+      p.positionAmt !== 0
+    );
   }
 
   async getAllSpotBalancesForConfiguredSymbols(): Promise<any[]> {
