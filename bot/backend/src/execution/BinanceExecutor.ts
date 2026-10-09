@@ -1777,10 +1777,6 @@ export class BinanceExecutor {
 
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const expectedQty = Number(quantity);
-    const qtyTolerance = Math.max(
-      getSymbolSpec(signal.symbol).volumeStep,
-      Math.abs(expectedQty) * 0.0001,
-    );
 
     // closePosition Algo orders intentionally omit quantity at the broker.
     // Their identity, side, type, status and trigger prices are validated below.
