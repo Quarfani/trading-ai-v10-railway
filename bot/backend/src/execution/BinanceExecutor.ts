@@ -1586,14 +1586,14 @@ export class BinanceExecutor {
       //    immediate market close so we never knowingly continue unprotected.
       try {
         if (this.isFutures) {
-          await this.placeSLTP(signal, executedQty, ticket, spec, clientOrderId);
+          await this.placeSLTP(signal, executedQty, ticket, spec, operationKey);
         } else {
           await this.placeOCO(
             signal,
             executedQty,
             ticket,
             spec,
-            clientOrderId,
+            operationKey,
           );
         }
       } catch (protectionError: any) {
@@ -1718,14 +1718,14 @@ export class BinanceExecutor {
               executedQtyRecovered,
               recoveredTicket,
               getSymbolSpec(signal.symbol),
-              clientOrderId,
+              operationKey,
             );
             else await this.placeOCO(
               signal,
               executedQtyRecovered,
               recoveredTicket,
               getSymbolSpec(signal.symbol),
-              clientOrderId,
+              operationKey,
             );
           } catch (protectionError: any) {
             emergencyCloseAttempted = true;
