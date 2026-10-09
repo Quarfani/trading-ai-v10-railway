@@ -27,10 +27,12 @@ export function rateLimit(maxPerMin = 100, namespace = 'global') {
   const BAN_MS    = 10 * 60_000; // 10 min ban
 
   return (req: Request, res: Response, next: NextFunction) => {
+    const trustRailwayHeader =
+      String(process.env.TRUST_RAILWAY_X_REAL_IP ?? '').toLowerCase() === 'true';
     const ip = getClientIp(req);
 
-    // Whitelist
-    if (WHITELIST.has(ip)) return next();
+    // A forwarding header must never grant a localhost rate-limit exemption.
+    if (!trustRailwayHeader && WHITELIST.has(ip)) return next();
 
     const stateKey = `${namespace}:${ip}`;
     const now  = Date.now();
@@ -87,8 +89,8 @@ export function rateLimit(maxPerMin = 100, namespace = 'global') {
   };
 }
 
-// Cleanup stale IPs every 10 minutes
-setInterval(() => {
+// Cleanup stale IPs every 10 minutes without pinning short-lived test processes.
+const cleanupInterval = setInterval(() => {
   const now   = Date.now();
   const prune = now - 120_000; // 2 min inactivity
   for (const [ip, info] of state) {
@@ -96,3 +98,4 @@ setInterval(() => {
     if (last < prune && now > info.bannedUntil) state.delete(ip);
   }
 }, 10 * 60_000);
+cleanupInterval.unref?.();
