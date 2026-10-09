@@ -7,6 +7,7 @@ import { Logger } from '../utils/Logger';
 import { MarketScanner } from '../core/MarketScanner';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
 import { getSymbolSpec } from '../config/symbolConfig';
+import { isTimeframe } from '../market/market.types';
 
 /**
  * Startup reconciliation is a trading gate, not a best-effort diagnostic.
@@ -838,6 +839,8 @@ export class StartupReconciler {
           String(row.symbol ?? '').trim().toUpperCase() !== symbol ||
           String(signal.symbol ?? '').trim().toUpperCase() !== symbol ||
           String(signal.side ?? '').trim().toUpperCase() !== side ||
+          !Number.isFinite(Number(signal.sl)) || !(Number(signal.sl) > 0) ||
+          !Number.isFinite(Number(signal.tp)) || !(Number(signal.tp) > 0) ||
           !(quantity > 0) ||
           !Number.isFinite(quantity) ||
           (row.volume != null && (!Number.isFinite(Number(row.volume)) ||
@@ -894,6 +897,10 @@ export class StartupReconciler {
           throw new Error('Parent OPEN request JSON is malformed');
         }
         const parentSignal = parentRequest?.signal;
+        const rawTimeframe = parentRequest.timeframe ?? signal.timeframe;
+        if (!isTimeframe(String(rawTimeframe ?? ''))) {
+          throw new Error('Emergency-close recovery has no valid original OPEN timeframe');
+        }
         if (
           !parentSignal ||
           String(parentSignal.symbol ?? '').trim().toUpperCase() !== symbol ||
@@ -1040,12 +1047,12 @@ export class StartupReconciler {
         const trade = {
           ticket: entryFill.orderId,
           symbol,
-          timeframe: String(parentRequest.timeframe ?? signal.timeframe ?? 'H1'),
+          timeframe: String(parentRequest.timeframe ?? signal.timeframe) as any,
           side: side as 'BUY' | 'SELL',
           volume: entryFill.executedQty,
           entry: entryFill.avgPrice,
-          sl: Number.isFinite(Number(signal.sl)) ? Number(signal.sl) : 0,
-          tp: Number.isFinite(Number(signal.tp)) ? Number(signal.tp) : 0,
+          sl: Number(signal.sl),
+          tp: Number(signal.tp),
           status: 'closed' as const,
           openedAt: Math.max(1, openedAt),
           closedAt,
@@ -1085,6 +1092,7 @@ export class StartupReconciler {
             symbol,
             clientOrderId: expectedEmergencyClientId,
             orderId: closeFill.orderId,
+            status: 'FILLED',
             executedQty: closeFill.executedQty,
             exitPrice: closeFill.avgPrice,
             exitCommission: closeFill.commission,
