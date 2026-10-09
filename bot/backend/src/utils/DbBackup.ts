@@ -91,6 +91,7 @@ const MAX_BACKUP_BYTES = 512 * 1024 * 1024;
 export class DbBackup {
   private logger   = new Logger('DbBackup');
   private interval: NodeJS.Timeout | null = null;
+  private backupRunning = false;
 
   constructor(
     private dbPath:      string,
@@ -105,18 +106,27 @@ export class DbBackup {
   ) {}
 
   start() {
+    if (this.interval) return;
     const backupDir = path.join(path.dirname(this.dbPath), 'backups');
     if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-    this.runBackup(); // immediate first run
-    this.interval = setInterval(() => this.runBackup(), BACKUP_INTERVAL);
+    void this.runBackup();
+    this.interval = setInterval(() => void this.runBackup(), BACKUP_INTERVAL);
     this.logger.info(`Backup started — every ${BACKUP_INTERVAL / 3_600_000}h`);
   }
 
   stop() {
-    if (this.interval) clearInterval(this.interval);
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
   }
 
   private async runBackup() {
+    if (this.backupRunning) {
+      this.logger.warn('Skipping backup tick because a prior backup is still running');
+      return;
+    }
+    this.backupRunning = true;
     try {
       const ts       = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = `db-backup-${ts}.sqlite`;
@@ -158,7 +168,9 @@ export class DbBackup {
       this.pruneLocal(backupDir);
 
     } catch (e: any) {
-      this.logger.error(`Backup failed: ${e.message}`);
+      this.logger.error(`Backup failed: ${e?.message ?? String(e)}`);
+    } finally {
+      this.backupRunning = false;
     }
   }
 
