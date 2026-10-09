@@ -97,6 +97,127 @@ async function verifyFuturesProtectionCleanupIsOperationScoped() {
   assert(blocked.deleted.length === 1 && !blocked.deleted.includes(999), "unrelated order must never be canceled by protection cleanup");
 }
 
+async function verifySpotOcoCleanupIsOperationScoped() {
+  async function runCase(withUnrelatedOrder: boolean) {
+    const executor = new BinanceExecutor({
+      binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
+    } as any);
+    const operationKey = "owned-spot-oco-cleanup-unit";
+    const listClientOrderId = (executor as any).makeOcoClientOrderId(operationKey, "LIST");
+    const aboveClientOrderId = (executor as any).makeOcoClientOrderId(operationKey, "ABOVE");
+    const belowClientOrderId = (executor as any).makeOcoClientOrderId(operationKey, "BELOW");
+    const orders = new Map<string, any>([
+      [aboveClientOrderId, {
+        symbol: "BTCUSDT",
+        clientOrderId: aboveClientOrderId,
+        orderId: 920,
+        status: "NEW",
+        side: "SELL",
+        type: "LIMIT_MAKER",
+      }],
+      [belowClientOrderId, {
+        symbol: "BTCUSDT",
+        clientOrderId: belowClientOrderId,
+        orderId: 921,
+        status: "NEW",
+        side: "SELL",
+        type: "STOP_LOSS_LIMIT",
+      }],
+    ]);
+    let listCanceled = false;
+    const unrelated = {
+      symbol: "BTCUSDT",
+      clientOrderId: "manual-spot-order",
+      orderId: 999,
+      status: "NEW",
+      side: "SELL",
+      type: "LIMIT_MAKER",
+    };
+    const deletedOrderIds: number[] = [];
+
+    const currentList = () => ({
+      symbol: "BTCUSDT",
+      orderListId: 930,
+      listClientOrderId,
+      listStatusType: listCanceled ? "ALL_DONE" : "EXECUTING",
+      listOrderStatus: listCanceled ? "ALL_DONE" : "EXECUTING",
+      orders: [
+        { symbol: "BTCUSDT", orderId: 920, clientOrderId: aboveClientOrderId },
+        { symbol: "BTCUSDT", orderId: 921, clientOrderId: belowClientOrderId },
+      ],
+    });
+
+    (executor as any).signedGet = async (path: string, params: any) => {
+      const clientOrderId = String(params?.origClientOrderId ?? "");
+      if (path === "/api/v3/orderList" && clientOrderId === listClientOrderId) {
+        return currentList();
+      }
+      if (path === "/api/v3/order") {
+        const order = orders.get(clientOrderId);
+        if (order) return { ...order };
+      }
+      const missing: any = new Error("order does not exist");
+      missing.response = { data: { code: -2013 } };
+      throw missing;
+    };
+    (executor as any).signedDelete = async (path: string, params: any) => {
+      assert(path === "/api/v3/orderList", "Spot cleanup must cancel the operation-owned OCO list");
+      assert(Number(params?.orderListId) === 930, "Spot cleanup must use the exact recovered OCO list id");
+      assert(listClientOrderId === (executor as any).makeOcoClientOrderId(operationKey, "LIST"), "OCO list identity must be derived from the original operation key");
+      listCanceled = true;
+      for (const [key, order] of orders) orders.set(key, { ...order, status: "CANCELED" });
+      return { listClientOrderId, orderListId: 930 };
+    };
+    (executor as any).getOpenOrders = async (symbol: string) => {
+      assert(symbol === "BTCUSDT", "Spot cleanup verification must be symbol-scoped");
+      const active = [...orders.values()].filter(order => order.status === "NEW");
+      return withUnrelatedOrder ? [...active, unrelated] : active;
+    };
+    (executor as any).cancelSpotProtectionByOperation = async (
+      symbol: string,
+      requestedKey: string,
+    ) => {
+      assert(symbol === "BTCUSDT", "Spot OCO cancellation must target the matching symbol");
+      assert(requestedKey === operationKey, "Spot OCO cancellation must use the original OPEN operation key");
+      assert(String(currentList().listStatusType) === "EXECUTING", "Spot OCO should be active before cancellation");
+      const response = await (executor as any).signedDelete("/api/v3/orderList", {
+        symbol,
+        orderListId: 930,
+      });
+      assert(response.listClientOrderId === listClientOrderId, "Spot OCO cancellation response must preserve exact list identity");
+      const after = currentList();
+      assert(after.listStatusType === "ALL_DONE", "Spot OCO cancellation must be confirmed terminal");
+      assert((await (executor as any).getOpenOrders(symbol)).every((order: any) => order.orderId !== 920 && order.orderId !== 921), "owned OCO legs must no longer be open");
+    };
+
+    let threw = false;
+    try {
+      await (executor as any).cancelProtectionForEmergencyClose({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        price: 100,
+        sl: 90,
+        tp: 120,
+        confidence: 0.8,
+        timestamp: 123456,
+        source: "unit",
+      }, operationKey);
+    } catch {
+      threw = true;
+    }
+    return { threw, listCanceled, deletedOrderIds };
+  }
+
+  const clean = await runCase(false);
+  assert(!clean.threw, "exact Spot OCO cleanup should pass when owned protection is terminal and no other orders remain");
+  assert(clean.listCanceled, "operation-owned Spot OCO should be canceled before emergency market close");
+
+  const blocked = await runCase(true);
+  assert(blocked.threw, "emergency close must be blocked when unrelated Spot orders remain open");
+  assert(blocked.listCanceled, "the owned OCO should be canceled even when a separate unrelated order causes a safety block");
+  assert(blocked.deletedOrderIds.length === 0, "Spot cleanup must not issue individual cancellation requests against unrelated or unrelated-list order IDs");
+}
+
 async function main() {
   let ledger: any = null;
   let ledgerCreates = 0;
@@ -240,6 +361,7 @@ async function main() {
   assert(cleanupCalls === 1, "a replay of an existing emergency intent must not restart the protection/close flow");
 
   await verifyFuturesProtectionCleanupIsOperationScoped();
+  await verifySpotOcoCleanupIsOperationScoped();
 
   let flipLedgerWrites = 0;
   const flipDb = {
