@@ -82,6 +82,30 @@ function expectRejected(overrides: Record<string, string>, fragment: string, mes
 function main(): void {
   try {
     expectRejected(
+      { CONSENSUS_DOMINANCE: '0.49' },
+      'CONSENSUS_DOMINANCE must be between 0.5 and 1',
+      'consensus dominance below 0.5 must be rejected',
+    );
+
+    expectRejected(
+      { CONSENSUS_MIN_WEIGHT: '0.01' },
+      'CONSENSUS_MIN_WEIGHT must be between 0.05 and 2',
+      'a dangerously low total-weight threshold must be rejected',
+    );
+
+    expectRejected(
+      { CONSENSUS_MIN_STRATEGIES: '1.5' },
+      'CONSENSUS_MIN_STRATEGIES must be an integer',
+      'fractional minimum strategy count must be rejected',
+    );
+
+    expectRejected(
+      { CONSENSUS_ROLLING_WINDOW: '1000' },
+      'CONSENSUS_ROLLING_WINDOW must be between 5 and 500',
+      'unbounded consensus history windows must be rejected',
+    );
+
+    expectRejected(
       { DASHBOARD_PASSWORD: 'REPLACE_WITH_A_RANDOM_PASSWORD_AT_LEAST_16_CHARS' },
       'DASHBOARD_PASSWORD must not be a placeholder',
       'a long dashboard-password template must not be accepted as a real secret',
