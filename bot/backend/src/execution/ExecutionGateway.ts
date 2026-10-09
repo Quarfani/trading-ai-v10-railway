@@ -99,7 +99,17 @@ export class ExecutionGateway {
     if (existing) {
       if (existing.status === 'EXECUTED' && existing.resultJson) {
         try {
-          return { success: true, trade: JSON.parse(existing.resultJson) as Trade, retries: existing.retryCount ?? 0 };
+          const persisted = JSON.parse(existing.resultJson) as Trade & {
+            emergencyProtectionFailure?: boolean;
+          };
+          if (persisted.status === 'closed' && persisted.emergencyProtectionFailure === true) {
+            return {
+              success: false,
+              error: 'The original OPEN operation was closed after a protection failure; no duplicate entry was sent',
+              retries: existing.retryCount ?? 0,
+            };
+          }
+          return { success: true, trade: persisted, retries: existing.retryCount ?? 0 };
         } catch {
           return {
             success: false,
@@ -125,9 +135,19 @@ export class ExecutionGateway {
       const raced = this.db.getExecutionByOperationKey(operationKey);
       if (raced?.status === 'EXECUTED' && raced.resultJson) {
         try {
+          const persisted = JSON.parse(raced.resultJson) as Trade & {
+            emergencyProtectionFailure?: boolean;
+          };
+          if (persisted.status === 'closed' && persisted.emergencyProtectionFailure === true) {
+            return {
+              success: false,
+              error: 'The raced OPEN operation was closed after a protection failure; no duplicate entry was sent',
+              retries: raced.retryCount ?? 0,
+            };
+          }
           return {
             success: true,
-            trade: JSON.parse(raced.resultJson) as Trade,
+            trade: persisted,
             retries: raced.retryCount ?? 0,
           };
         } catch {
