@@ -1,0 +1,231 @@
+import { BinanceExecutor } from '../execution/BinanceExecutor';
+import { DatabaseManager } from '../database/DatabaseManager';
+import { StartupReconciler } from '../integration/StartupReconciler';
+
+let assertions = 0;
+
+function assert(condition: unknown, message: string): asserts condition {
+  assertions += 1;
+  if (!condition) throw new Error(message);
+}
+
+function makeConfig(futures: boolean): any {
+  return {
+    accountName: 'phase2-test',
+    accountCurrency: 'USD',
+    mode: 'binance',
+    binance: {
+      apiKey: 'test-key',
+      secret: 'test-secret',
+      env: 'testnet',
+      futures,
+    },
+  };
+}
+
+async function makeFixture(futures: boolean, recoverClose = true) {
+  const db = new DatabaseManager(':memory:');
+  await db.initialize();
+  const config = makeConfig(futures);
+  const executor = new BinanceExecutor(config);
+  const parentOperationKey = futures ? 'phase2-futures-open-key' : 'phase2-spot-open-key';
+  const childOperationKey = 'PROTECTION_FAIL:' + parentOperationKey;
+  const parentExecutionId = futures ? 'phase2-futures-open-ledger' : 'phase2-spot-open-ledger';
+  const childExecutionId = futures ? 'phase2-futures-emergency-ledger' : 'phase2-spot-emergency-ledger';
+  const symbol = futures ? 'ETHUSDT' : 'BTCUSDT';
+  const entryOrderId = futures ? 601 : 501;
+  const closeOrderId = futures ? 602 : 502;
+  const parentClientOrderId = executor.clientOrderIdForOperationKey(parentOperationKey);
+  const emergencyClientOrderId = executor.clientOrderIdForOperationKey(childOperationKey);
+  const now = Date.now();
+  const signal = {
+    symbol,
+    side: 'BUY',
+    price: 100,
+    sl: 90,
+    tp: 120,
+    confidence: 0.8,
+    timestamp: now - 2000,
+    source: 'phase2-emergency-test',
+  };
+  const parentRequest = { timeframe: 'H1', signal, volume: 1 };
+  const childRequest = {
+    schemaVersion: 1,
+    purpose: 'PROTECTION_FAILURE_EMERGENCY_CLOSE',
+    parentOperationKey,
+    parentClientOrderId,
+    symbol,
+    entrySide: 'BUY',
+    closeSide: 'SELL',
+    requestedQuantity: 1,
+    positionBeforeAmount: 1,
+    positionBeforeSignedAmount: 1,
+    signal,
+    entryEvidence: { orderId: entryOrderId, entryPrice: 100, executedQty: 1 },
+    failureReason: 'simulated protection failure',
+    emergencyClientOrderId,
+  };
+
+  assert(db.createExecutionLedger({
+    executionId: parentExecutionId,
+    operationKey: parentOperationKey,
+    action: 'OPEN',
+    status: 'PENDING',
+    symbol,
+    side: 'BUY',
+    volume: 1,
+    request: parentRequest,
+  }), 'parent OPEN ledger should be created');
+  assert(db.createExecutionLedger({
+    executionId: childExecutionId,
+    operationKey: childOperationKey,
+    action: 'PROTECTION_FAIL_CLOSE',
+    status: 'PENDING',
+    symbol,
+    side: 'SELL',
+    volume: 1,
+    request: childRequest,
+  }), 'emergency-close ledger should be created');
+  db.updateExecutionLedger(parentExecutionId, { status: 'UNKNOWN', error: 'simulated process interruption' });
+  db.updateExecutionLedger(childExecutionId, { status: 'UNKNOWN', error: 'simulated process interruption' });
+
+  const entryFill: any = {
+    orderId: entryOrderId,
+    clientOrderId: parentClientOrderId,
+    status: 'FILLED',
+    executedQty: 1,
+    avgPrice: 100,
+    commission: 0.1,
+    commissionCurrency: 'USDT',
+    grossQuote: 100,
+    feeQuote: 0.1,
+    quoteCurrency: 'USDT',
+    brokerTimestamp: now - 1000,
+  };
+  const closeFill: any = {
+    orderId: closeOrderId,
+    clientOrderId: emergencyClientOrderId,
+    status: 'FILLED',
+    executedQty: 1,
+    avgPrice: 110,
+    commission: 0.11,
+    commissionCurrency: 'USDT',
+    grossQuote: 110,
+    feeQuote: 0.11,
+    quoteCurrency: 'USDT',
+    brokerTimestamp: now,
+  };
+
+  (executor as any).recoverOperationFillDetails = async (_symbol: string, operationKey: string) => {
+    if (operationKey === parentOperationKey) return entryFill;
+    if (operationKey === childOperationKey) return recoverClose ? closeFill : null;
+    return null;
+  };
+  (executor as any).getPosition = async () => ({
+    positionAmt: 0,
+    entryPrice: 0,
+    unrealizedProfit: 0,
+  });
+  (executor as any).recoverOrderByClientId = async (_symbol: string, clientOrderId: string) => {
+    if (clientOrderId !== emergencyClientOrderId || !recoverClose) return null;
+    return {
+      orderId: closeOrderId,
+      status: 'FILLED',
+      executedQty: 1,
+      avgPrice: 110,
+      realizedProfit: 9.89,
+      realizedProfitCurrency: 'USDT',
+    };
+  };
+
+  const reconciler = new StartupReconciler(config, db, { sendMessage: async () => {} } as any);
+  return {
+    db,
+    config,
+    executor,
+    reconciler,
+    parentExecutionId,
+    childExecutionId,
+    parentOperationKey,
+    childOperationKey,
+    entryOrderId,
+    closeOrderId,
+  };
+}
+
+async function verifySettlement(futures: boolean) {
+  const f = await makeFixture(futures);
+  try {
+    await (f.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(f.executor);
+    const trades = f.db.getRecentTrades(10);
+    assert(trades.length === 1, 'authoritative recovery should insert exactly one closed trade');
+    assert(trades[0].status === 'closed', 'recovered emergency close must never be recorded as an open trade');
+    assert(Number(trades[0].ticket) === f.entryOrderId, 'trade ticket must match the exact recovered entry order');
+    assert(Math.abs(Number(trades[0].profit) - 9.79) < 1e-8, 'final PnL must include entry and exit costs exactly once');
+
+    const parent = f.db.getExecutionByOperationKey(f.parentOperationKey);
+    const child = f.db.getExecutionByOperationKey(f.childOperationKey);
+    assert(parent.status === 'EXECUTED', 'parent OPEN ledger must be settled atomically');
+    assert(child.status === 'EXECUTED', 'emergency-close child ledger must be settled atomically');
+    assert(JSON.parse(parent.resultJson).id === trades[0].id, 'parent OPEN result must carry the closed trade identity');
+    assert(JSON.parse(child.resultJson).tradeId === trades[0].id, 'emergency-close result must carry the closed trade identity');
+
+    const daily = f.db.raw().prepare('SELECT trades, pnl FROM daily_stats ORDER BY day DESC LIMIT 1').get() as any;
+    assert(Number(daily.trades) === 1, 'daily statistics must count the recovered trade once');
+    assert(Math.abs(Number(daily.pnl) - 9.79) < 1e-8, 'daily PnL must equal the net closed-trade result');
+
+    await (f.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(f.executor);
+    assert(f.db.getRecentTrades(10).length === 1, 'a second reconciliation pass must not duplicate the trade');
+    const dailyAfter = f.db.raw().prepare('SELECT trades FROM daily_stats ORDER BY day DESC LIMIT 1').get() as any;
+    assert(Number(dailyAfter.trades) === 1, 'a second reconciliation pass must not duplicate daily stats');
+  } finally {
+    f.db.raw().close();
+  }
+}
+
+async function verifyUnresolvedCloseStaysBlocked() {
+  const f = await makeFixture(true, false);
+  try {
+    await (f.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(f.executor);
+    assert(f.db.getRecentTrades(10).length === 0, 'missing exact emergency fill must not create a trade');
+    assert(f.db.getExecutionByOperationKey(f.parentOperationKey).status === 'UNKNOWN', 'parent OPEN must remain unresolved');
+    assert(f.db.getExecutionByOperationKey(f.childOperationKey).status === 'UNKNOWN', 'emergency-close child must remain unresolved');
+  } finally {
+    f.db.raw().close();
+  }
+}
+
+async function verifyAtomicRollback() {
+  const f = await makeFixture(true);
+  try {
+    f.db.raw().exec(`
+      CREATE TRIGGER reject_emergency_child_settlement
+      BEFORE UPDATE OF status ON execution_ledger
+      WHEN OLD.executionId = '${f.childExecutionId}' AND NEW.status = 'EXECUTED'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated child-ledger settlement failure');
+      END;
+    `);
+    await (f.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(f.executor);
+    assert(f.db.getRecentTrades(10).length === 0, 'trade insertion must roll back if child-ledger settlement fails');
+    assert(f.db.getExecutionByOperationKey(f.parentOperationKey).status === 'UNKNOWN', 'parent ledger update must roll back atomically');
+    assert(f.db.getExecutionByOperationKey(f.childOperationKey).status === 'UNKNOWN', 'child ledger remains UNKNOWN after rollback');
+    const daily = f.db.raw().prepare('SELECT COUNT(*) count FROM daily_stats').get() as any;
+    assert(Number(daily.count) === 0, 'daily statistics must roll back with the trade and ledgers');
+  } finally {
+    f.db.raw().close();
+  }
+}
+
+async function main() {
+  await verifySettlement(false);
+  await verifySettlement(true);
+  await verifyUnresolvedCloseStaysBlocked();
+  await verifyAtomicRollback();
+  console.log(`Result: ${assertions} assertions passed, 0 failed`);
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
