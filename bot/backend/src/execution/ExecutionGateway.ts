@@ -409,19 +409,42 @@ export class ExecutionGateway {
           );
         }
       } else if (this.config.mode === 'binance') {
-        if (
-          !t.ticket ||
-          !(await this.binance.modifyPosition(
-            t.ticket,
-            t.symbol,
-            t.side,
-            newSl,
-            newTp,
-            key,
-            currentProtectionOperationKey,
-          ))
-        ) {
-          throw new Error('Binance modify rejected');
+        if (!t.ticket) throw new Error('Trade has no broker ticket');
+        let protectionState: Record<string, unknown> | null = null;
+        const modified = await this.binance.modifyPosition(
+          t.ticket,
+          t.symbol,
+          t.side,
+          newSl,
+          newTp,
+          key,
+          currentProtectionOperationKey,
+          async (state: Record<string, unknown>) => {
+            const next = { ...state };
+            const request = { tradeId: t.id, newSl, newTp, ...next };
+            if (!this.db.updateExecutionRequest(op.executionId, request)) return false;
+            protectionState = next;
+            return true;
+          },
+        );
+        if (!modified) {
+          const phase = String(protectionState?.phase ?? '');
+          if (phase === 'OLD_PAIR_RETAINED' || phase === 'RESTORE_VERIFIED') {
+            const failed = this.db.updateExecutionLedger(op.executionId, {
+              status: 'FAILED',
+              result: {
+                broker: 'binance',
+                requestedSl: newSl,
+                requestedTp: newTp,
+                activeProtectionKey: protectionState?.activeProtectionKey ?? currentProtectionOperationKey,
+                phase,
+              },
+              error: `Requested SL/TP modification failed; protection remains on the verified prior/restored pair (phase=${phase})`,
+            });
+            if (!failed) throw new Error('Could not durably settle failed Binance protection modification');
+            return false;
+          }
+          throw new Error('Binance modify failed without proof that a valid protection pair remains active');
         }
       } else {
         if (!t.ticket || !this.paper.modifyTrade(t.ticket, newSl, newTp)) throw new Error('Paper modify rejected');
@@ -518,10 +541,10 @@ export class ExecutionGateway {
     if (!openOperationKey) return undefined;
 
     const rows = this.db.raw().prepare(`
-      SELECT operationKey, requestJson, tradeId
+      SELECT operationKey, requestJson, tradeId, status
       FROM execution_ledger
       WHERE action='MOVE_SL_TP'
-        AND status='EXECUTED'
+        AND status IN ('EXECUTED','FAILED')
         AND (tradeId=? OR tradeId IS NULL)
       ORDER BY updatedAt DESC, executionId DESC
       LIMIT 100
@@ -529,6 +552,7 @@ export class ExecutionGateway {
       operationKey: string;
       requestJson?: string | null;
       tradeId?: number | null;
+      status?: string;
     }>;
 
     for (const row of rows) {
@@ -538,7 +562,16 @@ export class ExecutionGateway {
           Number(row.tradeId ?? request?.tradeId) === tradeId &&
           Number(request?.tradeId) === tradeId
         ) {
-          return String(row.operationKey);
+          const phase = String(request?.phase ?? '');
+          const activeKey = String(request?.activeProtectionKey ?? '').trim();
+          if (
+            row.status === 'FAILED' &&
+            activeKey &&
+            (phase === 'RESTORE_VERIFIED' || phase === 'OLD_PAIR_RETAINED')
+          ) {
+            return activeKey;
+          }
+          if (row.status === 'EXECUTED') return String(row.operationKey);
         }
       } catch {
         // Ignore malformed historical rows when selecting the active protection identity.
