@@ -2773,6 +2773,86 @@ export class BinanceExecutor {
     }
   }
 
+  async restoreProtectionPairForReconciliation(
+    ticket: number,
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    expectedQuantity: number,
+    operationKey: string,
+    slPrice: number,
+    tpPrice: number,
+  ): Promise<boolean> {
+    if (
+      !this.isFutures ||
+      !operationKey.trim() ||
+      !(expectedQuantity > 0) ||
+      !Number.isFinite(expectedQuantity) ||
+      !(slPrice > 0) ||
+      !(tpPrice > 0) ||
+      !Number.isFinite(slPrice) ||
+      !Number.isFinite(tpPrice)
+    ) return false;
+
+    try {
+      const position = await this.getPosition(symbol);
+      if (!position || !Number.isFinite(Number(position.positionAmt))) {
+        throw new Error(`Live position unavailable for protection restoration on ${symbol}`);
+      }
+      const signedAmount = Number(position.positionAmt);
+      if (
+        signedAmount === 0 ||
+        (side === 'BUY' && signedAmount <= 0) ||
+        (side === 'SELL' && signedAmount >= 0)
+      ) {
+        throw new Error(`Live position side mismatch during protection restoration on ${symbol}`);
+      }
+      const quantity = Math.abs(signedAmount);
+      const step = getSymbolSpec(symbol).volumeStep;
+      if (Math.abs(quantity - expectedQuantity) > Math.max(step, expectedQuantity * 0.0001)) {
+        throw new Error(`Live position quantity changed during protection restoration on ${symbol}`);
+      }
+
+      await this.cancelProtectionByOperationKey(symbol, side, operationKey);
+      const ownedIds = new Set([
+        this.makeProtectionClientOrderId(operationKey, 'SL'),
+        this.makeProtectionClientOrderId(operationKey, 'TP'),
+      ]);
+      if ((await this.getOpenAlgoOrders(symbol)).some((order: any) =>
+        ownedIds.has(String(order.clientOrderId ?? '')),
+      )) {
+        throw new Error(`Partial restoration protection remains open for ${symbol}`);
+      }
+
+      const signal = {
+        symbol,
+        side,
+        price: Number(position.entryPrice ?? 0),
+        confidence: 1,
+        sl: slPrice,
+        tp: tpPrice,
+        source: 'startup-protection-restore',
+        reason: 'startup-protection-restore',
+        timestamp: Date.now(),
+      } as Signal;
+      await this.placeSLTP(signal, quantity, ticket, getSymbolSpec(symbol), operationKey);
+      const recovered = await this.recoverProtectionByOperation(symbol, operationKey);
+      const verified = this.validateFuturesProtectionPair(
+        signal,
+        quantity,
+        this.formatPrice(slPrice, getSymbolSpec(symbol).pip),
+        this.formatPrice(tpPrice, getSymbolSpec(symbol).pip),
+        recovered,
+      );
+      if (!verified) {
+        throw new Error(`Restored SL/TP pair failed exact identity/price/status validation for ${symbol}`);
+      }
+      return true;
+    } catch (error: any) {
+      this.logger.error(`CRITICAL: protection restoration failed for ${symbol}: ${String(error?.message ?? error)}`);
+      return false;
+    }
+  }
+
   async closePartialPosition(
     ticket:number,
     symbol:string,
