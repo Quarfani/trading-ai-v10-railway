@@ -7,6 +7,7 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { Logger } from '../utils/Logger';
+import { getClientIp } from './clientIp';
 
 interface IPState {
   requests:   number[];  // timestamps of requests in current window
@@ -25,10 +26,7 @@ export function rateLimit(maxPerMin = 100) {
   const BAN_MS    = 10 * 60_000; // 10 min ban
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = (
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0] ??
-      req.socket.remoteAddress ?? 'unknown'
-    ).trim();
+    const ip = getClientIp(req);
 
     // Whitelist
     if (WHITELIST.has(ip)) return next();
