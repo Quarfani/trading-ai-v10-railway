@@ -770,9 +770,341 @@ export class StartupReconciler {
     }
   }
 
+  private async resolveProtectionFailureEmergencyCloseLedgers(
+    exec: BinanceExecutor,
+  ): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, symbol, volume, requestJson, status, createdAt
+      FROM execution_ledger
+      WHERE status IN ('PENDING', 'UNKNOWN')
+        AND action='PROTECTION_FAIL_CLOSE'
+      ORDER BY createdAt ASC, updatedAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      operationKey: string;
+      symbol?: string | null;
+      volume?: number | null;
+      requestJson?: string | null;
+      status: string;
+      createdAt: number;
+    }>;
+
+    if (rows.length === 0) return;
+
+    const accountCurrency = String(this.config.accountCurrency ?? 'USD').trim().toUpperCase();
+    const fx = new CurrencyConversionProvider(
+      new MarketScanner(this.config),
+      accountCurrency,
+    );
+
+    for (const row of rows) {
+      try {
+        let request: any;
+        try {
+          request = JSON.parse(String(row.requestJson ?? 'null'));
+        } catch {
+          throw new Error('Emergency-close request JSON is malformed');
+        }
+        if (!request || request.schemaVersion !== 1) {
+          throw new Error('Emergency-close request schema is missing or unsupported');
+        }
+
+        const parentOperationKey = String(request.parentOperationKey ?? '');
+        const symbol = String(request.symbol ?? row.symbol ?? '').trim().toUpperCase();
+        const side = String(request.entrySide ?? request.signal?.side ?? '').trim().toUpperCase();
+        const quantity = Number(request.requestedQuantity ?? row.volume);
+        const positionBeforeSigned = Number(request.positionBeforeSignedAmount);
+        const positionBeforeAmount = Number(request.positionBeforeAmount);
+        const storedEmergencyClientId = String(request.emergencyClientOrderId ?? '');
+        const parentClientOrderId = String(request.parentClientOrderId ?? '');
+        const signal = request.signal;
+        if (
+          !parentOperationKey ||
+          !symbol ||
+          !['BUY', 'SELL'].includes(side) ||
+          !signal ||
+          String(signal.symbol ?? '').trim().toUpperCase() !== symbol ||
+          String(signal.side ?? '').trim().toUpperCase() !== side ||
+          !(quantity > 0) ||
+          !Number.isFinite(quantity) ||
+          !Number.isFinite(positionBeforeSigned) ||
+          !(positionBeforeAmount > 0) ||
+          !Number.isFinite(positionBeforeAmount) ||
+          Math.abs(Math.abs(positionBeforeSigned) - positionBeforeAmount) > Math.max(1e-8, quantity * 0.0001)
+        ) {
+          throw new Error('Emergency-close identity, quantity, or signed position snapshot is invalid');
+        }
+
+        const quoteCurrency = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
+        if (!quoteCurrency) {
+          throw new Error('Emergency-close symbol has no supported authoritative quote currency');
+        }
+
+        if (this.config.binance.futures) {
+          if (
+            (side === 'BUY' && positionBeforeSigned <= 0) ||
+            (side === 'SELL' && positionBeforeSigned >= 0)
+          ) {
+            throw new Error('Stored Futures position direction conflicts with the entry side');
+          }
+        } else if (side !== 'BUY' || positionBeforeSigned <= 0) {
+          throw new Error('Binance Spot emergency close requires a positive long inventory');
+        }
+
+        const childOperationKey = String(row.operationKey ?? '');
+        const expectedEmergencyOperationKey = 'PROTECTION_FAIL:' + parentOperationKey;
+        const expectedEmergencyClientId = exec.clientOrderIdForOperationKey(expectedEmergencyOperationKey);
+        const expectedParentClientId = exec.clientOrderIdForOperationKey(parentOperationKey);
+        if (
+          childOperationKey !== expectedEmergencyOperationKey ||
+          storedEmergencyClientId !== expectedEmergencyClientId ||
+          parentClientOrderId !== expectedParentClientId
+        ) {
+          throw new Error('Emergency-close operation key or clientOrderId does not match its parent OPEN identity');
+        }
+
+        const parent = this.db.getExecutionByOperationKey(parentOperationKey);
+        if (
+          !parent ||
+          String(parent.action) !== 'OPEN' ||
+          !['PENDING', 'UNKNOWN'].includes(String(parent.status))
+        ) {
+          throw new Error('Matching parent OPEN ledger is missing, terminal, or has an unexpected action');
+        }
+
+        let parentRequest: any;
+        try {
+          parentRequest = JSON.parse(String(parent.requestJson ?? 'null'));
+        } catch {
+          throw new Error('Parent OPEN request JSON is malformed');
+        }
+        const parentSignal = parentRequest?.signal;
+        if (
+          !parentSignal ||
+          String(parentSignal.symbol ?? '').trim().toUpperCase() !== symbol ||
+          String(parentSignal.side ?? '').trim().toUpperCase() !== side
+        ) {
+          throw new Error('Parent OPEN request identity does not match the emergency close');
+        }
+
+        const entryFill = await exec.recoverOperationFillDetails(
+          symbol,
+          parentOperationKey,
+          quantity,
+        );
+        if (!entryFill || entryFill.status !== 'FILLED') {
+          throw new Error('Exact parent OPEN fill could not be recovered authoritatively');
+        }
+        const closeFill = await exec.recoverOperationFillDetails(
+          symbol,
+          expectedEmergencyOperationKey,
+          quantity,
+        );
+        if (!closeFill || closeFill.status !== 'FILLED') {
+          throw new Error('Exact emergency-close fill could not be recovered authoritatively');
+        }
+        if (
+          entryFill.clientOrderId !== expectedParentClientId ||
+          closeFill.clientOrderId !== expectedEmergencyClientId ||
+          Math.abs(entryFill.executedQty - quantity) > Math.max(1e-8, quantity * 0.0001) ||
+          Math.abs(closeFill.executedQty - quantity) > Math.max(1e-8, quantity * 0.0001) ||
+          !(entryFill.avgPrice > 0) ||
+          !(closeFill.avgPrice > 0)
+        ) {
+          throw new Error('Recovered OPEN/emergency-close fill identity, quantity, or price is invalid');
+        }
+
+        const hintedEntryOrderId = Number(request.entryEvidence?.orderId);
+        if (
+          Number.isFinite(hintedEntryOrderId) &&
+          hintedEntryOrderId > 0 &&
+          hintedEntryOrderId !== entryFill.orderId
+        ) {
+          throw new Error('Recovered parent OPEN order id conflicts with the stored entry evidence');
+        }
+
+        const after = await exec.getPosition(symbol);
+        if (!after || !Number.isFinite(Number(after.positionAmt))) {
+          throw new Error('Post-emergency-close position state is unavailable or invalid');
+        }
+        const actualSignedAfter = Number(after.positionAmt);
+        const expectedSignedAfter = this.config.binance.futures
+          ? positionBeforeSigned - (side === 'BUY' ? closeFill.executedQty : -closeFill.executedQty)
+          : positionBeforeSigned - closeFill.executedQty;
+        const tolerance = Math.max(1e-8, quantity * 0.0001);
+        if (
+          expectedSignedAfter < -tolerance && !this.config.binance.futures ||
+          !Number.isFinite(expectedSignedAfter) ||
+          Math.abs(actualSignedAfter - expectedSignedAfter) > tolerance
+        ) {
+          throw new Error(
+            'Emergency-close inventory delta is not authoritative: before=' +
+            positionBeforeSigned + ' expectedAfter=' + expectedSignedAfter +
+            ' actualAfter=' + actualSignedAfter,
+          );
+        }
+
+        let exitProfitQuote: number;
+        let exitProfitCurrency = quoteCurrency;
+        if (this.config.binance.futures) {
+          const recoveredPnl = await exec.recoverOrderByClientId(
+            symbol,
+            expectedEmergencyClientId,
+            entryFill.avgPrice,
+            side as 'BUY' | 'SELL',
+          );
+          if (
+            !recoveredPnl ||
+            recoveredPnl.status !== 'FILLED' ||
+            Math.abs(recoveredPnl.executedQty - quantity) > Math.max(1e-8, quantity * 0.0001) ||
+            recoveredPnl.realizedProfit == null ||
+            !Number.isFinite(recoveredPnl.realizedProfit) ||
+            String(recoveredPnl.realizedProfitCurrency ?? '').trim().toUpperCase() !== quoteCurrency
+          ) {
+            throw new Error('Futures emergency-close realized PnL or quote currency could not be recovered authoritatively');
+          }
+          if (entryFill.commissionCurrency !== quoteCurrency || closeFill.commissionCurrency !== quoteCurrency) {
+            throw new Error('Futures entry/exit commission currency does not match the realized-PnL quote currency');
+          }
+          exitProfitQuote = recoveredPnl.realizedProfit;
+          exitProfitCurrency = String(recoveredPnl.realizedProfitCurrency);
+        } else {
+          if (
+            entryFill.quoteCurrency !== quoteCurrency ||
+            closeFill.quoteCurrency !== quoteCurrency ||
+            !Number.isFinite(Number(entryFill.grossQuote)) ||
+            !Number.isFinite(Number(closeFill.grossQuote)) ||
+            !Number.isFinite(Number(closeFill.feeQuote)) ||
+            !Number.isFinite(Number(entryFill.feeQuote))
+          ) {
+            throw new Error('Spot OPEN/close gross proceeds or quote-denominated fees are unavailable');
+          }
+          // Exit result excludes the entry fee, which is stored in realizedProfit
+          // and added exactly once to the final trade result.
+          exitProfitQuote = Number(closeFill.grossQuote) -
+            Number(entryFill.grossQuote) -
+            Number(closeFill.feeQuote);
+          if (entryFill.commissionCurrency !== quoteCurrency || closeFill.commissionCurrency !== quoteCurrency) {
+            throw new Error('Spot fee conversion did not produce the pair quote currency');
+          }
+        }
+
+        const conversionRate = await fx.getRate(exitProfitCurrency);
+        if (!(conversionRate != null && conversionRate > 0 && Number.isFinite(conversionRate))) {
+          throw new Error('Broker quote-currency to account-currency conversion is unavailable');
+        }
+        const entryCommissionAccount = Number(entryFill.commission) * conversionRate;
+        const exitProfitAccount = exitProfitQuote * conversionRate;
+        if (
+          !(entryCommissionAccount >= 0) ||
+          !Number.isFinite(entryCommissionAccount) ||
+          !Number.isFinite(exitProfitAccount)
+        ) {
+          throw new Error('Recovered entry commission or close PnL is non-finite');
+        }
+        const finalProfit = exitProfitAccount - entryCommissionAccount;
+        if (!Number.isFinite(finalProfit)) {
+          throw new Error('Emergency-close cumulative PnL is invalid');
+        }
+
+        const openedAt = Number(entryFill.brokerTimestamp) > 0
+          ? Number(entryFill.brokerTimestamp)
+          : Number(parent.createdAt ?? row.createdAt);
+        const closedAt = Math.max(
+          openedAt,
+          Number(closeFill.brokerTimestamp) > 0 ? Number(closeFill.brokerTimestamp) : Date.now(),
+        );
+        const mlPredictionId = String(parentSignal.mlPredictionId ?? '').trim() || undefined;
+        const trade = {
+          ticket: entryFill.orderId,
+          symbol,
+          timeframe: String(parentRequest.timeframe ?? signal.timeframe ?? 'H1'),
+          side: side as 'BUY' | 'SELL',
+          volume: entryFill.executedQty,
+          entry: entryFill.avgPrice,
+          sl: Number.isFinite(Number(signal.sl)) ? Number(signal.sl) : 0,
+          tp: Number.isFinite(Number(signal.tp)) ? Number(signal.tp) : 0,
+          status: 'closed' as const,
+          openedAt: Math.max(1, openedAt),
+          closedAt,
+          profit: finalProfit,
+          realizedProfit: -entryCommissionAccount,
+          source: String(parentSignal.source ?? signal.source ?? 'BINANCE_PROTECTION_FAILURE'),
+          exitReason: 'PROTECTION_FAILURE',
+          commission: entryCommissionAccount,
+          commissionCurrency: accountCurrency,
+          entryQuoteToAccount: conversionRate,
+          exitQuoteToAccount: conversionRate,
+          account: this.config.accountName ?? 'default',
+          mlPredictionId,
+        };
+
+        const tradeId = this.db.settleProtectionFailureClose({
+          parentExecutionId: String(parent.executionId),
+          parentOperationKey,
+          parentBrokerOrderId: entryFill.orderId,
+          parentResult: {
+            broker: 'binance',
+            symbol,
+            clientOrderId: expectedParentClientId,
+            orderId: entryFill.orderId,
+            executedQty: entryFill.executedQty,
+            entryPrice: entryFill.avgPrice,
+            entryCommission: entryFill.commission,
+            entryCommissionCurrency: entryFill.commissionCurrency,
+            accountCurrency,
+            conversionRate,
+          },
+          childExecutionId: String(row.executionId),
+          childOperationKey,
+          childBrokerOrderId: closeFill.orderId,
+          childResult: {
+            broker: 'binance',
+            symbol,
+            clientOrderId: expectedEmergencyClientId,
+            orderId: closeFill.orderId,
+            executedQty: closeFill.executedQty,
+            exitPrice: closeFill.avgPrice,
+            exitCommission: closeFill.commission,
+            exitCommissionCurrency: closeFill.commissionCurrency,
+            exitProfitQuote,
+            exitProfitCurrency,
+            exitProfitAccount,
+            conversionRate,
+            positionBeforeSigned,
+            positionAfterSigned: actualSignedAfter,
+            positionDeltaVerified: true,
+            parentOperationKey,
+          },
+          exitProfitAccount,
+          trade,
+        });
+        if (!tradeId) {
+          throw new Error('Atomic emergency-close settlement declined the parent/child ledger pair');
+        }
+
+        this.logger.info(
+          '[Binance] startup-settled protection-failure emergency close trade=' +
+          tradeId + ' symbol=' + symbol + ' net=' + finalProfit,
+        );
+      } catch (e: any) {
+        const message = String(e?.message ?? e).slice(0, 1000);
+        this.db.updateExecutionLedger(String(row.executionId), {
+          status: 'UNKNOWN',
+          error: 'Protection-failure startup recovery blocked: ' + message,
+        });
+        this.logger.error(
+          '[Binance] protection-failure emergency close remains UNKNOWN: ' +
+          String(row.operationKey) + ' ' + message,
+        );
+      }
+    }
+  }
+
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
+    await this.resolveProtectionFailureEmergencyCloseLedgers(exec);
 
     // Spot has no broker ticket/position identity. Startup therefore requires
     // exact operation-keyed OCO protection for every local open trade plus
