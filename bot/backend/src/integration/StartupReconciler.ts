@@ -563,6 +563,12 @@ export class StartupReconciler {
 
       const live = bySymbol.get(String(trade.symbol).toUpperCase());
       if (!live || Math.abs(Number(live.positionAmt)) < 0.0001) continue;
+      if (
+        (String(trade.side).toUpperCase() === 'BUY' && Number(live.positionAmt) <= 0) ||
+        (String(trade.side).toUpperCase() === 'SELL' && Number(live.positionAmt) >= 0)
+      ) {
+        throw new Error(`Binance live position side differs from the trade during protection recovery for trade id=${tradeId}`);
+      }
 
       const phase = String(request?.phase ?? '');
       if (phase === 'RESTORE_VERIFIED' || phase === 'OLD_PAIR_RETAINED') {
@@ -583,15 +589,13 @@ export class StartupReconciler {
           activeKey,
         );
         const activeOpenOrders = await exec.getOpenAlgoOrders(String(trade.symbol));
-        const activeIds = new Set([
-          String((activePair?.sl as any)?.clientOrderId ?? ''),
-          String((activePair?.tp as any)?.clientOrderId ?? ''),
-        ]);
+        const activeSlClientId = String((activePair?.sl as any)?.clientOrderId ?? '');
+        const activeTpClientId = String((activePair?.tp as any)?.clientOrderId ?? '');
         const activeSlOrder = activeOpenOrders.find((order: any) =>
-          String(order.clientOrderId ?? '') === [...activeIds][0],
+          activeSlClientId !== '' && String(order.clientOrderId ?? '') === activeSlClientId,
         );
         const activeTpOrder = activeOpenOrders.find((order: any) =>
-          String(order.clientOrderId ?? '') === [...activeIds][1],
+          activeTpClientId !== '' && String(order.clientOrderId ?? '') === activeTpClientId,
         );
         const closeSide = String(trade.side).toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
         const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
