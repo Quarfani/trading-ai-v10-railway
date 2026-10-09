@@ -1,7 +1,17 @@
 # Testnet
 
-Use a dedicated testnet API key and account. Never reuse production credentials.
+Use a dedicated Binance Testnet API key and account. Never reuse production credentials.
 
-The application now requires operator credentials in non-paper modes and startup reconciliation must succeed before trading can resume. Ambiguous execution ledger entries block startup.
+## Required configuration
 
-Runtime broker E2E was **not tested** in this audit because external credentials/network access were not available.
+- `DEPLOYMENT_PROFILE=cloud-testnet`
+- `MODE=binance`
+- `DATA_SOURCE=binance`
+- `BINANCE_ENV=testnet`
+- `SYMBOLS` must contain supported Binance quote symbols (for example `BTCUSDT`)
+- `BINANCE_API_KEY` and `BINANCE_SECRET` must be Testnet-only credentials
+- `DASHBOARD_PASSWORD`, `SESSION_SECRET`, and `OPERATOR_PASSWORD` must be unique, strong secrets
+
+The profile rejects paper mode, MT5, and Binance mainnet endpoints. Startup reconciliation and unresolved-ledger checks must pass before trading can resume. A strategy must be explicitly promoted to at least `TESTNET` lifecycle for the configured scope; `TESTNET` alone does not qualify for `PRODUCTION`.
+
+Runtime broker E2E was **not tested** at the current development checkpoint. Do not mark this stage complete until actual controlled Testnet tests and restart/partial-fill evidence are recorded.
