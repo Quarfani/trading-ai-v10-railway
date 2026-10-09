@@ -17,6 +17,7 @@ interface IPState {
 
 const logger    = new Logger('RateLimit');
 const state     = new Map<string, IPState>();
+const MAX_TRACKED_KEYS = 5_000;
 const WHITELIST = new Set(['127.0.0.1', '::1', 'localhost']);
 
 export function rateLimit(maxPerMin = 100, namespace = 'global') {
@@ -35,7 +36,15 @@ export function rateLimit(maxPerMin = 100, namespace = 'global') {
     const now  = Date.now();
     let   info = state.get(stateKey);
     if (!info) {
+      if (state.size >= MAX_TRACKED_KEYS) {
+        const oldestKey = state.keys().next().value;
+        if (oldestKey !== undefined) state.delete(oldestKey);
+      }
       info = { requests: [], violations: 0, bannedUntil: 0 };
+      state.set(stateKey, info);
+    } else {
+      // Keep frequently seen entries at the end so capacity eviction is LRU-like.
+      state.delete(stateKey);
       state.set(stateKey, info);
     }
 
