@@ -1,72 +1,84 @@
-# AI DEVELOPMENT HANDOFF CURRENT
+# ملف استئناف تطوير Trading AI — الحالة الحالية
 
-## Project identity
-- Repository: `Quarfani/trading-ai-v10-railway`
-- Current development branch: `phase1/durable-emergency-close-intent`
-- Phase base commit: `41b0457f48cb38f27a8879604b87e1b4d73d5559`
-- Last code commit before this documentation refresh: `3fd43494d2417d3e8987c8831740f4853dc28af5`. Verify the live branch ref/head before editing; the handoff edit itself creates a documentation-only commit.
-- `main` was not modified or merged.
-- Draft PR #2 remains separate and unchanged: https://github.com/Quarfani/trading-ai-v10-railway/pull/2 (base `main`, head `fix/binance-close-reconciliation-validation`, last verified head `41b0457f48cb38f27a8879604b87e1b4d73d5559`).
+**آخر تحديث:** 9 أكتوبر 2026  
+**المستودع:** `Quarfani/trading-ai-v10-railway`  
+**فرع التطوير:** `phase1/durable-emergency-close-intent`  
+**رأس الفرع قبل تحديث ملف الاستئناف هذا:** `9898ccde4b2a28b06f247bad633b68fafc452890`  
+**قاعدة الفرع:** `41b0457f48cb38f27a8879604b87e1b4d73d5559`
 
-## Phase 2 implementation summary
-This phase implements durable recovery for Binance protection-failure emergency closes. It is **not a verified/release-ready build**.
+> تحديث ملف الاستئناف ينشئ التزامًا توثيقيًا جديدًا؛ لذلك يجب على المساعد التالي قراءة رأس الفرع الحي ومقارنته قبل أي تعديل. لا تعتمد على هذا الرأس السابق إذا ظهر التزام أحدث.
 
-### Code changes
-- `bot/backend/src/execution/BinanceExecutor.ts`
-  - Receives `DatabaseManager` and requires a stable OPEN operation key/clientOrderId when the live gateway injects the ledger.
-  - Persists a `PROTECTION_FAIL_CLOSE` child ledger before the broker-position precheck. The request explicitly records `PRECHECK_NOT_STARTED`, then stores the signed pre-close inventory and transitions to `SUBMISSION_ARMED` before the emergency market order is submitted.
-  - Uses an operation-derived Binance `clientOrderId`; validates broker response symbol/clientOrderId, FILLED status, order ID, exact executed quantity, and the **signed** post-close position delta.
-  - Recovery looks up the exact clientOrderId and blocks blind re-submission. If evidence is ambiguous, the child remains `UNKNOWN`.
-  - Adds exact fill-detail recovery for entry and emergency close. Spot uses authoritative `myTrades` fills and quote-equivalent fees. Futures recovery rejects fee/PnL combinations where the commission asset differs from the quote asset.
-  - `getAllPositions()` now excludes zero-quantity Futures rows from hidden-position detection.
-- `bot/backend/src/execution/ExecutionGateway.ts`
-  - Passes the database and stable OPEN key to Binance execution.
-  - Does not replay an OPEN that was atomically settled as closed after a protection failure as a successful new entry.
-- `bot/backend/src/integration/StartupReconciler.ts`
-  - Reconciles unresolved `PROTECTION_FAIL_CLOSE` children for Spot and Futures using exact entry/close operation identities.
-  - Validates parent/child signal identity, timeframe, fill status/quantity, prices, pre/post signed inventory, PnL/fee currencies, and account conversion before attempting settlement.
-  - Explicitly blocks prechecks recorded as `PRECHECK_NOT_STARTED`; it never automatically sends a replacement close order.
-  - Uses a valid original timeframe and positive SL/TP values; it does not fabricate default H1/zero protection metadata.
-- `bot/backend/src/database/DatabaseManager.ts`
-  - Adds `updateExecutionRequest()` for durable precheck-state updates.
-  - Adds `settleProtectionFailureClose()`, which inserts one closed trade, sets the parent OPEN and child emergency ledgers to EXECUTED, links both ledgers to the trade ID, updates daily statistics and records ML outcome where present in one SQLite transaction.
-  - Enforces single-counted entry commission and consistent PnL totals.
-- Tests added/updated:
-  - `bot/backend/src/tests/unit.binance-emergency-close-ledger.test.ts`
-  - `bot/backend/src/tests/integration.protection-failure-emergency-reconciliation.test.ts`
-  - `bot/backend/src/tests/unit.binance-close-protection.test.ts`
-  - `bot/backend/src/tests/integration.execution-ledger-idempotency.test.ts`
-  - Test counters are dynamic where modified; source counters are not proof of passing tests.
+## الحالة
 
-## Validation status — do not overstate
-- GitHub source reads/writes and static string/identity checks succeeded.
-- Branch comparison from phase base showed this branch ahead with changes in the execution gateway, executor, database, startup reconciler and focused test files.
-- TypeScript typecheck: **NOT RUN**.
-- New focused tests: **NOT RUN**.
-- Full backend test suite: **NOT RUN for this phase**.
-- Frontend full build and dashboard/browser E2E: **NOT RUN**.
-- Real Binance broker E2E/soak: **NOT RUN**.
-- GitHub Actions: not run; the previous handoff says the billing-cycle quota is exhausted. Do not trigger workflows until capacity is restored.
-- Five external endpoint checks from the execution container failed at DNS resolution (`github.com`, `api.github.com`, `raw.githubusercontent.com`, `registry.npmjs.org`, `codeload.github.com`). The GitHub integration remained usable. This is a limitation of that execution container and is **not evidence that the user's internet is down**.
+تمت متابعة العمل على فرع المرحلة فقط. شملت الأعمال مسارات الإغلاق الطارئ بعد فشل الحماية، واستعادة حالة الدخول اليتيمة بعد انقطاع العملية، وتحديد أوامر الحماية بدقة، ونقل أوامر Futures الشرطية إلى Binance Algo Order API. **هذه تغييرات مكتوبة لكنها غير معتمدة للنشر لأن الفحص البرمجي والاختبارات لم تُشغّل في نسخة مشروع كاملة قابلة للتشغيل.**
 
-## Known limitations / next engineering targets
-1. **Run actual validation first.** In a runnable checkout of the live phase branch, run:
-   - `cd bot/backend && npm run typecheck`
+## التغييرات الحالية
+
+### `bot/backend/src/execution/BinanceExecutor.ts`
+- يكتب سجل `PROTECTION_FAIL_CLOSE` قبل فحص المركز؛ ويحفظ حالة تنظيف الحماية `PENDING`، ثم `VERIFIED_NO_OPERATION_OWNED_ORDERS_ACTIVE` فقط بعد التحقق، ويخزن لقطة المركز الموقّعة قبل الانتقال إلى `SUBMISSION_ARMED`.
+- عند فشل أو غموض إلغاء الحماية يسجل `FAILED_OR_AMBIGUOUS` ويترك السجل `UNKNOWN`؛ لا يرسل أمر سوق في هذه الحالة.
+- يمنع استرداد/تسوية سجل إغلاق طارئ قديم لا يملك دليل تنظيف حماية محفوظًا.
+- يستعيد الإغلاق بواسطة هوية العملية الدقيقة، ويفحص الرمز ومعرف العميل والحالة والكمية وتغيّر المخزون الموقّع؛ لا يعيد إرسال أمر إغلاق بديل عند غموض النتيجة.
+- إلغاء Spot OCO مربوط بمفتاح OPEN نفسه، ولا يلغي أمرًا غير تابع للعملية. بقاء أوامر أخرى مفتوحة يؤدي إلى الحجب بدل إلغائها تلقائيًا.
+- أوامر Futures الشرطية SL/TP تستخدم الآن `POST /fapi/v1/algoOrder` مع `algoType=CONDITIONAL` و`clientAlgoId` و`triggerPrice`; والاستعادة والحذف والتحقق من الأوامر المفتوحة تستخدم `/fapi/v1/algoOrder` و`/fapi/v1/openAlgoOrders`. تبقى أوامر السوق العادية على `/fapi/v1/order`، والأوامر العادية على `/fapi/v1/openOrders`.
+- تعديل SL/TP والإغلاق الكامل يتحققان من الأوامر الشرطية باستخدام واجهة Algo ومعرفات Algo، بدل الخلط بينها وبين معرفات الأوامر العادية.
+
+### `bot/backend/src/integration/StartupReconciler.ts`
+- يوقف بدء التشغيل عند وجود OPEN غير محسوم لا يملك سجل إغلاق طارئ تابعًا؛ ويسجل حادث `ORPHANED_BINANCE_OPEN` مع دليل البحث الدقيق عن أمر الدخول. لا يُنشئ إغلاقًا أو دخولًا جديدًا تلقائيًا؛ تتطلب هذه الحالة مصالحة/تدخلًا يدويًا.
+- لا يسوي سجل الإغلاق الطارئ إلا إذا احتوى على دليل تنظيف الحماية المحفوظ، وحالة إرسال معروفة وملء/كمية/PNL ورسوم وهوية دخول/خروج متطابقة.
+- تحقق Futures يعتمد على أمرَي Algo المرتبطين بمفتاح العملية الحالية. عند وجود تعديل SL/TP ناجح، يتحقق من أحدث عملية `MOVE_SL_TP` وأهدافها. الحماية المفقودة أو غير المتطابقة تمنع بدء التشغيل.
+
+### `bot/backend/src/execution/ExecutionGateway.ts`
+- يختار مفتاح حماية الإغلاق من أحدث تعديل SL/TP ناجح، أو مفتاح OPEN الأصلي إذا لم يوجد تعديل ناجح.
+- إذا كان هناك تعديل حماية `MOVE_SL_TP` غير محسوم، يمنع الإغلاق بدل استخدام هوية حماية قديمة.
+- لا يعرض OPEN الذي انتهى بإغلاق طارئ كما لو أنه دخول جديد ناجح عند إعادة المحاولة.
+
+### `bot/backend/src/database/DatabaseManager.ts`
+- التسوية الذرية للإغلاق الطارئ تنشئ صفقة مغلقة واحدة، وتحسم سجل OPEN وسجل الإغلاق الطارئ، وتربطهما بمعرف الصفقة وتحدث الإحصائيات/نتيجة ML ضمن معاملة واحدة.
+- إصلاح جديد: `persistExecutedOpenTrade()` يحفظ `tradeId` المحلي على سجل OPEN في نفس المعاملة.
+- استعادة متوافقة رجعيًا: `getLatestExecutedOpenOperationForTrade()` يستطيع تحديد بعض سجلات OPEN التاريخية التي ليس فيها `tradeId` عبر `resultJson.id`. أي تعارض بين مفاتيح OPEN يبقى حاجزًا ولا يُتجاوز تلقائيًا.
+
+### اختبارات أضيفت/عُدّلت (لم تُشغّل)
+- `bot/backend/src/tests/unit.binance-emergency-close-ledger.test.ts`
+- `bot/backend/src/tests/integration.protection-failure-emergency-reconciliation.test.ts`
+- `bot/backend/src/tests/unit.binance-close-protection.test.ts`
+- `bot/backend/src/tests/integration.execution-ledger-idempotency.test.ts`
+
+تشمل تغطيتها المقصودة استعادة OPEN اليتيم، وعدم إرسال أمر عند غموض تنظيف الحماية، والتحقق من الترحيل إلى Algo API، وعدم إلغاء أوامر غير تابعة للعملية، والهوية المحلية لصفقة OPEN، واختيار مفتاح الحماية بعد تعديل SL/TP.
+
+## التحقق — الحالة الصادقة
+
+- تمت قراءة/كتابة ومراجعة أجزاء من المصدر عبر GitHub connector.
+- تمت مقارنة رأس فرع التطوير؛ مقارنة `main` أعطت `identical` ورأس `main` ظل `97a176f066848d1fa90d6e3eb8585fcaf50be650`.
+- PR #2 ما زال مفتوحًا ومسودة وغير مدمج، برأس منفصل `41b0457f48cb38f27a8879604b87e1b4d73d5559`.
+- `npm run typecheck`: **لم يُشغّل**.
+- الاختبارات الأربعة المركزة: **لم تُشغّل**.
+- `npm test` الكامل: **لم يُشغّل** على هذه التغييرات.
+- بناء الواجهة واختبار المتصفح وتكامل لوحة التحكم: **لم تُشغّل**.
+- Binance Testnet/E2E/soak: **لم تُنفّذ**.
+- GitHub Actions: لم تُشغّل مراعاةً لحصة الاستخدام.
+- فشلت خمسة فحوص DNS من بيئة التنفيذ الحالية: `github.com` و`api.github.com` و`raw.githubusercontent.com` و`registry.npmjs.org` و`codeload.github.com`. ظل GitHub connector يعمل. هذا لا يثبت أن إنترنت المستخدم مغلق؛ إنه قيد في بيئة التنفيذ نفسها.
+
+## المهام التالية — بالترتيب
+
+1. **شغّل تحققًا فعليًا أولًا** في نسخة قابلة للتشغيل مطابقة لرأس الفرع الحي:
+   `cd bot/backend && npm run typecheck`
+   ثم:
    - `npx ts-node --transpile-only src/tests/integration.protection-failure-emergency-reconciliation.test.ts`
    - `npx ts-node --transpile-only src/tests/unit.binance-emergency-close-ledger.test.ts`
    - `npx ts-node --transpile-only src/tests/unit.binance-close-protection.test.ts`
    - `npx ts-node --transpile-only src/tests/integration.execution-ledger-idempotency.test.ts`
-   - Then run `npm test` if runtime/resources allow; record real exit codes and actual output.
-2. **Crash before emergency-child creation:** if the process crashes after an entry fill but before the protection-failure handler durably creates the child ledger, the unresolved parent OPEN and/or broker-visible hidden position should block startup, but the current new path does not automatically construct and settle an emergency close in that window. Add an explicit, operation-keyed startup recovery/incident path or document the required operator intervention, with tests.
-3. **Protection cleanup before emergency market close:** audit exact, operation-keyed cancellation/verification of any partially created or ambiguously acknowledged Spot OCO and Futures SL/TP orders before emergency close. Do not cancel unrelated orders. This remains a release gate.
-4. **Historical FX conversion:** non-USD accounting currently uses the conversion rate available during startup recovery; exact historical conversion-at-fill-time evidence is not persisted for this emergency path. Improve it or block release for unsupported accounting cases.
-5. Complete the broader Spot OCO audit; re-verify frontend installation/build and dashboard-to-API integration in Paper mode; reconcile README and deployment profiles; scan for secrets/databases/runtime artifacts before release.
-6. Only after verified backend/frontend checks should the separate release repository be created and the new Railway account wired up. Do not deploy or enable live trading from this branch.
+   - ثم `npm test` إن أمكن. سجّل النتائج ورموز الخروج الفعلية؛ لا تعتبر العدادات في ملفات الاختبار أدلة نجاح.
+2. أصلح كل خطأ typecheck أو اختبار أولًا. لا تستنتج التوافق مع Binance من مراجعة النص فقط؛ تحقق من حقول واستجابات Algo API الفعلية على Testnet بعد نجاح الاختبارات المحلية.
+3. أغلق الفجوة المحاسبية الخاصة بتحويل العملة التاريخي: يستعمل مسار الاستعادة الحالي سعر التحويل المتاح عند المصالحة، ولا يحفظ دليل سعر التحويل وقت التعبئة. امنع الحالات غير المدعومة أو خزّن معدل التحويل التاريخي الموثق.
+4. راجع سلوك التعديل إذا انقطعت العملية بين حذف SL/TP القديم وإنشاء الجديد؛ يجب أن تبقى الحالة محجوبة ولا يتظاهر النظام بأن الحماية موجودة.
+5. استكمل تدقيق Spot OCO/Algo، ثم البناء الكامل للواجهة وتكامل API ولوحة التحكم في Paper mode، ثم الوثائق وفحص الأسرار والملفات والأثر التشغيلي.
+6. لا تنشئ مستودع الإصدار ولا تربط Railway ولا تنشر حتى نجاح التحقق backend/frontend ومراجعة Testnet. لا تشغّل تداولًا حقيقيًا.
 
-## Resume procedure
-1. Read this file and `Trading_AI_Phase2_Report_2026-10-09.md`.
-2. Verify the live branch HEAD and compare it against the recorded last code commit; make no assumptions from old short SHAs.
-3. Keep `main` and draft PR #2 unchanged.
-4. Run actual typecheck/focused tests in a runnable environment and fix failures before adding unrelated features.
-5. Keep Paper mode for tests; do not rerun GitHub Actions while quota is exhausted.
-6. At the end of the next phase, update this file, create a new report, and stop so the user can transfer the file to a new conversation.
+## قيود ثابتة
+
+- لا تعدّل أو تدمج `main`.
+- لا تعدّل أو تدمج PR #2 أو PR #1.
+- لا تشغّل GitHub Actions بينما الحصة غير متاحة.
+- لا تنشر إلى Railway ولا تفعّل تداولًا حقيقيًا.
+- عند نهاية المرحلة القادمة، أنشئ تقريرًا جديدًا وحدّث ملف الاستئناف ثم توقف لتسليم الملفين للمستخدم.
