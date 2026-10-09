@@ -290,7 +290,7 @@ async function main() {
   await verifySettlement(true);
   await verifyUnresolvedCloseStaysBlocked();
   await verifyAtomicRollback();
-  console.log(`Result: ${assertions} assertions passed, 0 failed`);
+  console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
 main().catch(error => {
