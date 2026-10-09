@@ -615,7 +615,6 @@ export class StartupReconciler {
           throw new Error(`Binance ${phase} state does not have a verified active protection pair for trade id=${tradeId}; startup remains blocked`);
         }
 
-        const requestedKey = String(request?.newProtectionKey ?? row.operationKey);
         const requestedIds = new Set([
           String(request?.requestedProtection?.slClientAlgoId ?? ''),
           String(request?.requestedProtection?.tpClientAlgoId ?? ''),
