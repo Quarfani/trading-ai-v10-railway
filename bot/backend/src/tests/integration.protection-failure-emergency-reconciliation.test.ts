@@ -163,6 +163,7 @@ async function verifyExactFillRecovery() {
     searchedFuturesClientId = clientOrderId;
     return {
       orderId: 701,
+      clientOrderId: expectedFuturesClientId,
       status: 'FILLED',
       executedQty: '1',
       avgPrice: '100',
@@ -189,6 +190,7 @@ async function verifyExactFillRecovery() {
     searchedSpotClientId = clientOrderId;
     return {
       orderId: 702,
+      clientOrderId: expectedSpotClientId,
       status: 'FILLED',
       executedQty: '1',
       updateTime: Date.now(),
@@ -207,6 +209,7 @@ async function verifyExactFillRecovery() {
 
   (spotExec as any).findOrderByClientId = async () => ({
     orderId: 703,
+    clientOrderId: expectedSpotClientId,
     status: 'PARTIALLY_FILLED',
     executedQty: '0.4',
   });
