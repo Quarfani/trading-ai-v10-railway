@@ -1368,29 +1368,28 @@ export class TradingEngine extends EventEmitter {
       }
     }
 
-    // Exposure is a mark-to-market control. Populate current prices for every
-    // already-open position before evaluating the new order.
-    if (this.config.mode !== 'paper') {
-      const missingOpenSymbols = openTrades
-        .map(trade => trade.symbol)
-        .filter(openSymbol => livePrices[openSymbol] == null);
+    // Exposure is a mark-to-market control in Paper as well as broker modes.
+    // Every existing open position needs a current quote; missing marks must
+    // cause the risk gate to fail closed rather than silently undercount risk.
+    const missingOpenSymbols = [...new Set(openTrades
+      .map(trade => trade.symbol)
+      .filter(openSymbol => livePrices[openSymbol] == null))];
 
-      const openTickerResults = await Promise.all(
-        missingOpenSymbols.map(async openSymbol => ({
-          symbol: openSymbol,
-          ticker: await this.fetchTicker(openSymbol),
-        })),
-      );
+    const openTickerResults = await Promise.all(
+      missingOpenSymbols.map(async openSymbol => ({
+        symbol: openSymbol,
+        ticker: await this.fetchTicker(openSymbol),
+      })),
+    );
 
-      for (const { symbol: openSymbol, ticker: openTicker } of openTickerResults) {
-        if (
-          openTicker &&
-          Number.isFinite(openTicker.bid) &&
-          Number.isFinite(openTicker.ask) &&
-          openTicker.ask > openTicker.bid
-        ) {
-          livePrices[openSymbol] = (openTicker.bid + openTicker.ask) / 2;
-        }
+    for (const { symbol: openSymbol, ticker: openTicker } of openTickerResults) {
+      if (
+        openTicker &&
+        Number.isFinite(openTicker.bid) &&
+        Number.isFinite(openTicker.ask) &&
+        openTicker.ask > openTicker.bid
+      ) {
+        livePrices[openSymbol] = (openTicker.bid + openTicker.ask) / 2;
       }
     }
 
