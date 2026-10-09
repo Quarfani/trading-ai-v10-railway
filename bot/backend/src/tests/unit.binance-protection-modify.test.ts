@@ -1,152 +1,235 @@
 const { BinanceExecutor } = require("../execution/BinanceExecutor");
 
+let assertions = 0;
+
 function assert(condition: unknown, message: string): asserts condition {
+  assertions += 1;
   if (!condition) throw new Error(message);
 }
 
-async function main() {
+function makeAlgoOrder(
+  symbol: string,
+  operationKey: string,
+  kind: "SL" | "TP",
+  algoId: number,
+  triggerPrice: number,
+  status = "NEW",
+) {
+  const clientAlgoId = (executorForIds as any).makeProtectionClientOrderId(operationKey, kind);
+  return {
+    symbol,
+    algoId,
+    clientAlgoId,
+    algoType: "CONDITIONAL",
+    algoStatus: status,
+    side: "SELL",
+    orderType: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+    triggerPrice: String(triggerPrice),
+    closePosition: true,
+  };
+}
+
+const executorForIds = new BinanceExecutor({
+  binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+} as any);
+
+async function verifyMissingPriorIdentityBlocksModification() {
   const executor = new BinanceExecutor({
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
   } as any);
-
-  (executor as any).orderMap.set(7, {
-    slOrderId: 101,
-    tpOrderId: 102,
-    quantity: 1,
-  });
-
-  const deleted: number[] = [];
-  (executor as any).signedDelete = async (_path: string, params: any) => {
-    deleted.push(Number(params.orderId));
-    return {};
-  };
-
-  (executor as any).getOpenOrders = async () => [
-    { orderId: 102, type: "TAKE_PROFIT_MARKET" },
-  ];
-  (executor as any).getProtectiveOrderIds = async () => [];
+  let cancellations = 0;
+  let placements = 0;
   (executor as any).getPosition = async () => ({
     positionAmt: 1,
     entryPrice: 100,
     unrealizedProfit: 0,
   });
-
+  (executor as any).signedDelete = async () => {
+    cancellations += 1;
+    return {};
+  };
   (executor as any).placeSLTP = async () => {
-    throw new Error("must not replace protection while an old order remains");
+    placements += 1;
   };
 
-  const blocked = await executor.modifyPosition(7, "BTCUSDT", "BUY", 90, 110);
-  assert(!blocked, "modify must fail closed when an old protective order remains open");
-  assert(deleted.includes(101) && deleted.includes(102), "modify must attempt both old protective order cancellations");
-
-  let protectionKey = "";
-  (executor as any).getOpenOrders = async () => [];
-  (executor as any).placeSLTP = async (
-    _sig: any,
-    _quantity: number,
-    _ticket: number,
-    _spec: any,
-    key?: string,
-  ) => {
-    protectionKey = String(key ?? "");
-  };
-
-  const modified = await executor.modifyPosition(
+  const result = await executor.modifyPosition(
     7,
-    "BTCUSDT",
-    "BUY",
-    91,
-    111,
-    "modify-operation-identity",
-  );
-  assert(modified, "modify must succeed after old protection cancellation is verified");
-  assert(
-    protectionKey === "modify-operation-identity",
-    "modify must pass the durable operation identity into protective-order creation",
-  );
-
-  const rawProtectionId = (executor as any).makeProtectionClientOrderId(
-    "modify-operation-identity",
-    "SL",
-  );
-  assert(
-    rawProtectionId.length <= 32 &&
-      /^[.A-Z:/a-z0-9_-]{1,32}$/.test(rawProtectionId),
-    "Binance protection clientOrderId must satisfy the documented 32-char format",
-  );
-
-  (executor as any).orderMap.clear();
-  const restartDeleted: number[] = [];
-  let verificationPass = false;
-  (executor as any).getOpenOrders = async () => {
-    if (!verificationPass) {
-      return [
-        { orderId: 201, side: "SELL", type: "STOP_MARKET", closePosition: "true", stopPrice: "90" },
-        { orderId: 202, side: "SELL", type: "TAKE_PROFIT_MARKET", closePosition: "true", stopPrice: "110" },
-      ];
-    }
-    return [];
-  };
-  (executor as any).getProtectiveOrderIds = async () => [201, 202];
-  (executor as any).signedDelete = async (_path: string, params: any) => {
-    restartDeleted.push(Number(params.orderId));
-    if (restartDeleted.length === 2) verificationPass = true;
-    return {};
-  };
-  (executor as any).getPosition = async () => ({
-    positionAmt: 1,
-    entryPrice: 100,
-    unrealizedProfit: 0,
-  });
-  (executor as any).placeSLTP = async () => {};
-  const restartModified = await executor.modifyPosition(
-    999,
     "BTCUSDT",
     "BUY",
     90,
     110,
-    "restart-modify-operation",
+    "new-move-operation",
   );
-  assert(
-    restartModified,
-    "modify must recover and replace broker protective orders after process restart",
-  );
-  assert(
-    restartDeleted.includes(201) && restartDeleted.includes(202),
-    "restart modify must cancel both broker-side protective orders",
-  );
+  assert(!result, "modify must block when exact current protection identity is missing");
+  assert(cancellations === 0, "modify must not cancel protection when prior operation identity is missing");
+  assert(placements === 0, "modify must not place a replacement against an unresolved prior protection state");
+}
 
-  const idempotent = new BinanceExecutor({
+async function verifyReplaceThenCancelExactPriorPair() {
+  const executor = new BinanceExecutor({
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
   } as any);
+  const symbol = "BTCUSDT";
+  const priorOperationKey = "prior-open-protection-operation";
+  const nextOperationKey = "next-move-protection-operation";
+  const orders = new Map<string, any>();
+  const deleted: number[] = [];
+  let replacementVerified = false;
+
+  const add = (
+    operationKey: string,
+    kind: "SL" | "TP",
+    algoId: number,
+    triggerPrice: number,
+    status = "NEW",
+  ) => {
+    const clientAlgoId = (executor as any).makeProtectionClientOrderId(operationKey, kind);
+    const order = {
+      symbol,
+      algoId,
+      clientAlgoId,
+      algoType: "CONDITIONAL",
+      algoStatus: status,
+      side: "SELL",
+      orderType: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+      triggerPrice: String(triggerPrice),
+      closePosition: true,
+    };
+    orders.set(clientAlgoId, order);
+    return order;
+  };
+
+  const oldSl = add(priorOperationKey, "SL", 101, 90);
+  const oldTp = add(priorOperationKey, "TP", 102, 110);
+  const unrelated = {
+    symbol,
+    algoId: 199,
+    clientAlgoId: "manual-algo-id",
+    algoType: "CONDITIONAL",
+    algoStatus: "NEW",
+    side: "SELL",
+    orderType: "STOP_MARKET",
+    triggerPrice: "80",
+    closePosition: true,
+  };
+  orders.set(unrelated.clientAlgoId, unrelated);
+
+  (executor as any).getPosition = async () => ({
+    positionAmt: 1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  (executor as any).signedGet = async (path: string, params: any) => {
+    if (path === "/fapi/v1/algoOrder") {
+      const found = orders.get(String(params?.clientAlgoId ?? ""));
+      if (found) return { ...found };
+      const missing: any = new Error("Algo order not found");
+      missing.response = { data: { code: -2013 } };
+      throw missing;
+    }
+    if (path === "/fapi/v1/openAlgoOrders") {
+      return [...orders.values()].filter(order => order.algoStatus === "NEW");
+    }
+    throw new Error("Unexpected endpoint " + path);
+  };
+  (executor as any).signedDelete = async (path: string, params: any) => {
+    assert(replacementVerified, "replacement protection must be verified before old protection cancellation");
+    assert(path === "/fapi/v1/algoOrder", "conditional protection cancellation must use the Algo endpoint");
+    const algoId = Number(params?.algoId);
+    assert([101, 102].includes(algoId), "only the prior operation's Algo IDs may be canceled");
+    deleted.push(algoId);
+    const entry = [...orders.entries()].find(([, order]) => Number(order.algoId) === algoId);
+    if (!entry) throw new Error("Exact old Algo order was not found");
+    orders.set(entry[0], { ...entry[1], algoStatus: "CANCELED" });
+    return { algoId, clientAlgoId: entry[0] };
+  };
+  (executor as any).placeSLTP = async (
+    signal: any,
+    quantity: number,
+    _ticket: number,
+    _spec: any,
+    operationKey: string,
+  ) => {
+    assert(operationKey === nextOperationKey, "replacement pair must be keyed to the new MOVE_SL_TP operation");
+    assert(quantity === 1 && signal.sl === 91 && signal.tp === 111, "replacement protection must use the verified position and requested targets");
+    add(nextOperationKey, "SL", 103, 91);
+    add(nextOperationKey, "TP", 104, 111);
+    replacementVerified = true;
+  };
+
+  const result = await executor.modifyPosition(
+    7,
+    symbol,
+    "BUY",
+    91,
+    111,
+    nextOperationKey,
+    priorOperationKey,
+  );
+  assert(result, "modification should succeed after replacement and old-pair cancellation");
+  assert(deleted.length === 2 && deleted.includes(101) && deleted.includes(102), "both and only the prior operation's protection orders must be canceled");
+  const active = await executor.getOpenAlgoOrders(symbol);
+  assert(active.some((order: any) => Number(order.orderId) === 103), "new SL must remain open");
+  assert(active.some((order: any) => Number(order.orderId) === 104), "new TP must remain open");
+  assert(active.some((order: any) => Number(order.orderId) === 199), "unrelated manual Algo order must remain untouched");
+  assert(oldSl.algoId === 101 && oldTp.algoId === 102, "test must retain distinct prior order identities");
+}
+
+async function verifyReplacementFailureKeepsOldProtection() {
+  const executor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  let cancellations = 0;
+  (executor as any).getPosition = async () => ({
+    positionAmt: 1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  (executor as any).placeSLTP = async () => {
+    throw new Error("simulated replacement placement failure");
+  };
+  (executor as any).signedDelete = async () => {
+    cancellations += 1;
+    return {};
+  };
+
+  const result = await executor.modifyPosition(
+    8,
+    "BTCUSDT",
+    "BUY",
+    90,
+    110,
+    "new-operation",
+    "old-operation",
+  );
+  assert(!result, "modification must fail when replacement protection cannot be created and verified");
+  assert(cancellations === 0, "old protection must not be canceled after replacement creation fails");
+}
+
+async function verifyExistingAlgoPairIsRecoveredWithoutDuplicateSubmission() {
+  const executor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  const operationKey = "existing-protection-operation";
+  const sl = makeAlgoOrder("BTCUSDT", operationKey, "SL", 301, 90);
+  const tp = makeAlgoOrder("BTCUSDT", operationKey, "TP", 302, 110);
   let duplicatePosts = 0;
-  (idempotent as any).signedGet = async (_path: string, params: any) => {
-    const id = String(params.origClientOrderId);
-    return id.includes("tasl_")
-      ? {
-          orderId: 301,
-          status: "NEW",
-          side: "SELL",
-          type: "STOP_MARKET",
-          closePosition: "true",
-          stopPrice: "90",
-          origQty: "1",
-        }
-      : {
-          orderId: 302,
-          status: "NEW",
-          side: "SELL",
-          type: "TAKE_PROFIT_MARKET",
-          closePosition: "true",
-          stopPrice: "110",
-          origQty: "1",
-        };
+
+  (executor as any).signedGet = async (path: string, params: any) => {
+    assert(path === "/fapi/v1/algoOrder", "protection recovery must query the Algo API endpoint");
+    const requested = String(params?.clientAlgoId ?? "");
+    if (requested === sl.clientAlgoId) return { ...sl };
+    if (requested === tp.clientAlgoId) return { ...tp };
+    const missing: any = new Error("Algo order not found");
+    missing.response = { data: { code: -2013 } };
+    throw missing;
   };
-  (idempotent as any).signedPost = async () => {
+  (executor as any).signedPost = async () => {
     duplicatePosts += 1;
-    throw new Error("duplicate SL/TP submission should never happen");
+    throw new Error("duplicate protection submission is forbidden");
   };
-  await (idempotent as any).placeSLTP(
+
+  await (executor as any).placeSLTP(
     {
       symbol: "BTCUSDT",
       side: "BUY",
@@ -157,19 +240,23 @@ async function main() {
     1,
     1000,
     { pip: 0.1, volumeStep: 0.001 } as any,
-    "existing-protection-operation",
-  );
-  assert(
-    duplicatePosts === 0,
-    "existing Binance SL/TP must be recovered instead of duplicated",
-  );
-  assert(
-    (idempotent as any).orderMap.get(1000)?.slOrderId === 301 &&
-      (idempotent as any).orderMap.get(1000)?.tpOrderId === 302,
-    "recovered Binance SL/TP identities must populate orderMap",
+    operationKey,
   );
 
-  console.log("Result: 10 passed, 0 failed");
+  assert(duplicatePosts === 0, "verified existing Algo protection must be recovered instead of duplicated");
+  assert(
+    (executor as any).orderMap.get(1000)?.slOrderId === 301 &&
+      (executor as any).orderMap.get(1000)?.tpOrderId === 302,
+    "recovered Algo IDs must populate orderMap",
+  );
+}
+
+async function main() {
+  await verifyMissingPriorIdentityBlocksModification();
+  await verifyReplaceThenCancelExactPriorPair();
+  await verifyReplacementFailureKeepsOldProtection();
+  await verifyExistingAlgoPairIsRecoveredWithoutDuplicateSubmission();
+  console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
 main().catch(error => {
