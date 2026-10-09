@@ -687,9 +687,10 @@ export class DatabaseManager {
 
       const parentChanged = this.db.prepare(`
         UPDATE execution_ledger
-        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        SET status='EXECUTED', tradeId=?, brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
         WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
       `).run(
+        tradeId,
         String(input.parentBrokerOrderId),
         JSON.stringify(parentResult),
         Date.now(),
@@ -701,9 +702,10 @@ export class DatabaseManager {
 
       const childChanged = this.db.prepare(`
         UPDATE execution_ledger
-        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        SET status='EXECUTED', tradeId=?, brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
         WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
       `).run(
+        tradeId,
         String(input.childBrokerOrderId),
         JSON.stringify(childResult),
         Date.now(),
