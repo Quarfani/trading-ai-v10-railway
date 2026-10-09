@@ -1204,7 +1204,7 @@ export class BinanceExecutor {
       orderSymbol !== String(symbol).trim().toUpperCase() ||
       !(algoId > 0) ||
       !Number.isFinite(algoId) ||
-      String(order.algoType ?? 'CONDITIONAL').toUpperCase() !== 'CONDITIONAL'
+      String(order.algoType ?? '').toUpperCase() !== 'CONDITIONAL'
     ) {
       throw new Error(`Binance exact algo-order identity mismatch for ${symbol}/${clientAlgoId}`);
     }
@@ -1227,7 +1227,7 @@ export class BinanceExecutor {
         !(normalized.orderId > 0) ||
         !Number.isFinite(normalized.orderId) ||
         !String(normalized.clientOrderId ?? '').trim() ||
-        String(order.algoType ?? 'CONDITIONAL').toUpperCase() !== 'CONDITIONAL'
+        String(order.algoType ?? '').toUpperCase() !== 'CONDITIONAL'
       ) {
         throw new Error(`Binance open algo-order identity is invalid for ${symbol}`);
       }
