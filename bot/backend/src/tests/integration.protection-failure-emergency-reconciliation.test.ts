@@ -250,6 +250,58 @@ async function verifySettlement(futures: boolean) {
   }
 }
 
+async function verifyPrecheckFailurePersistsIntent() {
+  const db = new DatabaseManager(':memory:');
+  await db.initialize();
+  const config = makeConfig(true);
+  const executor = new BinanceExecutor(config, db);
+  const parentOperationKey = 'phase2-precheck-failure-open';
+  const childOperationKey = 'PROTECTION_FAIL:' + parentOperationKey;
+  const signal = {
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    price: 100,
+    sl: 90,
+    tp: 120,
+    confidence: 0.8,
+    timestamp: Date.now(),
+    source: 'phase2-precheck-failure',
+  };
+  let brokerPosts = 0;
+  (executor as any).getPosition = async () => {
+    throw new Error('simulated position endpoint failure');
+  };
+  (executor as any).signedPost = async () => {
+    brokerPosts += 1;
+    return { orderId: 801, status: 'FILLED', executedQty: '1' };
+  };
+  let thrown = false;
+  try {
+    await (executor as any).emergencyCloseAfterProtectionFailure(
+      signal,
+      1,
+      parentOperationKey,
+      executor.clientOrderIdForOperationKey(parentOperationKey),
+      { orderId: 800, entryPrice: 100, executedQty: 1 },
+      'simulated protection failure',
+    );
+  } catch {
+    thrown = true;
+  }
+  try {
+    const child = db.getExecutionByOperationKey(childOperationKey);
+    assert(thrown, 'failed broker position precheck must stop the emergency order flow');
+    assert(child !== null, 'emergency intent must be durable even if the precheck fails');
+    assert(child.status === 'UNKNOWN', 'precheck failure must leave an unresolved emergency child');
+    assert(brokerPosts === 0, 'no emergency market order may be sent without verified position state');
+    const request = JSON.parse(child.requestJson);
+    assert(request.submissionState === 'PRECHECK_NOT_STARTED', 'ledger must document that the broker close order was never armed');
+    assert(request.positionBeforeAmount === null, 'failed precheck must not invent a position snapshot');
+  } finally {
+    db.raw().close();
+  }
+}
+
 async function verifyUnresolvedCloseStaysBlocked() {
   const f = await makeFixture(true, false);
   try {
@@ -285,6 +337,7 @@ async function verifyAtomicRollback() {
 }
 
 async function main() {
+  await verifyPrecheckFailurePersistsIntent();
   await verifyExactFillRecovery();
   await verifySettlement(false);
   await verifySettlement(true);
