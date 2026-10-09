@@ -163,6 +163,7 @@ async function verifyExactFillRecovery() {
     searchedFuturesClientId = clientOrderId;
     return {
       orderId: 701,
+      symbol: 'BTCUSDT',
       clientOrderId: expectedFuturesClientId,
       status: 'FILLED',
       executedQty: '1',
@@ -190,6 +191,7 @@ async function verifyExactFillRecovery() {
     searchedSpotClientId = clientOrderId;
     return {
       orderId: 702,
+      symbol: 'BTCUSDT',
       clientOrderId: expectedSpotClientId,
       status: 'FILLED',
       executedQty: '1',
@@ -209,6 +211,7 @@ async function verifyExactFillRecovery() {
 
   (spotExec as any).findOrderByClientId = async () => ({
     orderId: 703,
+    symbol: 'BTCUSDT',
     clientOrderId: expectedSpotClientId,
     status: 'PARTIALLY_FILLED',
     executedQty: '0.4',
