@@ -775,7 +775,7 @@ export class StartupReconciler {
     exec: BinanceExecutor,
   ): Promise<void> {
     const rows = this.db.raw().prepare(`
-      SELECT executionId, operationKey, symbol, volume, requestJson, status, createdAt
+      SELECT executionId, operationKey, symbol, volume, requestJson, resultJson, brokerOrderId, status, createdAt
       FROM execution_ledger
       WHERE status IN ('PENDING', 'UNKNOWN')
         AND action='PROTECTION_FAIL_CLOSE'
@@ -786,6 +786,8 @@ export class StartupReconciler {
       symbol?: string | null;
       volume?: number | null;
       requestJson?: string | null;
+      resultJson?: string | null;
+      brokerOrderId?: string | null;
       status: string;
       createdAt: number;
     }>;
@@ -909,6 +911,7 @@ export class StartupReconciler {
         if (
           entryFill.clientOrderId !== expectedParentClientId ||
           closeFill.clientOrderId !== expectedEmergencyClientId ||
+          (row.brokerOrderId != null && String(row.brokerOrderId) !== String(closeFill.orderId)) ||
           Math.abs(entryFill.executedQty - quantity) > Math.max(1e-8, quantity * 0.0001) ||
           Math.abs(closeFill.executedQty - quantity) > Math.max(1e-8, quantity * 0.0001) ||
           !(entryFill.avgPrice > 0) ||
@@ -959,6 +962,7 @@ export class StartupReconciler {
           if (
             !recoveredPnl ||
             recoveredPnl.status !== 'FILLED' ||
+            Number(recoveredPnl.orderId) !== closeFill.orderId ||
             Math.abs(recoveredPnl.executedQty - quantity) > Math.max(1e-8, quantity * 0.0001) ||
             recoveredPnl.realizedProfit == null ||
             !Number.isFinite(recoveredPnl.realizedProfit) ||
