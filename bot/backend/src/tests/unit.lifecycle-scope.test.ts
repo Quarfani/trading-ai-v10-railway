@@ -102,8 +102,62 @@ async function main() {
   );
   assert(brokerSuffix.allowed, "broker suffix should normalize to the canonical symbol");
 
+  store.save({
+    strategyId: "scope-testnet",
+    name: "TREND_TESTNET",
+    version: "1.0.0",
+    enabled: true,
+    lifecycle: "TESTNET",
+    scope: {
+      assetClasses: ["CRYPTO"],
+      symbols: ["BTCUSDT"],
+      timeframes: ["H1"],
+      regimes: ["TRENDING"],
+      sessions: [],
+    },
+    requiredData: ["OHLCV"],
+    parametersVersion: "p1",
+    riskProfile: {
+      baseRiskFraction: 0.005,
+      minimumRiskReward: 1.5,
+      maximumDrawdown: 0.1,
+    },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  } as any);
+
+  const testnetAllowed = orchestrator.isExecutionLifecycleEligible(
+    "TREND_TESTNET",
+    "binance",
+    "BTCUSDT",
+    "H1",
+    "TRENDING",
+    "TESTNET",
+  );
+  assert(testnetAllowed.allowed, "a TESTNET strategy should be eligible for the explicit Testnet stage");
+
+  const testnetNotProduction = orchestrator.isExecutionLifecycleEligible(
+    "TREND_TESTNET",
+    "binance",
+    "BTCUSDT",
+    "H1",
+    "TRENDING",
+    "PRODUCTION",
+  );
+  assert(!testnetNotProduction.allowed, "a TESTNET strategy must not be eligible for the PRODUCTION stage");
+
+  const testnetDefaultRemainsProductionGate = orchestrator.isExecutionLifecycleEligible(
+    "TREND_TESTNET",
+    "binance",
+    "BTCUSDT",
+    "H1",
+    "TRENDING",
+  );
+  assert(!testnetDefaultRemainsProductionGate.allowed,
+    "non-paper callers without an explicit Testnet stage must retain the fail-closed production gate");
+
   clearBrokerContracts();
-  console.log("Result: 5 passed, 0 failed");
+  console.log("Result: 8 passed, 0 failed");
 }
 
 main().catch(error => {
