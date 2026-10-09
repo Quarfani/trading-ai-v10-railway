@@ -540,6 +540,219 @@ export class DatabaseManager {
     return null;
   }
 
+  settleProtectionFailureClose(input: {
+    parentExecutionId: string;
+    parentOperationKey: string;
+    parentBrokerOrderId: string | number;
+    parentResult: unknown;
+    childExecutionId: string;
+    childOperationKey: string;
+    childBrokerOrderId: string | number;
+    childResult: unknown;
+    exitProfitAccount: number;
+    trade: Trade & {
+      account?: string;
+      timeframe?: string;
+      commission?: number;
+      commissionCurrency?: string;
+      entryQuoteToAccount?: number;
+      exitQuoteToAccount?: number;
+      mlPredictionId?: string;
+    };
+  }): number | null {
+    const t = input.trade;
+    const entryFee = Number(t.commission ?? 0);
+    const entryRealized = Number(t.realizedProfit ?? 0);
+    const exitProfit = Number(input.exitProfitAccount);
+    const finalProfit = Number(t.profit);
+    const closedAt = Number(t.closedAt);
+    const openedAt = Number(t.openedAt);
+    const ticket = Number(t.ticket);
+    if (
+      !Number.isInteger(ticket) || ticket <= 0 ||
+      !t.symbol || !['BUY', 'SELL'].includes(t.side) ||
+      !(Number(t.volume) > 0) || !Number.isFinite(Number(t.volume)) ||
+      !(Number(t.entry) > 0) || !Number.isFinite(Number(t.entry)) ||
+      !Number.isFinite(Number(t.sl)) || !Number.isFinite(Number(t.tp)) ||
+      !(openedAt > 0) || !Number.isFinite(openedAt) ||
+      !(closedAt >= openedAt) || !Number.isFinite(closedAt) ||
+      !Number.isFinite(entryFee) || entryFee < 0 ||
+      !Number.isFinite(entryRealized) ||
+      !Number.isFinite(exitProfit) ||
+      !Number.isFinite(finalProfit) ||
+      Math.abs(finalProfit - (entryRealized + exitProfit)) > Math.max(1e-7, Math.abs(finalProfit) * 1e-9) ||
+      t.status !== 'closed'
+    ) {
+      throw new Error('Invalid emergency-close settlement payload; no database changes were committed');
+    }
+    if (
+      t.commissionCurrency &&
+      t.commissionCurrency.trim().toUpperCase() !==
+        String(t.account ? (t as any).accountCurrency ?? t.commissionCurrency : t.commissionCurrency).trim().toUpperCase()
+    ) {
+      throw new Error('Emergency-close entry commission must be stored in account currency');
+    }
+
+    const tx = this.db.transaction(() => {
+      const parent = this.db.prepare(
+        'SELECT executionId, operationKey, action, status, requestJson FROM execution_ledger WHERE executionId=? LIMIT 1',
+      ).get(input.parentExecutionId) as any;
+      const child = this.db.prepare(
+        'SELECT executionId, operationKey, action, status, requestJson FROM execution_ledger WHERE executionId=? LIMIT 1',
+      ).get(input.childExecutionId) as any;
+      if (
+        !parent ||
+        parent.executionId !== input.parentExecutionId ||
+        parent.operationKey !== input.parentOperationKey ||
+        parent.action !== 'OPEN' ||
+        !['PENDING', 'UNKNOWN'].includes(String(parent.status)) ||
+        !child ||
+        child.executionId !== input.childExecutionId ||
+        child.operationKey !== input.childOperationKey ||
+        child.action !== 'PROTECTION_FAIL_CLOSE' ||
+        !['PENDING', 'UNKNOWN'].includes(String(child.status))
+      ) {
+        return null;
+      }
+
+      let childRequest: any;
+      let parentRequest: any;
+      try {
+        childRequest = JSON.parse(String(child.requestJson ?? 'null'));
+        parentRequest = JSON.parse(String(parent.requestJson ?? 'null'));
+      } catch {
+        return null;
+      }
+      if (
+        !childRequest ||
+        String(childRequest.parentOperationKey ?? '') !== input.parentOperationKey ||
+        !parentRequest ||
+        String(parentRequest.signal?.symbol ?? '').toUpperCase() !== String(t.symbol).toUpperCase() ||
+        String(parentRequest.signal?.side ?? '').toUpperCase() !== String(t.side).toUpperCase()
+      ) {
+        return null;
+      }
+
+      const duplicate = this.db.prepare(
+        'SELECT id, status FROM trades WHERE ticket=? AND symbol=? LIMIT 1',
+      ).get(ticket, t.symbol) as { id: number; status: string } | undefined;
+      if (duplicate) return null;
+
+      const inserted = this.db.prepare(`
+        INSERT INTO trades
+          (ticket, symbol, timeframe, side, volume, entry, sl, tp,
+           status, openedAt, closedAt, profit, source, account, commission,
+           commissionCurrency, realizedProfit, exitReason, entryQuoteToAccount,
+           exitQuoteToAccount, mlPredictionId)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        ticket,
+        t.symbol,
+        t.timeframe ?? null,
+        t.side,
+        t.volume,
+        t.entry,
+        t.sl,
+        t.tp,
+        'closed',
+        openedAt,
+        closedAt,
+        finalProfit,
+        t.source ?? '',
+        t.account ?? 'default',
+        entryFee,
+        t.commissionCurrency ?? null,
+        entryRealized,
+        t.exitReason ?? 'PROTECTION_FAILURE',
+        t.entryQuoteToAccount ?? null,
+        t.exitQuoteToAccount ?? null,
+        t.mlPredictionId ?? null,
+      );
+      const tradeId = Number(inserted.lastInsertRowid);
+
+      const parentResult = {
+        ...(input.parentResult && typeof input.parentResult === 'object' && !Array.isArray(input.parentResult)
+          ? input.parentResult as Record<string, unknown>
+          : { evidence: input.parentResult }),
+        id: tradeId,
+        status: 'closed',
+        emergencyProtectionFailure: true,
+        netProfit: finalProfit,
+        childOperationKey: input.childOperationKey,
+      };
+      const childResult = {
+        ...(input.childResult && typeof input.childResult === 'object' && !Array.isArray(input.childResult)
+          ? input.childResult as Record<string, unknown>
+          : { evidence: input.childResult }),
+        tradeId,
+        parentExecutionId: input.parentExecutionId,
+        parentOperationKey: input.parentOperationKey,
+        exitProfitAccount: exitProfit,
+        netProfit: finalProfit,
+        atomicSettlement: true,
+      };
+
+      const parentChanged = this.db.prepare(`
+        UPDATE execution_ledger
+        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+      `).run(
+        String(input.parentBrokerOrderId),
+        JSON.stringify(parentResult),
+        Date.now(),
+        input.parentExecutionId,
+      ).changes;
+      if (parentChanged !== 1) {
+        throw new Error('Could not atomically resolve parent OPEN ledger for emergency close');
+      }
+
+      const childChanged = this.db.prepare(`
+        UPDATE execution_ledger
+        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+      `).run(
+        String(input.childBrokerOrderId),
+        JSON.stringify(childResult),
+        Date.now(),
+        input.childExecutionId,
+      ).changes;
+      if (childChanged !== 1) {
+        throw new Error('Could not atomically resolve emergency-close child ledger');
+      }
+
+      if (t.mlPredictionId && t.mlPredictionId.trim()) {
+        const actualLabel: -1 | 0 | 1 =
+          finalProfit > 0
+            ? (t.side === 'BUY' ? 1 : -1)
+            : finalProfit < 0
+              ? (t.side === 'BUY' ? -1 : 1)
+              : 0;
+        this.db.prepare(`
+          UPDATE model_decisions
+          SET outcomeLabel=?, outcomeProfit=?, outcomeRecordedAt=?
+          WHERE predictionId=?
+            AND outcomeRecordedAt IS NULL
+            AND predictedLabel IN (-1,0,1)
+        `).run(actualLabel, finalProfit, Date.now(), t.mlPredictionId.trim());
+      }
+
+      const day = new Date(closedAt).toISOString().slice(0, 10);
+      const win = finalProfit > 0 ? 1 : 0;
+      this.db.prepare(`
+        INSERT INTO daily_stats(day, trades, wins, losses, pnl)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(day) DO UPDATE SET
+          trades=daily_stats.trades + excluded.trades,
+          wins=daily_stats.wins + excluded.wins,
+          losses=daily_stats.losses + excluded.losses,
+          pnl=daily_stats.pnl + excluded.pnl
+      `).run(day, 1, win, 1 - win, finalProfit);
+
+      return tradeId;
+    });
+    return tx();
+  }
+
   resolveReconciledFullClose(
     tradeId: number,
     executionId: string,
