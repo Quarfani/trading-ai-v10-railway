@@ -1131,10 +1131,127 @@ export class StartupReconciler {
     }
   }
 
+  private async blockOrphanedBinanceOpenIntents(
+    exec: BinanceExecutor,
+  ): Promise<void> {
+    const rows = this.db.raw().prepare(`
+      SELECT executionId, operationKey, symbol, side, volume, requestJson, status, createdAt
+      FROM execution_ledger
+      WHERE status IN ('PENDING', 'UNKNOWN')
+        AND action='OPEN'
+      ORDER BY createdAt ASC, updatedAt ASC, executionId ASC
+    `).all() as Array<{
+      executionId: string;
+      operationKey: string;
+      symbol?: string | null;
+      side?: string | null;
+      volume?: number | null;
+      requestJson?: string | null;
+      status: string;
+      createdAt: number;
+    }>;
+
+    for (const row of rows) {
+      const operationKey = String(row.operationKey ?? '').trim();
+      const childOperationKey = `PROTECTION_FAIL:${operationKey}`;
+      const child = operationKey
+        ? this.db.getExecutionByOperationKey(childOperationKey)
+        : null;
+
+      // The emergency-child resolver above owns these records. If the child
+      // remains unresolved it already blocks startup; do not reinterpret it
+      // as a missing-child incident.
+      if (child && ['PENDING', 'UNKNOWN'].includes(String(child.status))) {
+        continue;
+      }
+
+      let request: any = null;
+      let requestError: string | null = null;
+      try {
+        request = JSON.parse(String(row.requestJson ?? 'null'));
+      } catch (error: any) {
+        requestError = String(error?.message ?? error);
+      }
+
+      const symbol = String(
+        row.symbol ?? request?.signal?.symbol ?? '',
+      ).trim().toUpperCase();
+      let exactOrder: any = null;
+      let lookupError: string | null = null;
+      let clientOrderId = '';
+      if (operationKey && symbol) {
+        try {
+          clientOrderId = exec.clientOrderIdForOperationKey(operationKey);
+          exactOrder = await exec.recoverOperationOrderForReconciliation(
+            symbol,
+            operationKey,
+          );
+        } catch (error: any) {
+          lookupError = String(error?.message ?? error).slice(0, 500);
+        }
+      } else {
+        lookupError = 'OPEN ledger is missing a valid operation key or symbol';
+      }
+
+      const brokerEvidence = exactOrder
+        ? {
+            found: true,
+            symbol: String(exactOrder.symbol ?? symbol).toUpperCase(),
+            clientOrderId: String(
+              exactOrder.clientOrderId ?? exactOrder.origClientOrderId ?? '',
+            ),
+            orderId: Number(exactOrder.orderId),
+            status: String(exactOrder.status ?? 'UNKNOWN').toUpperCase(),
+            origQty: Number.isFinite(Number(exactOrder.origQty))
+              ? Number(exactOrder.origQty)
+              : null,
+            executedQty: Number.isFinite(Number(exactOrder.executedQty))
+              ? Number(exactOrder.executedQty)
+              : null,
+            updateTime: Number.isFinite(Number(exactOrder.updateTime))
+              ? Number(exactOrder.updateTime)
+              : null,
+          }
+        : {
+            found: false,
+            clientOrderId: clientOrderId || null,
+            lookupError,
+          };
+
+      const reason =
+        `ORPHANED_BINANCE_OPEN operationKey=${operationKey || 'MISSING'} ` +
+        `executionId=${row.executionId} status=${row.status} childOperationKey=${childOperationKey}. ` +
+        `Exact broker lookup=${exactOrder ? 'found' : 'not-confirmed'}; ` +
+        `lookupError=${lookupError ?? 'none'}. The process may have stopped after entry submission/fill ` +
+        `but before protection and trade-ledger settlement completed. Startup is blocked: verify broker ` +
+        `exposure and operation-owned protection orders manually. Do not retry the entry or send a close ` +
+        `until the exact broker state is proven.`;
+
+      this.record(
+        'BLOCKED',
+        symbol || null,
+        {
+          incidentType: 'ORPHANED_BINANCE_OPEN',
+          executionId: row.executionId,
+          operationKey,
+          childOperationKey,
+          childStatus: child?.status ?? null,
+          requestError,
+          requestedSide: String(row.side ?? request?.signal?.side ?? ''),
+          requestedVolume: Number(row.volume ?? request?.volume ?? 0),
+          brokerEvidence,
+        },
+        reason,
+      );
+      throw new Error(`[Reconciliation] ${reason}`);
+    }
+  }
+
   private async reconcileBinance(): Promise<unknown> {
     const exec = new BinanceExecutor(this.config);
     if (!(await exec.ping())) throw new Error('Binance connectivity/position-mode validation failed');
     await this.resolveProtectionFailureEmergencyCloseLedgers(exec);
+    await this.blockOrphanedBinanceOpenIntents(exec);
 
     // Spot has no broker ticket/position identity. Startup therefore requires
     // exact operation-keyed OCO protection for every local open trade plus
