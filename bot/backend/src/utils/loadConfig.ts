@@ -48,6 +48,15 @@ function requireEnv(k: string, ctx: string): string {
   return v;
 }
 
+function isPlaceholderSecret(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    /^(replace|your|change|example)(?:[_\\-\\s]|$)/.test(normalized) ||
+    /placeholder/.test(normalized) ||
+    /<[^>]+>/.test(normalized)
+  );
+}
+
 function validateRange(
   name: string,
   v: number,
@@ -536,6 +545,9 @@ export function loadConfig(): SystemConfig {
       '[Config] DASHBOARD_PASSWORD must be set and at least 12 characters',
     );
   }
+  if (isPlaceholderSecret(dashPw)) {
+    throw new Error('[Config] DASHBOARD_PASSWORD must not be a placeholder; replace the example value');
+  }
 
   const sessionSecret = env(
     'SESSION_SECRET',
@@ -546,11 +558,17 @@ export function loadConfig(): SystemConfig {
       '[Config] SESSION_SECRET must be set and at least 32 characters',
     );
   }
+  if (isPlaceholderSecret(sessionSecret)) {
+    throw new Error('[Config] SESSION_SECRET must not be a placeholder; replace the example value');
+  }
 
   const operatorPassword = env(
     'OPERATOR_PASSWORD',
     '',
   );
+  if (operatorPassword && isPlaceholderSecret(operatorPassword)) {
+    throw new Error('[Config] OPERATOR_PASSWORD must not be a placeholder; replace it or leave it empty in paper mode');
+  }
   if (mode !== 'paper') {
     if (operatorPassword.length < 12) {
       throw new Error(
