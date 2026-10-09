@@ -51,7 +51,7 @@ function requireEnv(k: string, ctx: string): string {
 function isPlaceholderSecret(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return (
-    /^(replace|your|change|example)(?:[_\\-\\s]|$)/.test(normalized) ||
+    /^(replace|your|change|example)(?:_|-|\s|$)/.test(normalized) ||
     /placeholder/.test(normalized) ||
     /<[^>]+>/.test(normalized)
   );
