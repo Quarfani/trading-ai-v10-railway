@@ -34,6 +34,89 @@ function signal(ts: number, symbol = "EURUSD"): Signal {
   };
 }
 
+async function verifyProtectionOperationKeySelection() {
+  const db = new DatabaseManager(":memory:");
+  await db.initialize();
+  const openOperationKey = "test-open-operation-key";
+  assert(db.createExecutionLedger({
+    executionId: "test-open-execution",
+    operationKey: openOperationKey,
+    action: "OPEN",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+    request: { timeframe: "H1", signal: signal(Date.now()), volume: 0.01 },
+  }), "isolated OPEN ledger must be created");
+  const tradeId = db.persistExecutedOpenTrade({
+    ticket: 8801,
+    symbol: "EURUSD",
+    timeframe: "H1",
+    side: "BUY",
+    volume: 0.01,
+    entry: 1.1,
+    sl: 1.09,
+    tp: 1.12,
+    status: "open",
+    openedAt: Date.now(),
+    source: "protection-key-test",
+  } as any, "test-open-execution", 8801, {
+    ticket: 8801,
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+    entry: 1.1,
+    sl: 1.09,
+    tp: 1.12,
+    status: "open",
+  });
+  const gateway = new ExecutionGateway(
+    baseConfig("paper"),
+    db,
+    { getRate: async () => 1 } as any,
+  );
+
+  assert(
+    (gateway as any).getProtectionOperationKeyForTrade(tradeId) === openOperationKey,
+    "a trade without any successful SL/TP modification must use its OPEN protection identity",
+  );
+
+  assert(db.createExecutionLedger({
+    executionId: "test-move-execution",
+    operationKey: "test-move-operation-key",
+    action: "MOVE_SL_TP",
+    status: "PENDING",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId, newSl: 1.095, newTp: 1.125 },
+  }), "successful protection-modification ledger must be claimed");
+  assert(db.updateExecutionLedger("test-move-execution", {
+    status: "EXECUTED",
+    result: { ticket: 8801, newSl: 1.095, newTp: 1.125 },
+  }), "protection-modification ledger must settle");
+  assert(
+    (gateway as any).getProtectionOperationKeyForTrade(tradeId) === "test-move-operation-key",
+    "close protection identity must follow the latest successful MOVE_SL_TP operation",
+  );
+
+  assert(db.createExecutionLedger({
+    executionId: "test-move-unknown",
+    operationKey: "test-move-unknown-key",
+    action: "MOVE_SL_TP",
+    status: "UNKNOWN",
+    symbol: "EURUSD",
+    side: "BUY",
+    volume: 0.01,
+    request: { tradeId, newSl: 1.096, newTp: 1.126 },
+  }), "ambiguous protection modification must be persisted");
+  assert(
+    (gateway as any).getProtectionOperationKeyForTrade(tradeId) === undefined,
+    "an unresolved protection modification must block the full-close identity lookup",
+  );
+  db.raw().close();
+}
+
 async function main() {
   clearBrokerContracts();
   const db = new DatabaseManager(":memory:");
@@ -64,6 +147,8 @@ async function main() {
   const legacyOpenIdentity = db.getLatestExecutedOpenOperationForTrade(Number(first.trade.id));
   assert(legacyOpenIdentity?.operationKey === openIdentity.operationKey, "legacy OPEN ledger without tradeId index must recover identity from resultJson.id");
   db.raw().prepare("UPDATE execution_ledger SET tradeId=? WHERE executionId=?").run(Number(first.trade.id), openIdentity.executionId);
+
+  await verifyProtectionOperationKeySelection();
 
   // Live MT5 failures become UNKNOWN. A repeated call with the same key must
   // be blocked instead of sending the order a second time.
