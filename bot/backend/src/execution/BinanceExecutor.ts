@@ -91,39 +91,20 @@ export class BinanceExecutor {
       return;
     }
 
-    const before = await this.getPosition(signal.symbol);
-    if (!before) {
-      throw new Error('Emergency close position state unavailable for ' + signal.symbol);
-    }
-
-    const beforeSignedAmount = Number(before.positionAmt);
-    const beforeAmount = Math.abs(beforeSignedAmount);
-    const quantityTolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
-    if (
-      !Number.isFinite(beforeSignedAmount) ||
-      !(beforeAmount > 0) ||
-      (this.isFutures &&
-        ((signal.side === 'BUY' && beforeSignedAmount <= 0) ||
-         (signal.side === 'SELL' && beforeSignedAmount >= 0))) ||
-      beforeAmount + quantityTolerance < quantity
-    ) {
-      throw new Error(
-        'Emergency close quantity exceeds verified Binance inventory for ' +
-        signal.symbol + ': requested=' + quantity + ' available=' + beforeAmount,
-      );
-    }
-
+    // Persist the intent before even querying live position state. If the
+    // precheck fails, the parent OPEN still has a child incident to reconcile.
     const request = {
       schemaVersion: 1,
       purpose: 'PROTECTION_FAILURE_EMERGENCY_CLOSE',
+      submissionState: 'PRECHECK_NOT_STARTED',
       parentOperationKey,
       parentClientOrderId: entryClientOrderId ?? null,
       symbol: String(signal.symbol).toUpperCase(),
       entrySide: signal.side,
       closeSide,
       requestedQuantity: quantity,
-      positionBeforeAmount: beforeAmount,
-      positionBeforeSignedAmount: Number(before.positionAmt),
+      positionBeforeAmount: null as number | null,
+      positionBeforeSignedAmount: null as number | null,
       signal: { ...signal },
       entryEvidence: entryEvidence ? { ...entryEvidence } : null,
       failureReason: String(failureReason || 'protection failure').slice(0, 500),
@@ -144,6 +125,52 @@ export class BinanceExecutor {
     if (!claimed) {
       throw new Error(
         'Emergency close intent could not be claimed; no order was sent and reconciliation is required',
+      );
+    }
+
+    let beforeAmount = 0;
+    let beforeSignedAmount = 0;
+    try {
+      const before = await this.getPosition(signal.symbol);
+      if (!before) {
+        throw new Error('Emergency close position state unavailable for ' + signal.symbol);
+      }
+
+      beforeSignedAmount = Number(before.positionAmt);
+      beforeAmount = Math.abs(beforeSignedAmount);
+      const quantityTolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
+      if (
+        !Number.isFinite(beforeSignedAmount) ||
+        !(beforeAmount > 0) ||
+        (this.isFutures &&
+          ((signal.side === 'BUY' && beforeSignedAmount <= 0) ||
+           (signal.side === 'SELL' && beforeSignedAmount >= 0))) ||
+        beforeAmount + quantityTolerance < quantity
+      ) {
+        throw new Error(
+          'Emergency close quantity/direction exceeds verified Binance inventory for ' +
+          signal.symbol + ': requested=' + quantity + ' available=' + beforeAmount,
+        );
+      }
+
+      const armedRequest = {
+        ...request,
+        positionBeforeAmount: beforeAmount,
+        positionBeforeSignedAmount: beforeSignedAmount,
+        submissionState: 'SUBMISSION_ARMED',
+      };
+      if (!db.updateExecutionRequest(executionId, armedRequest)) {
+        throw new Error('Could not persist emergency-close position snapshot; no order was sent');
+      }
+    } catch (e: any) {
+      db.updateExecutionLedger(executionId, {
+        status: 'UNKNOWN',
+        error: ('Emergency close precheck failed before order submission: ' +
+          String(e?.message ?? e)).slice(0, 1000),
+      });
+      throw new Error(
+        'Emergency close precheck failed; no order was sent and startup/manual reconciliation is required: ' +
+        String(e?.message ?? e),
       );
     }
 
@@ -193,6 +220,7 @@ export class BinanceExecutor {
               ? Number(brokerResponse.executedQty)
               : null,
             positionBeforeAmount: beforeAmount,
+            positionBeforeSignedAmount: beforeSignedAmount,
             positionDeltaVerified: false,
             parentOperationKey,
           };
