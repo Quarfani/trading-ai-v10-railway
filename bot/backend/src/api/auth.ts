@@ -115,8 +115,15 @@ export function login(req: Request, res: Response) {
     b.count++;
 
     if (!loginAttempts.has(ip) && loginAttempts.size >= MAX_LOGIN_ATTEMPT_KEYS) {
-      const oldestIp = loginAttempts.keys().next().value;
-      if (oldestIp !== undefined) loginAttempts.delete(oldestIp);
+      // Expired keys can be reclaimed, but active throttles are never evicted
+      // to make room for a new identity.
+      for (const [key, value] of loginAttempts) {
+        if (now >= value.resetAt) loginAttempts.delete(key);
+      }
+      if (loginAttempts.size >= MAX_LOGIN_ATTEMPT_KEYS) {
+        res.setHeader('Retry-After', '60');
+        return res.status(429).json({ error: 'Login throttling capacity reached; try again later' });
+      }
     }
     loginAttempts.delete(ip);
     loginAttempts.set(ip, b);
