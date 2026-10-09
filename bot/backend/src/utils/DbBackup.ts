@@ -8,6 +8,7 @@ import path     from 'path';
 import crypto   from 'crypto';
 import https    from 'https';
 import { Logger } from './Logger';
+import { pipeline } from 'node:stream/promises';
 
 export interface S3SigV4Headers {
   authorization: string;
@@ -18,7 +19,7 @@ export interface S3SigV4Headers {
   scope: string;
 }
 
-function hmacSha256(key: crypto.BinaryLike, value: string): Buffer {
+function hmacSha256(key: string | Buffer, value: string): Buffer {
   return crypto.createHmac('sha256', key).update(value, 'utf8').digest();
 }
 
@@ -43,15 +44,15 @@ export function createS3SigV4Headers(
     throw new Error('S3 SigV4 signing time is invalid');
   }
 
-  const amzDate = now.toISOString().replace(/[:-]|\\.\\d{3}/g, '');
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
   const dateStamp = amzDate.slice(0, 8);
   const host = url.host.toLowerCase();
   const canonicalUri = url.pathname || '/';
   const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
   const canonicalHeaders =
-    `host:${host}\\n` +
-    `x-amz-content-sha256:${payloadHash}\\n` +
-    `x-amz-date:${amzDate}\\n`;
+    `host:${host}\n` +
+    `x-amz-content-sha256:${payloadHash}\n` +
+    `x-amz-date:${amzDate}\n`;
   const canonicalRequest = [
     'PUT',
     canonicalUri,
@@ -59,14 +60,14 @@ export function createS3SigV4Headers(
     canonicalHeaders,
     signedHeaders,
     payloadHash,
-  ].join('\\n');
+  ].join('\n');
   const scope = `${dateStamp}/${region}/s3/aws4_request`;
   const stringToSign = [
     'AWS4-HMAC-SHA256',
     amzDate,
     scope,
     crypto.createHash('sha256').update(canonicalRequest, 'utf8').digest('hex'),
-  ].join('\\n');
+  ].join('\n');
 
   const dateKey = hmacSha256(Buffer.from(`AWS4${secretKey}`, 'utf8'), dateStamp);
   const regionKey = hmacSha256(dateKey, region);
@@ -142,7 +143,8 @@ export class DbBackup {
       let uploadPath = localDst;
       if (this.encKey) {
         uploadPath = localDst + '.enc';
-        this.encryptFile(localDst, uploadPath);
+        await this.encryptFile(localDst, uploadPath);
+        fs.rmSync(localDst, { force: true });
         this.logger.info(`Encrypted backup: ${uploadPath}`);
       }
 
@@ -160,14 +162,29 @@ export class DbBackup {
     }
   }
 
-  private encryptFile(src: string, dst: string) {
+  private async encryptFile(src: string, dst: string): Promise<void> {
     const key = crypto.scryptSync(this.encKey!, 'trading-ai-backup-v2', 32);
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    const input = fs.readFileSync(src);
-    const ciphertext = Buffer.concat([cipher.update(input), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    fs.writeFileSync(dst, Buffer.concat([Buffer.from('TAIB2'), iv, tag, ciphertext]));
+    const encryptedTemp = `${dst}.cipher-${crypto.randomBytes(8).toString('hex')}`;
+
+    try {
+      await pipeline(
+        fs.createReadStream(src),
+        cipher,
+        fs.createWriteStream(encryptedTemp, { flags: 'wx' }),
+      );
+
+      const tag = cipher.getAuthTag();
+      const output = fs.createWriteStream(dst, { flags: 'wx' });
+      output.write(Buffer.concat([Buffer.from('TAIB2'), iv, tag]));
+      await pipeline(fs.createReadStream(encryptedTemp), output);
+    } catch (error) {
+      fs.rmSync(dst, { force: true });
+      throw error;
+    } finally {
+      fs.rmSync(encryptedTemp, { force: true });
+    }
   }
 
   private async uploadToS3(localFile: string, remoteKey: string): Promise<void> {
@@ -185,7 +202,7 @@ export class DbBackup {
       encodeURIComponent(value).replace(/[!'()*]/g, char =>
         `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
       );
-    const basePath = url.pathname.replace(/\\/+$/, '');
+    const basePath = url.pathname.replace(/\/+$/, '');
     const objectPath = `${basePath}/${encodeSegment(cfg.bucket)}/${remoteKey.split('/').map(encodeSegment).join('/')}`;
     url.pathname = objectPath;
 
@@ -243,8 +260,8 @@ export class DbBackup {
 
     for (const file of files) {
       const snapshotKey = file
-        .replace(/\\.enc$/, '')
-        .replace(/\\.sqlite$/, '');
+        .replace(/\.enc$/, '')
+        .replace(/\.sqlite$/, '');
       const group = groups.get(snapshotKey) ?? [];
       group.push(file);
       groups.set(snapshotKey, group);
