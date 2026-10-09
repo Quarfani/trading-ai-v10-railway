@@ -1,25 +1,46 @@
-## Current operating model (v10)
+# Deployment Guide
 
-GitHub = source control/CI; Railway = paper runtime; Windows 4GB PC = development/dashboard/MEGA archive agent; MEGA = backup/archive only. Heavy ML/WFO/Monte Carlo stays off the 4GB PC.
+## Operating model
 
-# Deployment
+- GitHub: version control and configured CI checks.
+- Railway: single-replica Paper runtime for the initial deployment.
+- Windows development machine: local dashboard/development and optional backup-agent host.
+- MEGA/S3-compatible storage: archive and disaster-recovery targets only; never treat the archive as live trading state.
 
-## Local
+## Local validation
 
-Backend requires Node.js >=20. Python pipeline uses the dependencies in `pipeline/requirements.txt`.
+Use Node.js >=20 and npm >=9. Run clean installs from the committed lockfiles:
+
+```powershell
+Set-Location bot/backend
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+Then validate the frontend:
+
+```powershell
+Set-Location bot/frontend
+npm ci
+npm run build
+```
+
+Python dependencies are declared in `pipeline/requirements.txt`. Run only the pipeline/research commands you need; model training and walk-forward optimization are disabled by default in lightweight profiles.
+
+## CI
+
+`.github/workflows/ci.yml` is configured for pushes to `main` and pull requests targeting `main`. Its jobs install dependencies from lockfiles, run the Python suite, backend typecheck/build/tests, frontend build, and production dependency audits. This candidate branch has not yet been validated by a completed CI run; configured checks must not be presented as passing checks.
 
 ## Docker
 
-Backend and frontend both include committed npm lockfiles, and the backend Dockerfile uses `npm ci` when the lockfile is present. This keeps image dependency installation deterministic. CI already typechecks, builds, audits production dependencies, and runs the backend/Python/frontend validation suites.
+Build the backend and frontend images from their respective directories. A clean Docker build is still required before declaring a cloud release. Verify that the image contains no `.env` files, that the service honors the platform-injected port, and that SQLite state is stored on a persistent volume.
 
-## Cloud / Back4App
+## Railway Paper
 
-Use the repository Dockerfile as the service build artifact and configure secrets as server-side environment variables. Use a reachable database/storage design rather than assuming local container filesystem durability. The cloud profile should remain `MODE=paper` until the full gate is satisfied.
+Use `RAILWAY_PAPER_DEPLOYMENT.md` and `bot/backend/.env.railway-paper.example`. Keep `MODE=paper`, Binance market data, one replica, and a persistent volume at `/app/data`. Do not add real broker order-entry credentials. Configure `/ready` as the healthcheck and observe the deployment reach a successful terminal state before calling it deployed.
 
-## Health
+## Testnet / Production
 
-- `/health`
-- `/ready`
-- `/liveness`
-
-Trading must not be enabled before readiness and startup reconciliation have passed.
+See `TESTNET.md` and `PRODUCTION.md`. Live-money trading is blocked until reproducible builds, full test suites, broker accounting/reconciliation, protective-order failure handling, Testnet and Paper soak evidence, backup restore tests, cost/slippage calibration, independent strategy evaluation, security review, and rollback/DR drills pass.
