@@ -33,6 +33,7 @@ import { HistoricalRateSeries, resolveHistoricalQuoteToAccount, validateHistoric
 import { evaluateMarketDataQuality } from '../market/DataQualityGate';
 import { Logger }                      from '../utils/Logger';
 import { normalizedConfidenceThreshold, passesMinimumSignalConfidence } from '../risk/SignalConfidenceGate';
+import { randomUUID } from 'node:crypto';
 import * as path                       from 'path';
 import * as fs                         from 'fs';
 import * as os                         from 'os';
@@ -148,7 +149,7 @@ export class Backtester {
     marketOverride?: MarketDefinition,
     costProfileOverride?: CostProfile,
   ): Promise<BacktestResult> {
-    const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}.db`);
+    const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}_${randomUUID()}.db`);
     const db    = new DatabaseManager(tmpDb);
     try {
       await db.initialize();
