@@ -57,7 +57,9 @@ export function getCostProfile(
     holdingRatePerDay: readEnvNumber(envPrefix + 'HOLDING_RATE_DAY'),
   };
 
-  const hasAnyExplicit = Object.values(explicit).some(value => value != null);
+  const explicitValues = Object.values(explicit);
+  const hasAnyExplicit = explicitValues.some(value => value != null);
+  const hasCompleteExplicitProfile = explicitValues.every(value => value != null);
   if (options.requireExplicit) {
     const missing = Object.entries(explicit)
       .filter(([, value]) => value == null)
@@ -99,6 +101,6 @@ export function getCostProfile(
     spreadPricePerSide: spreadPips * 0.6 * priceIncrement,
     marketImpactBpsPerSide: explicit.impactBps ?? 0,
     holdingRatePerDay: explicit.holdingRatePerDay ?? 0,
-    source: options.requireExplicit || hasAnyExplicit ? 'ENV_EXPLICIT' : 'REPOSITORY_DEFAULT',
+    source: hasCompleteExplicitProfile ? 'ENV_EXPLICIT' : hasAnyExplicit ? 'MIXED' : 'REPOSITORY_DEFAULT',
   };
 }
