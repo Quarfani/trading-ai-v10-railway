@@ -234,6 +234,8 @@ async function verifySettlement(futures: boolean) {
     const child = f.db.getExecutionByOperationKey(f.childOperationKey);
     assert(parent.status === 'EXECUTED', 'parent OPEN ledger must be settled atomically');
     assert(child.status === 'EXECUTED', 'emergency-close child ledger must be settled atomically');
+    assert(Number(parent.tradeId) === Number(trades[0].id), 'parent OPEN ledger must index the closed trade id');
+    assert(Number(child.tradeId) === Number(trades[0].id), 'emergency-close child ledger must index the closed trade id');
     assert(JSON.parse(parent.resultJson).id === trades[0].id, 'parent OPEN result must carry the closed trade identity');
     assert(JSON.parse(child.resultJson).tradeId === trades[0].id, 'emergency-close result must carry the closed trade identity');
 
