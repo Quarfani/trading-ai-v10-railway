@@ -5,8 +5,11 @@ import { TelegramBot } from '../notifications/TelegramBot';
 import { SystemConfig } from '../types/trading.types';
 import { BinanceExecutor } from '../execution/BinanceExecutor';
 
+let passedAssertions = 0;
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+  passedAssertions += 1;
 }
 
 function config(): SystemConfig {
@@ -986,7 +989,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getOpenOrders = originalSpotOpenOrders;
   }
 
-  console.log('Result: 38 passed, 0 failed');
+  console.log(`Result: ${passedAssertions} passed, 0 failed`);
 }
 
 main().catch(error => {
