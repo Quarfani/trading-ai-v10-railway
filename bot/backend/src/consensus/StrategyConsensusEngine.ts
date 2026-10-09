@@ -325,7 +325,7 @@ export class StrategyConsensusEngine {
       this.logger.info(
         `[CONSENSUS_BLOCK] ${ctx.symbol} ` +
         `reason=INSUFFICIENT_WEIGHT total=${total_weight.toFixed(6)} ` +
-        `minimum=${this.cfg.minimum_total_weight.toFixed(6)} ` +
+        `minimum=${minimumRequiredWeight.toFixed(6)} configuredMinimum=${this.cfg.minimum_total_weight.toFixed(6)} ` +
         `buy=${total_buy_weight.toFixed(6)} sell=${total_sell_weight.toFixed(6)} ` +
         `votes=${votes.length}`,
       );
