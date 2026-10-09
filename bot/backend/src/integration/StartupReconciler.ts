@@ -1425,7 +1425,64 @@ export class StartupReconciler {
             : `Binance Futures trade id=${t.id} lacks an authoritative OPEN operation key.`,
         );
       }
-      const operationKey = String(openOperation.operationKey);
+      let latestMoveOperation: {
+        operationKey: string;
+        request: any;
+      } | null = null;
+      const moveRows = this.db.raw().prepare(`
+        SELECT operationKey, requestJson, tradeId
+        FROM execution_ledger
+        WHERE action='MOVE_SL_TP'
+          AND status='EXECUTED'
+          AND (tradeId=? OR tradeId IS NULL)
+        ORDER BY updatedAt DESC, executionId DESC
+        LIMIT 100
+      `).all(t.id) as Array<{
+        operationKey: string;
+        requestJson?: string | null;
+        tradeId?: number | null;
+      }>;
+      for (const row of moveRows) {
+        try {
+          const moveRequest = JSON.parse(String(row.requestJson ?? 'null'));
+          if (
+            Number(row.tradeId ?? moveRequest?.tradeId) === Number(t.id) &&
+            Number(moveRequest?.tradeId) === Number(t.id)
+          ) {
+            latestMoveOperation = {
+              operationKey: String(row.operationKey),
+              request: moveRequest,
+            };
+            break;
+          }
+        } catch {
+          // A malformed modification request cannot be used as protection identity.
+        }
+      }
+
+      const operationKey = latestMoveOperation?.operationKey ??
+        String(openOperation.operationKey);
+      const expectedSl = latestMoveOperation
+        ? Number(latestMoveOperation.request.newSl)
+        : Number(t.sl);
+      const expectedTp = latestMoveOperation
+        ? Number(latestMoveOperation.request.newTp)
+        : Number(t.tp);
+      const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+      if (
+        !(expectedSl > 0) ||
+        !(expectedTp > 0) ||
+        !Number.isFinite(expectedSl) ||
+        !Number.isFinite(expectedTp) ||
+        (latestMoveOperation &&
+          (Math.abs(Number(t.sl) - expectedSl) > tolerance(expectedSl) ||
+           Math.abs(Number(t.tp) - expectedTp) > tolerance(expectedTp)))
+      ) {
+        throw new Error(
+          `Binance Futures trade id=${t.id} has inconsistent persisted protection targets; manual reconciliation is required.`,
+        );
+      }
+
       const recoveredProtection = await exec.recoverProtectionByOperation(
         t.symbol,
         operationKey,
@@ -1435,7 +1492,6 @@ export class StartupReconciler {
         openOrders.map((order: any) => [Number(order.orderId), order]),
       );
       const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
-      const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
       const slId = Number(recoveredProtection.sl?.orderId ?? 0);
       const tpId = Number(recoveredProtection.tp?.orderId ?? 0);
       const sl = byId.get(slId) as any;
@@ -1459,11 +1515,11 @@ export class StartupReconciler {
       const slOk =
         exactProtectionValid &&
         Number.isFinite(Number(sl.stopPrice)) &&
-        Math.abs(Number(sl.stopPrice) - t.sl) <= tolerance(t.sl);
+        Math.abs(Number(sl.stopPrice) - expectedSl) <= tolerance(expectedSl);
       const tpOk =
         exactProtectionValid &&
         Number.isFinite(Number(tp.stopPrice)) &&
-        Math.abs(Number(tp.stopPrice) - t.tp) <= tolerance(t.tp);
+        Math.abs(Number(tp.stopPrice) - expectedTp) <= tolerance(expectedTp);
       if (!slOk || !tpOk) {
         throw new Error(
           `Binance Futures operation-keyed Algo protection missing/mismatched for trade id=${t.id} symbol=${t.symbol}`,
