@@ -2547,74 +2547,214 @@ export class BinanceExecutor {
     newTp: number,
     protectionKey?: string,
     currentProtectionKey?: string,
+    persistState?: (state: Record<string, unknown>) => Promise<boolean>,
   ): Promise<boolean> {
     if (!this.isFutures) return false;
     if (!protectionKey || !protectionKey.trim()) return false;
     if (!currentProtectionKey || !currentProtectionKey.trim()) {
-      this.logger.warn(
-        `modifyPosition blocked: exact current protection identity is unavailable for ${symbol}`,
-      );
+      this.logger.warn(`modifyPosition blocked: exact current protection identity is unavailable for ${symbol}`);
       return false;
     }
     if (protectionKey === currentProtectionKey) {
-      this.logger.warn(
-        `modifyPosition blocked: current and replacement protection identities are identical for ${symbol}`,
-      );
+      this.logger.warn(`modifyPosition blocked: current and replacement protection identities are identical for ${symbol}`);
+      return false;
+    }
+    if (!persistState) {
+      this.logger.warn(`modifyPosition blocked: durable recovery callback is required for ${symbol}`);
       return false;
     }
 
-    try {
-      const position = await this.getPosition(symbol);
-      if (!position) {
-        throw new Error(`Binance position state unavailable while modifying ${symbol}`);
+    let position: any = null;
+    let quantity = 0;
+    let oldSl = 0;
+    let oldTp = 0;
+    let snapshot: Record<string, unknown> | null = null;
+    let destructiveStarted = false;
+    const save = async (phase: string, extra: Record<string, unknown> = {}) => {
+      const next = { ...(snapshot ?? {}), phase, updatedAt: Date.now(), ...extra };
+      if (!(await persistState(next))) {
+        throw new Error(`Could not durably persist Binance protection phase ${phase} for ${symbol}`);
       }
+      snapshot = next;
+    };
+    const signalFor = (sl: number, tp: number): Signal => ({
+      symbol, side, price: Number(position?.entryPrice ?? 0),
+      confidence: 1, sl, tp, source: 'modify', reason: 'modify', timestamp: Date.now(),
+    } as Signal);
+    const pairIsActive = async (key: string, slPrice: number, tpPrice: number) => {
+      const pair = await this.recoverProtectionByOperation(symbol, key);
+      const ids = this.validateFuturesProtectionPair(
+        signalFor(slPrice, tpPrice), quantity,
+        this.formatPrice(slPrice, getSymbolSpec(symbol).pip),
+        this.formatPrice(tpPrice, getSymbolSpec(symbol).pip),
+        pair,
+      );
+      return ids ? { pair, ids } : null;
+    };
+    const hasOpenPair = async (key: string) => {
+      const ids = new Set([
+        this.makeProtectionClientOrderId(key, 'SL'),
+        this.makeProtectionClientOrderId(key, 'TP'),
+      ]);
+      const orders = await this.getOpenAlgoOrders(symbol);
+      return orders.some((order: any) => ids.has(String(order.clientOrderId ?? '')));
+    };
+
+    try {
+      position = await this.getPosition(symbol);
+      if (!position) throw new Error(`Binance position state unavailable while modifying ${symbol}`);
       if (
         !Number.isFinite(Number(position.positionAmt)) ||
-        position.positionAmt === 0 ||
-        (side === 'BUY' && position.positionAmt <= 0) ||
-        (side === 'SELL' && position.positionAmt >= 0)
+        Number(position.positionAmt) === 0 ||
+        (side === 'BUY' && Number(position.positionAmt) <= 0) ||
+        (side === 'SELL' && Number(position.positionAmt) >= 0)
       ) {
-        throw new Error(
-          `Binance position side does not match the trade being modified for ${symbol}`,
-        );
+        throw new Error(`Binance position side does not match the trade being modified for ${symbol}`);
+      }
+      quantity = Math.abs(Number(position.positionAmt));
+      if (!(quantity > 0) || !Number.isFinite(quantity)) {
+        throw new Error(`Binance position quantity is invalid for ${symbol}`);
       }
 
-      const quantity = Math.abs(Number(position.positionAmt));
-      if (!(quantity > 0) || !Number.isFinite(quantity)) return false;
-
-      const sig = {
+      const oldPair = await this.recoverProtectionByOperation(symbol, currentProtectionKey);
+      const oldSl = Number(oldPair?.sl?.stopPrice);
+      const oldTp = Number(oldPair?.tp?.stopPrice);
+      if (!(oldSl > 0) || !(oldTp > 0) || !Number.isFinite(oldSl) || !Number.isFinite(oldTp)) {
+        throw new Error(`Current operation-owned SL/TP prices could not be recovered for ${symbol}`);
+      }
+      const oldValid = this.validateFuturesProtectionPair(
+        signalFor(oldSl, oldTp), quantity,
+        this.formatPrice(oldSl, getSymbolSpec(symbol).pip),
+        this.formatPrice(oldTp, getSymbolSpec(symbol).pip),
+        oldPair,
+      );
+      if (!oldValid) {
+        throw new Error(`Current operation-owned SL/TP pair is not a verified active pair for ${symbol}`);
+      }
+      const restoreKey = `PROTECTION_RESTORE:${protectionKey}:${currentProtectionKey}`;
+      snapshot = {
+        schemaVersion: 1,
         symbol,
-        side,
-        price: Number(position.entryPrice ?? 0),
-        confidence: 1,
-        sl: newSl,
-        tp: newTp,
-        source: 'modify',
-        reason: 'modify',
-        timestamp: Date.now(),
-      } as Signal;
+        ticket,
+        positionSide: side,
+        quantity,
+        oldProtectionKey: currentProtectionKey,
+        newProtectionKey: protectionKey,
+        restoreProtectionKey: restoreKey,
+        oldProtection: {
+          slClientAlgoId: this.makeProtectionClientOrderId(currentProtectionKey, 'SL'),
+          tpClientAlgoId: this.makeProtectionClientOrderId(currentProtectionKey, 'TP'),
+          slAlgoId: oldValid.slOrderId,
+          tpAlgoId: oldValid.tpOrderId,
+          slPrice: oldSl,
+          tpPrice: oldTp,
+        },
+        requestedProtection: {
+          slPrice: newSl,
+          tpPrice: newTp,
+          slClientAlgoId: this.makeProtectionClientOrderId(protectionKey, 'SL'),
+          tpClientAlgoId: this.makeProtectionClientOrderId(protectionKey, 'TP'),
+        },
+        activeProtectionKey: currentProtectionKey,
+      };
+      await save('PREPARED');
 
-      // Keep the old, verified protection active until both replacement Algo
-      // orders have been created and recovered with their exact identities.
+      await save('OLD_CANCEL_REQUESTED');
+      destructiveStarted = true;
+      await this.cancelProtectionByOperationKey(symbol, side, currentProtectionKey);
+      await save('OLD_CANCEL_VERIFIED');
+
+      await save('NEW_PAIR_REQUESTED');
       await this.placeSLTP(
-        sig,
+        signalFor(newSl, newTp),
         quantity,
         ticket,
         getSymbolSpec(symbol),
         protectionKey,
       );
-
-      // Only cancel the former operation's SL/TP. Never sweep other orders
-      // on the symbol merely because they share a side or closePosition flag.
-      await this.cancelProtectionByOperationKey(
-        symbol,
-        side,
-        currentProtectionKey,
-      );
+      const newPair = await pairIsActive(protectionKey, newSl, newTp);
+      if (!newPair) throw new Error(`Replacement SL/TP pair did not pass exact broker verification for ${symbol}`);
+      await save('NEW_PAIR_VERIFIED', {
+        activeProtectionKey: protectionKey,
+        newSlAlgoId: newPair.ids.slOrderId,
+        newTpAlgoId: newPair.ids.tpOrderId,
+      });
       return true;
     } catch (e: any) {
-      this.logger.warn(`modifyPosition failed: ${e?.message ?? e}`);
-      return false;
+      const failure = String(e?.message ?? e);
+      this.logger.warn(`modifyPosition failed: ${failure}`);
+      if (!snapshot || !persistState || !quantity || !(oldSl === 0 || oldSl > 0)) return false;
+
+      try {
+        if (!destructiveStarted) {
+          await save('OLD_PAIR_RETAINED', {
+            activeProtectionKey: currentProtectionKey,
+            recoveryError: failure,
+          });
+          return false;
+        }
+
+        // Remove only replacement orders owned by this operation before deciding whether restoration is needed.
+        await this.cancelProtectionByOperationKey(symbol, side, protectionKey);
+        if (await hasOpenPair(protectionKey)) {
+          throw new Error(`Replacement Algo orders remain open for ${symbol}`);
+        }
+
+        const oldStillActive = await pairIsActive(
+          currentProtectionKey,
+          Number((snapshot.oldProtection as any)?.slPrice),
+          Number((snapshot.oldProtection as any)?.tpPrice),
+        );
+        if (oldStillActive) {
+          await save('OLD_PAIR_RETAINED', {
+            activeProtectionKey: currentProtectionKey,
+            recoveryError: failure,
+          });
+          return false;
+        }
+
+        // A partial cancellation can leave one old leg active; cancel only that exact old pair before restoring both legs.
+        await this.cancelProtectionByOperationKey(symbol, side, currentProtectionKey);
+        if (await hasOpenPair(currentProtectionKey)) {
+          throw new Error(`Prior protection could not be fully retired before restoration for ${symbol}`);
+        }
+
+        const savedOld = snapshot.oldProtection as { slPrice: number; tpPrice: number };
+        await save('RESTORE_REQUESTED', { activeProtectionKey: null, recoveryError: failure });
+        await this.placeSLTP(
+          signalFor(Number(savedOld.slPrice), Number(savedOld.tpPrice)),
+          quantity,
+          ticket,
+          getSymbolSpec(symbol),
+          String(snapshot.restoreProtectionKey),
+        );
+        const restored = await pairIsActive(
+          String(snapshot.restoreProtectionKey),
+          Number(savedOld.slPrice),
+          Number(savedOld.tpPrice),
+        );
+        if (!restored) throw new Error(`Restored SL/TP pair could not be verified for ${symbol}`);
+        await save('RESTORE_VERIFIED', {
+          activeProtectionKey: String(snapshot.restoreProtectionKey),
+          restoreSlAlgoId: restored.ids.slOrderId,
+          restoreTpAlgoId: restored.ids.tpOrderId,
+          recoveryError: failure,
+        });
+        return false;
+      } catch (recoveryError: any) {
+        const message = String(recoveryError?.message ?? recoveryError);
+        this.logger.error(`CRITICAL: Binance protection recovery blocked for ${symbol}: ${message}`);
+        try {
+          await save('BLOCKED_UNKNOWN', {
+            activeProtectionKey: null,
+            recoveryError: failure,
+            lastRecoveryError: message,
+          });
+        } catch (persistError: any) {
+          this.logger.error(`CRITICAL: could not persist blocked protection state for ${symbol}: ${String(persistError?.message ?? persistError)}`);
+        }
+        return false;
+      }
     }
   }
 
