@@ -1,6 +1,9 @@
 const { BinanceExecutor } = require("../execution/BinanceExecutor");
 
+let assertions = 0;
+
 function assert(condition: unknown, message: string): asserts condition {
+  assertions += 1;
   if (!condition) throw new Error(message);
 }
 
@@ -257,7 +260,21 @@ async function main() {
     "a new Binance close operation must not infer success from an already-flat position",
   );
 
-  console.log("Result: 11 passed, 0 failed");
+  const positionExecutor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  (positionExecutor as any).signedGet = async () => [
+    { symbol: "BTCUSDT", positionAmt: "0", entryPrice: "0", unRealizedProfit: "0" },
+    { symbol: "ETHUSDT", positionAmt: "0.25", entryPrice: "2500", unRealizedProfit: "10" },
+  ];
+  const openPositions = await positionExecutor.getAllPositions();
+  assert(openPositions.length === 1, "flat Futures rows must not appear as open positions during startup reconciliation");
+  assert(
+    openPositions[0].symbol === "ETHUSDT" && openPositions[0].positionAmt === 0.25,
+    "non-zero Futures positions must be preserved for reconciliation",
+  );
+
+  console.log(`Result: ${assertions} passed, 0 failed`);
 
 }
 
