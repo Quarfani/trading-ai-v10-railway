@@ -334,8 +334,52 @@ async function verifyExistingAlgoPairIsRecoveredWithoutDuplicateSubmission() {
   );
 }
 
+async function verifyCancelIntentPersistenceFailurePreventsCancellation() {
+  const executor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  const symbol = "BTCUSDT";
+  const priorKey = "durable-prior-operation";
+  const nextKey = "durable-next-operation";
+  const raw = (kind: "SL" | "TP", algoId: number, triggerPrice: number) => {
+    const clientAlgoId = (executor as any).makeProtectionClientOrderId(priorKey, kind);
+    return {
+      symbol, algoId, orderId: algoId, clientAlgoId,
+      clientOrderId: clientAlgoId, origClientOrderId: clientAlgoId,
+      algoType: "CONDITIONAL", algoStatus: "NEW", status: "NEW",
+      side: "SELL",
+      orderType: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+      type: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+      triggerPrice: String(triggerPrice), stopPrice: String(triggerPrice),
+      closePosition: true,
+    };
+  };
+  const prior = { sl: raw("SL", 901, 90), tp: raw("TP", 902, 110) };
+  let cancellations = 0;
+  let placements = 0;
+  const phases: string[] = [];
+  (executor as any).getPosition = async () => ({ positionAmt: 1, entryPrice: 100 });
+  (executor as any).recoverProtectionByOperation = async (_symbol: string, key: string) =>
+    key === priorKey ? prior : { sl: null, tp: null };
+  (executor as any).cancelProtectionByOperationKey = async () => { cancellations += 1; };
+  (executor as any).placeSLTP = async () => { placements += 1; };
+  const result = await executor.modifyPosition(
+    9, symbol, "BUY", 91, 111, nextKey, priorKey,
+    async state => {
+      phases.push(String(state.phase));
+      if (state.phase === "OLD_CANCEL_REQUESTED") return false;
+      return true;
+    },
+  );
+  assert(!result, "modification must fail if durable cancel intent cannot be persisted");
+  assert(cancellations === 0, "no broker cancellation may occur before cancel intent is durably recorded");
+  assert(placements === 0, "replacement placement must not occur after cancel-intent persistence failure");
+  assert(phases.includes("PREPARED") && phases.includes("OLD_CANCEL_REQUESTED"), "the persistence failure must be exercised at the intended phase");
+}
+
 async function main() {
   await verifyMissingPriorIdentityBlocksModification();
+  await verifyCancelIntentPersistenceFailurePreventsCancellation();
   await verifyReplaceThenCancelExactPriorPair();
   await verifyReplacementFailureKeepsOldProtection();
   await verifyExistingAlgoPairIsRecoveredWithoutDuplicateSubmission();
