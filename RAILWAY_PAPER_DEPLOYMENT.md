@@ -51,9 +51,11 @@ DASHBOARD_PASSWORD
 SESSION_SECRET
 ```
 
-with unique random secrets.
+with unique random secrets. Use at least 12 characters for the dashboard password and at least 32 characters for the session secret.
 
-Do not add Binance API keys to this profile.
+If you use the Windows PowerShell MEGA backup agent, generate a separate random `BACKUP_API_TOKEN` with at least 32 characters and set the same secret in both Railway service variables and `pipeline/.env` on Windows. The Windows script intentionally refuses to run if that token is missing. Do not commit either copy.
+
+Do not add Binance API keys to this paper profile.
 
 ## Persistent volume
 
@@ -121,6 +123,19 @@ unresolved execution ledger entries
 
 Keep the 4GB PC lightweight by running the React dashboard locally and pointing it at the Railway backend. Copy `bot/frontend/.env.railway-backend.example` to `bot/frontend/.env.local` and set `VITE_API_URL` to the public Railway backend URL. Keep `CORS_ORIGIN=http://localhost:3000` in the Railway service for this setup.
 
-## What this deployment does NOT prove
+## Validation status and release gates
 
-A healthy Railway deployment does not prove profitability, economic edge, or production readiness. The project still requires the outstanding economic-cost engine, exposure/leverage enforcement, broker E2E, OOS/WFO/Monte Carlo/stress evidence, and recovery drills described in `FINAL_READINESS_REPORT.md`.
+A healthy Railway deployment proves only process and readiness health; it does not prove profitability, economic edge, or production readiness.
+
+At the current development checkpoint, full TypeScript checks, the complete backend test suite, frontend build, Docker build, and broker end-to-end tests have **not** been executed from a complete local checkout. The repository has cost-model and exposure/leverage controls in source, but they still need executable regression evidence and configuration-specific review.
+
+Before calling the project complete for a paper release:
+
+- Run backend `npm run typecheck`, backend `npm test`, and backend `npm run build` from a clean lockfile install.
+- Run frontend `npm ci` and `npm run build`.
+- Build both Docker images and verify runtime health/readiness, persistent-volume behavior, restart recovery, and backup restore.
+- Exercise the public market-data path and dashboard login in a separate local/staging environment.
+- Verify any S3 backup profile against the actual target service, including encryption, SigV4 authorization, restore integrity, and retention. The local test suite is not a substitute for this.
+- Keep broker execution disabled until controlled Binance Futures Testnet tests cover entry, partial/full close, SL/TP placement/replacement, unknown outcomes, and restart reconciliation.
+
+Production/live-money release remains a separate gate requiring paper soak, Testnet evidence, OOS/WFO/Monte Carlo/stress testing, cost/slippage calibration, recovery drills, and review of broker accounting. A clean build or healthy service is not proof of profitability.
