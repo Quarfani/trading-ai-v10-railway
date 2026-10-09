@@ -1,6 +1,7 @@
 import { BinanceExecutor } from '../execution/BinanceExecutor';
 import { DatabaseManager } from '../database/DatabaseManager';
 import { StartupReconciler } from '../integration/StartupReconciler';
+import { MarketScanner } from '../core/MarketScanner';
 
 let assertions = 0;
 
@@ -599,6 +600,106 @@ async function verifyModifyRecoveryCancelsPreviousProtection() {
   await runCase(true);
 }
 
+async function verifyEmergencyCloseUsesHistoricalEntryAndExitFx() {
+  const f = await makeFixture(true);
+  const originalFetchCandles = MarketScanner.prototype.fetchCandles;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const dayStart = Math.floor(Date.now() / dayMs) * dayMs;
+  const entryTimestamp = dayStart - (2 * dayMs) + (6 * 60 * 60 * 1000);
+  const exitTimestamp = dayStart - dayMs + (6 * 60 * 60 * 1000);
+  const eurUsdtCandles = [
+    { time: dayStart - 4 * dayMs, open: 0.99, high: 1.01, low: 0.98, close: 1.00, volume: 1 },
+    { time: dayStart - 3 * dayMs, open: 1.01, high: 1.03, low: 1.00, close: 1.02, volume: 1 },
+    { time: dayStart - 2 * dayMs, open: 1.03, high: 1.05, low: 1.02, close: 1.04, volume: 1 },
+    { time: dayStart - dayMs, open: 1.07, high: 1.09, low: 1.06, close: 1.08, volume: 1 },
+  ];
+  (MarketScanner.prototype as any).fetchCandles = async (
+    symbol: string,
+    timeframe: string,
+    count: number,
+  ) => {
+    if (timeframe === 'D1' && symbol === 'EURUSDT') return eurUsdtCandles.slice(-count);
+    return [];
+  };
+
+  try {
+    f.config.accountCurrency = 'EUR';
+    const entryClientId = f.executor.clientOrderIdForOperationKey(f.parentOperationKey);
+    const closeClientId = f.executor.clientOrderIdForOperationKey(f.childOperationKey);
+    const entryFill = {
+      orderId: f.entryOrderId,
+      clientOrderId: entryClientId,
+      status: 'FILLED',
+      executedQty: 1,
+      avgPrice: 100,
+      commission: 0.1,
+      commissionCurrency: 'USDT',
+      grossQuote: 100,
+      feeQuote: 0.1,
+      quoteCurrency: 'USDT',
+      brokerTimestamp: entryTimestamp,
+    };
+    const closeFill = {
+      orderId: f.closeOrderId,
+      clientOrderId: closeClientId,
+      status: 'FILLED',
+      executedQty: 1,
+      avgPrice: 110,
+      commission: 0.11,
+      commissionCurrency: 'USDT',
+      grossQuote: 110,
+      feeQuote: 0.11,
+      quoteCurrency: 'USDT',
+      brokerTimestamp: exitTimestamp,
+    };
+
+    (f.executor as any).recoverOperationFillDetails = async (
+      _symbol: string,
+      operationKey: string,
+    ) => {
+      if (operationKey === f.parentOperationKey) return entryFill;
+      if (operationKey === f.childOperationKey) return closeFill;
+      return null;
+    };
+    (f.executor as any).recoverOrderByClientId = async (
+      _symbol: string,
+      clientOrderId: string,
+    ) => {
+      if (clientOrderId !== closeClientId) return null;
+      return {
+        orderId: f.closeOrderId,
+        status: 'FILLED',
+        executedQty: 1,
+        avgPrice: 110,
+        realizedProfit: 9.89,
+        realizedProfitCurrency: 'USDT',
+      };
+    };
+
+    await (f.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(f.executor);
+
+    const parent = f.db.getExecutionByOperationKey(f.parentOperationKey);
+    const child = f.db.getExecutionByOperationKey(f.childOperationKey);
+    assert(parent.status === 'EXECUTED' && child.status === 'EXECUTED', 'historical FX evidence should allow the emergency-close ledger pair to settle');
+    const trade = f.db.raw().prepare(
+      "SELECT entryQuoteToAccount, exitQuoteToAccount, commission, profit FROM trades WHERE status='closed'",
+    ).get() as any;
+    assert(trade != null, 'historical FX emergency settlement must insert a closed trade');
+    assert(Math.abs(Number(trade.entryQuoteToAccount) - (1 / 1.02)) < 1e-8, 'entry fee must use the last known conversion at the entry fill timestamp');
+    assert(Math.abs(Number(trade.exitQuoteToAccount) - (1 / 1.04)) < 1e-8, 'exit PnL must use the last known conversion at the exit fill timestamp');
+    assert(Math.abs(Number(trade.commission) - (0.1 / 1.02)) < 1e-8, 'entry commission must be converted with the entry-time rate');
+    const expectedNet = (9.89 / 1.04) - (0.1 / 1.02);
+    assert(Math.abs(Number(trade.profit) - expectedNet) < 1e-8, 'final emergency PnL must use separate historical entry and exit conversion rates');
+    const childResult = JSON.parse(String(child.resultJson));
+    assert(Math.abs(Number(childResult.entryConversionRate) - (1 / 1.02)) < 1e-8, 'child ledger must persist entry-time FX evidence');
+    assert(Math.abs(Number(childResult.exitConversionRate) - (1 / 1.04)) < 1e-8, 'child ledger must persist exit-time FX evidence');
+    assert(f.db.getRecentTrades(10).length === 1, 'historical FX settlement must not duplicate the closed trade');
+  } finally {
+    MarketScanner.prototype.fetchCandles = originalFetchCandles;
+    f.db.raw().close();
+  }
+}
+
 async function main() {
   await verifyPrecheckFailurePersistsIntent();
   await verifyOrphanedOpenIncidentFailsClosed();
@@ -609,6 +710,7 @@ async function main() {
   await verifyUnresolvedCloseStaysBlocked();
   await verifyAtomicRollback();
   await verifyModifyRecoveryCancelsPreviousProtection();
+  await verifyEmergencyCloseUsesHistoricalEntryAndExitFx();
   console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
