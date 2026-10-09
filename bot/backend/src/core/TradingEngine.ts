@@ -1243,6 +1243,13 @@ export class TradingEngine extends EventEmitter {
     }
 
     // ── Strategy lifecycle gate ─────────────────────────────────────────
+    const requiredLifecycle: 'PAPER' | 'TESTNET' | 'PRODUCTION' =
+      this.config.mode === 'paper'
+        ? 'PAPER'
+        : this.config.mode === 'binance' && this.config.binance.env === 'testnet'
+          ? 'TESTNET'
+          : 'PRODUCTION';
+
     const lifecycleCheck =
       this.consensus.isExecutionLifecycleEligible(
         adjustedSignal.source,
@@ -1250,6 +1257,7 @@ export class TradingEngine extends EventEmitter {
         adjustedSignal.symbol,
         tf,
         regime.regime,
+        requiredLifecycle,
       );
 
     if (!lifecycleCheck.allowed) {
