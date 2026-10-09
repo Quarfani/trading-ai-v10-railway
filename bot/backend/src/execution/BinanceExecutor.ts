@@ -2432,7 +2432,7 @@ export class BinanceExecutor {
       .filter((id: number) => Number.isFinite(id) && id > 0);
   }
 
-  private async cancelFuturesProtectionPairByOperation(
+  async cancelProtectionByOperationKey(
     symbol: string,
     entrySide: 'BUY' | 'SELL',
     operationKey: string,
@@ -2602,7 +2602,7 @@ export class BinanceExecutor {
 
       // Only cancel the former operation's SL/TP. Never sweep other orders
       // on the symbol merely because they share a side or closePosition flag.
-      await this.cancelFuturesProtectionPairByOperation(
+      await this.cancelProtectionByOperationKey(
         symbol,
         side,
         currentProtectionKey,
