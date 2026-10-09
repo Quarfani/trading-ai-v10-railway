@@ -7,6 +7,84 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+async function verifyProtectionCleanupFailureBlocksMarketClose() {
+  let ledger: any = null;
+  let positionReads = 0;
+  let brokerPosts = 0;
+  const db = {
+    getExecutionByOperationKey(operationKey: string) {
+      return ledger?.operationKey === operationKey ? { ...ledger } : null;
+    },
+    createExecutionLedger(entry: any) {
+      if (ledger) return false;
+      ledger = {
+        ...entry,
+        requestJson: JSON.stringify(entry.request ?? null),
+        resultJson: null,
+        brokerOrderId: null,
+        error: null,
+      };
+      return true;
+    },
+    updateExecutionRequest(executionId: string, request: any) {
+      if (!ledger || ledger.executionId !== executionId || !["PENDING", "UNKNOWN"].includes(ledger.status)) return false;
+      ledger.requestJson = JSON.stringify(request);
+      return true;
+    },
+    updateExecutionLedger(executionId: string, patch: any) {
+      if (!ledger || ledger.executionId !== executionId || !["PENDING", "UNKNOWN"].includes(ledger.status)) return false;
+      ledger = {
+        ...ledger,
+        ...patch,
+        resultJson: patch.result === undefined ? ledger.resultJson : JSON.stringify(patch.result),
+      };
+      return true;
+    },
+  };
+  const executor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any, db as any);
+  (executor as any).cancelProtectionForEmergencyClose = async () => {
+    throw new Error("simulated ambiguous protection cancellation");
+  };
+  (executor as any).getPosition = async () => {
+    positionReads += 1;
+    return { positionAmt: 1, entryPrice: 100, unrealizedProfit: 0 };
+  };
+  (executor as any).signedPost = async () => {
+    brokerPosts += 1;
+    throw new Error("emergency market close must not be sent");
+  };
+
+  let threw = false;
+  try {
+    await (executor as any).emergencyCloseAfterProtectionFailure({
+      symbol: "BTCUSDT",
+      side: "BUY",
+      price: 100,
+      sl: 90,
+      tp: 120,
+      confidence: 0.8,
+      timestamp: 123456,
+      source: "unit-cleanup-failure",
+    }, 1, "open-cleanup-failure", "entry-cleanup-failure", {
+      orderId: 940,
+      entryPrice: 100,
+      executedQty: 1,
+    }, "simulated protection failure");
+  } catch {
+    threw = true;
+  }
+
+  assert(threw, "ambiguous protection cleanup must stop emergency-close processing");
+  assert(ledger?.status === "UNKNOWN", "cleanup failure must leave the emergency child unresolved");
+  const request = JSON.parse(String(ledger?.requestJson ?? "null"));
+  assert(request.protectionCleanupState === "FAILED_OR_AMBIGUOUS", "cleanup failure must be durably recorded");
+  assert(request.submissionState === "PRECHECK_NOT_STARTED", "cleanup failure must prove that market submission was never armed");
+  assert(positionReads === 0, "position precheck must not continue before owned protection cleanup is verified");
+  assert(brokerPosts === 0, "no market close may be sent while protection cancellation is ambiguous");
+}
+
 async function verifyFuturesProtectionCleanupIsOperationScoped() {
   async function runCase(withUnrelatedOrder: boolean) {
     const executor = new BinanceExecutor({
@@ -345,6 +423,7 @@ async function main() {
   assert(positionReads === 3, "recovery must query and validate the post-close inventory again");
   assert(cleanupCalls === 1, "a replay of an existing emergency intent must not restart the protection/close flow");
 
+  await verifyProtectionCleanupFailureBlocksMarketClose();
   await verifyFuturesProtectionCleanupIsOperationScoped();
   await verifySpotOcoCleanupIsOperationScoped();
 
