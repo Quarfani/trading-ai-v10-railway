@@ -125,6 +125,10 @@ async function main() {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   } as any);
+  orchestrator.registry.register({
+    name: "TREND_TESTNET",
+    generate_signal: () => ({ signal: "NONE" } as any),
+  } as any);
 
   const testnetAllowed = orchestrator.isExecutionLifecycleEligible(
     "TREND_TESTNET",
