@@ -414,7 +414,6 @@ export class BinanceExecutor {
     const expectedSignedAfter = this.isFutures
       ? beforeSignedAmount - (signal.side === 'BUY' ? executedQty : -executedQty)
       : beforeSignedAmount - executedQty;
-    const expectedRemaining = Math.abs(expectedSignedAfter);
     if (
       !Number.isFinite(beforeSignedAmount) ||
       Math.abs(Math.abs(beforeSignedAmount) - beforeAmount) > tolerance ||
