@@ -386,11 +386,13 @@ export class BinanceExecutor {
       entryEvidence: entryEvidence ? { ...entryEvidence } : null,
       verifiedAt: Date.now(),
     };
+    // Broker order/position evidence is durable, but trade PnL and the
+    // parent OPEN ledger must be reconciled atomically before this child is terminal.
     const changed = db.updateExecutionLedger(executionId, {
-      status: 'EXECUTED',
+      status: 'UNKNOWN',
       brokerOrderId: orderId,
       result,
-      error: null,
+      error: 'Broker close and position delta verified; authoritative PnL and parent OPEN settlement remain pending reconciliation',
     });
     if (!changed) {
       throw new Error('Broker close was verified but emergency ledger settlement failed');
