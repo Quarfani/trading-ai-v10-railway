@@ -293,6 +293,19 @@ export class BinanceExecutor {
       throw new Error('Existing emergency close identity conflicts with this open operation; manual reconciliation is required');
     }
 
+    if (
+      request.protectionCleanupState !==
+      'VERIFIED_NO_OPERATION_OWNED_ORDERS_ACTIVE'
+    ) {
+      db.updateExecutionLedger(String(existing.executionId), {
+        status: 'UNKNOWN',
+        error: 'Existing emergency close has no durable protection-cleanup proof; automatic recovery is blocked',
+      });
+      throw new Error(
+        'Existing emergency close lacks durable protection-cleanup proof; manual reconciliation is required and no automatic settlement is allowed',
+      );
+    }
+
     if (existing.status === 'EXECUTED') {
       let result: any;
       try {
