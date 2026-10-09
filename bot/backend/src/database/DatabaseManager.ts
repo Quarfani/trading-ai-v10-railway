@@ -585,14 +585,6 @@ export class DatabaseManager {
     ) {
       throw new Error('Invalid emergency-close settlement payload; no database changes were committed');
     }
-    if (
-      t.commissionCurrency &&
-      t.commissionCurrency.trim().toUpperCase() !==
-        String(t.account ? (t as any).accountCurrency ?? t.commissionCurrency : t.commissionCurrency).trim().toUpperCase()
-    ) {
-      throw new Error('Emergency-close entry commission must be stored in account currency');
-    }
-
     const tx = this.db.transaction(() => {
       const parent = this.db.prepare(
         'SELECT executionId, operationKey, action, status, requestJson FROM execution_ledger WHERE executionId=? LIMIT 1',
