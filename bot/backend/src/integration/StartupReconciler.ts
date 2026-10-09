@@ -570,7 +570,196 @@ export class StartupReconciler {
         throw new Error(`Binance live position side differs from the trade during protection recovery for trade id=${tradeId}`);
       }
 
-      const phase = String(request?.phase ?? '');
+      let phase = String(request?.phase ?? '');
+      const transitionPhases = new Set([
+        'PREPARED',
+        'OLD_CANCEL_REQUESTED',
+        'OLD_CANCEL_VERIFIED',
+        'NEW_PAIR_REQUESTED',
+        'RESTORE_REQUESTED',
+        'BLOCKED_UNKNOWN',
+      ]);
+
+      if (transitionPhases.has(phase)) {
+        const oldProtectionKey = String(request?.oldProtectionKey ?? '').trim();
+        const newProtectionKey = String(request?.newProtectionKey ?? row.operationKey).trim();
+        const restoreProtectionKey = String(request?.restoreProtectionKey ?? '').trim();
+        const oldProtection = request?.oldProtection ?? {};
+        const oldSl = Number(oldProtection.slPrice);
+        const oldTp = Number(oldProtection.tpPrice);
+        const expectedQuantity = Number(request?.quantity ?? trade.volume);
+        if (
+          !oldProtectionKey || !newProtectionKey || !restoreProtectionKey ||
+          !(oldSl > 0) || !(oldTp > 0) ||
+          !Number.isFinite(oldSl) || !Number.isFinite(oldTp) ||
+          !(expectedQuantity > 0) || !Number.isFinite(expectedQuantity)
+        ) {
+          throw new Error(`Binance transitional protection state is incomplete for trade id=${tradeId}; startup remains blocked`);
+        }
+
+        const activePairIsValid = async (key: string, slPrice: number, tpPrice: number): Promise<boolean> => {
+          const recoveredPair = await exec.recoverProtectionByOperation(String(trade.symbol), key);
+          if (!recoveredPair?.sl || !recoveredPair?.tp) return false;
+          const orders = await exec.getOpenAlgoOrders(String(trade.symbol));
+          const slClientId = String(recoveredPair.sl.clientOrderId ?? '');
+          const tpClientId = String(recoveredPair.tp.clientOrderId ?? '');
+          const slOpen = orders.find((order: any) => slClientId !== '' && String(order.clientOrderId ?? '') === slClientId);
+          const tpOpen = orders.find((order: any) => tpClientId !== '' && String(order.clientOrderId ?? '') === tpClientId);
+          const closeSide = String(trade.side).toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
+          const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
+          return !!slOpen && !!tpOpen &&
+            String(recoveredPair.sl.status ?? '').toUpperCase() === 'NEW' &&
+            String(recoveredPair.tp.status ?? '').toUpperCase() === 'NEW' &&
+            String(slOpen.side ?? '').toUpperCase() === closeSide &&
+            String(tpOpen.side ?? '').toUpperCase() === closeSide &&
+            String(slOpen.type ?? '').toUpperCase() === 'STOP_MARKET' &&
+            String(tpOpen.type ?? '').toUpperCase() === 'TAKE_PROFIT_MARKET' &&
+            String(slOpen.closePosition).toLowerCase() === 'true' &&
+            String(tpOpen.closePosition).toLowerCase() === 'true' &&
+            Number.isFinite(Number(slOpen.stopPrice)) &&
+            Number.isFinite(Number(tpOpen.stopPrice)) &&
+            Math.abs(Number(slOpen.stopPrice) - slPrice) <= tolerance(slPrice) &&
+            Math.abs(Number(tpOpen.stopPrice) - tpPrice) <= tolerance(tpPrice);
+        };
+
+        const newSl = Number(request?.requestedProtection?.slPrice ?? request?.newSl);
+        const newTp = Number(request?.requestedProtection?.tpPrice ?? request?.newTp);
+        const newPairValid =
+          newSl > 0 && newTp > 0 &&
+          Number.isFinite(newSl) && Number.isFinite(newTp) &&
+          await activePairIsValid(newProtectionKey, newSl, newTp);
+
+        if (newPairValid) {
+          await exec.cancelProtectionByOperationKey(
+            String(trade.symbol),
+            String(trade.side).toUpperCase() as 'BUY' | 'SELL',
+            oldProtectionKey,
+          );
+          const updatedRequest = {
+            ...request,
+            phase: 'NEW_PAIR_VERIFIED',
+            activeProtectionKey: newProtectionKey,
+            updatedAt: Date.now(),
+          };
+          if (!this.db.updateExecutionRequest(String(row.executionId), updatedRequest)) {
+            throw new Error(`Could not persist recovered new Binance protection pair for trade id=${tradeId}`);
+          }
+          request = updatedRequest;
+          phase = 'NEW_PAIR_VERIFIED';
+        } else {
+          await exec.cancelProtectionByOperationKey(
+            String(trade.symbol),
+            String(trade.side).toUpperCase() as 'BUY' | 'SELL',
+            newProtectionKey,
+          );
+          const newIds = new Set([
+            String(request?.requestedProtection?.slClientAlgoId ?? ''),
+            String(request?.requestedProtection?.tpClientAlgoId ?? ''),
+          ].filter(Boolean));
+          if ((await exec.getOpenAlgoOrders(String(trade.symbol))).some((order: any) =>
+            newIds.has(String(order.clientOrderId ?? '')),
+          )) {
+            throw new Error(`Partial replacement protection remains open for trade id=${tradeId}; startup remains blocked`);
+          }
+
+          const oldPairValid = await activePairIsValid(oldProtectionKey, oldSl, oldTp);
+          if (oldPairValid) {
+            const retained = {
+              ...request,
+              phase: 'OLD_PAIR_RETAINED',
+              activeProtectionKey: oldProtectionKey,
+              updatedAt: Date.now(),
+            };
+            if (!this.db.updateExecutionRequest(String(row.executionId), retained)) {
+              throw new Error(`Could not persist retained Binance protection for trade id=${tradeId}`);
+            }
+            const failed = this.db.updateExecutionLedger(String(row.executionId), {
+              status: 'FAILED',
+              result: {
+                broker: 'binance',
+                startupReconciliation: true,
+                phase: 'OLD_PAIR_RETAINED',
+                activeProtectionKey: oldProtectionKey,
+                activeSl: oldSl,
+                activeTp: oldTp,
+              },
+              error: 'Requested SL/TP change was interrupted; the verified prior protection pair remains active',
+            });
+            if (!failed) throw new Error(`Could not settle interrupted Binance modification for trade id=${tradeId}`);
+            this.logger.warn(`[Binance] startup retained verified prior protection for trade id=${tradeId}`);
+            continue;
+          }
+
+          const restorePairAlreadyValid = await activePairIsValid(restoreProtectionKey, oldSl, oldTp);
+          if (!restorePairAlreadyValid) {
+            const restoreRequested = {
+              ...request,
+              phase: 'RESTORE_REQUESTED',
+              activeProtectionKey: null,
+              updatedAt: Date.now(),
+            };
+            if (!this.db.updateExecutionRequest(String(row.executionId), restoreRequested)) {
+              throw new Error(`Could not persist Binance protection restoration intent for trade id=${tradeId}`);
+            }
+            request = restoreRequested;
+            await exec.cancelProtectionByOperationKey(
+              String(trade.symbol),
+              String(trade.side).toUpperCase() as 'BUY' | 'SELL',
+              oldProtectionKey,
+            );
+            if ((await exec.getOpenAlgoOrders(String(trade.symbol))).some((order: any) => {
+              const oldIds = new Set([
+                String(oldProtection.slClientAlgoId ?? ''),
+                String(oldProtection.tpClientAlgoId ?? ''),
+              ].filter(Boolean));
+              return oldIds.has(String(order.clientOrderId ?? ''));
+            })) {
+              throw new Error(`Prior protection remains partially open for trade id=${tradeId}; startup remains blocked`);
+            }
+            const restored = await exec.restoreProtectionPairForReconciliation(
+              Number(trade.ticket),
+              String(trade.symbol),
+              String(trade.side).toUpperCase() as 'BUY' | 'SELL',
+              expectedQuantity,
+              restoreProtectionKey,
+              oldSl,
+              oldTp,
+            );
+            if (!restored) {
+              throw new Error(`Could not restore Binance protection after interrupted modification for trade id=${tradeId}`);
+            }
+          }
+
+          if (!(await activePairIsValid(restoreProtectionKey, oldSl, oldTp))) {
+            throw new Error(`Restored Binance protection could not be verified for trade id=${tradeId}; startup remains blocked`);
+          }
+          const restoredRequest = {
+            ...request,
+            phase: 'RESTORE_VERIFIED',
+            activeProtectionKey: restoreProtectionKey,
+            updatedAt: Date.now(),
+          };
+          if (!this.db.updateExecutionRequest(String(row.executionId), restoredRequest)) {
+            throw new Error(`Could not persist verified Binance protection restoration for trade id=${tradeId}`);
+          }
+          const failed = this.db.updateExecutionLedger(String(row.executionId), {
+            status: 'FAILED',
+            result: {
+              broker: 'binance',
+              startupReconciliation: true,
+              phase: 'RESTORE_VERIFIED',
+              activeProtectionKey: restoreProtectionKey,
+              activeSl: oldSl,
+              activeTp: oldTp,
+            },
+            error: 'Requested SL/TP change was interrupted; the verified prior targets were restored',
+          });
+          if (!failed) throw new Error(`Could not settle restored Binance protection for trade id=${tradeId}`);
+          this.logger.warn(`[Binance] startup restored prior protection for trade id=${tradeId}`);
+          continue;
+        }
+      }
+
       if (phase === 'RESTORE_VERIFIED' || phase === 'OLD_PAIR_RETAINED') {
         const activeKey = String(request?.activeProtectionKey ?? '').trim();
         const oldProtection = request?.oldProtection ?? {};
