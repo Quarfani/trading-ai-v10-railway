@@ -2617,8 +2617,8 @@ export class BinanceExecutor {
       }
 
       const oldPair = await this.recoverProtectionByOperation(symbol, currentProtectionKey);
-      const oldSl = Number(oldPair?.sl?.stopPrice);
-      const oldTp = Number(oldPair?.tp?.stopPrice);
+      oldSl = Number(oldPair?.sl?.stopPrice);
+      oldTp = Number(oldPair?.tp?.stopPrice);
       if (!(oldSl > 0) || !(oldTp > 0) || !Number.isFinite(oldSl) || !Number.isFinite(oldTp)) {
         throw new Error(`Current operation-owned SL/TP prices could not be recovered for ${symbol}`);
       }
@@ -2683,7 +2683,7 @@ export class BinanceExecutor {
     } catch (e: any) {
       const failure = String(e?.message ?? e);
       this.logger.warn(`modifyPosition failed: ${failure}`);
-      if (!snapshot || !persistState || !quantity || !(oldSl === 0 || oldSl > 0)) return false;
+      if (!snapshot || !persistState || !quantity) return false;
 
       try {
         if (!destructiveStarted) {
