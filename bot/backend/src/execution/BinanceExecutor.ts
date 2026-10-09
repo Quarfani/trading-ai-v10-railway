@@ -746,6 +746,136 @@ export class BinanceExecutor {
     }
   }
 
+  clientOrderIdForOperationKey(operationKey: string): string {
+    if (!operationKey || !operationKey.trim()) {
+      throw new Error('Binance operation key is required to derive clientOrderId');
+    }
+    return this.makeClientOrderId(operationKey);
+  }
+
+  async recoverOperationFillDetails(
+    symbol: string,
+    operationKey: string,
+    expectedQuantity: number,
+  ): Promise<{
+    orderId: number;
+    clientOrderId: string;
+    status: string;
+    executedQty: number;
+    avgPrice: number;
+    commission: number;
+    commissionCurrency: string;
+    grossQuote?: number;
+    feeQuote?: number;
+    quoteCurrency?: string;
+    brokerTimestamp: number;
+  } | null> {
+    return this.recoverOrderFillDetailsByClientOrderId(
+      symbol,
+      this.makeClientOrderId(operationKey),
+      expectedQuantity,
+    );
+  }
+
+  async recoverOrderFillDetailsByClientOrderId(
+    symbol: string,
+    clientOrderId: string,
+    expectedQuantity: number,
+  ): Promise<{
+    orderId: number;
+    clientOrderId: string;
+    status: string;
+    executedQty: number;
+    avgPrice: number;
+    commission: number;
+    commissionCurrency: string;
+    grossQuote?: number;
+    feeQuote?: number;
+    quoteCurrency?: string;
+    brokerTimestamp: number;
+  } | null> {
+    if (
+      !clientOrderId ||
+      !(expectedQuantity > 0) ||
+      !Number.isFinite(expectedQuantity)
+    ) {
+      return null;
+    }
+    try {
+      const order = await this.findOrderByClientId(symbol, clientOrderId);
+      if (!order) return null;
+      const orderId = Number(order.orderId);
+      const status = String(order.status ?? '').toUpperCase();
+      const executedQty = Number(order.executedQty ?? order.cumQty ?? 0);
+      if (
+        !(orderId > 0) ||
+        !Number.isFinite(orderId) ||
+        status !== 'FILLED' ||
+        !(executedQty > 0) ||
+        !Number.isFinite(executedQty)
+      ) {
+        return null;
+      }
+      const tolerance = Math.max(
+        getSymbolSpec(symbol).volumeStep,
+        expectedQuantity * 0.0001,
+      );
+      if (Math.abs(executedQty - expectedQuantity) > tolerance) {
+        return null;
+      }
+
+      const brokerTimestamp = Number(order.updateTime ?? order.time ?? 0);
+      if (this.isFutures) {
+        const summary = await this.getFuturesOrderFillSummary(
+          symbol,
+          orderId,
+          executedQty,
+        );
+        if (!summary) return null;
+        return {
+          orderId,
+          clientOrderId,
+          status,
+          executedQty: summary.totalQty,
+          avgPrice: summary.avgPrice,
+          commission: summary.commission,
+          commissionCurrency: summary.currency,
+          brokerTimestamp: Number.isFinite(brokerTimestamp) && brokerTimestamp > 0
+            ? brokerTimestamp
+            : Date.now(),
+        };
+      }
+
+      const summary = await this.getSpotOrderFillSummary(
+        symbol,
+        orderId,
+        executedQty,
+      );
+      if (!summary) return null;
+      return {
+        orderId,
+        clientOrderId,
+        status,
+        executedQty: summary.totalQty,
+        avgPrice: summary.avgPrice,
+        commission: summary.feeQuote,
+        commissionCurrency: summary.currency,
+        grossQuote: summary.grossQuote,
+        feeQuote: summary.feeQuote,
+        quoteCurrency: summary.currency,
+        brokerTimestamp: Number.isFinite(brokerTimestamp) && brokerTimestamp > 0
+          ? brokerTimestamp
+          : Date.now(),
+      };
+    } catch (e: any) {
+      this.logger.warn(
+        '[Binance] recoverOrderFillDetailsByClientOrderId failed: ' +
+        String(e?.message ?? e),
+      );
+      return null;
+    }
+  }
+
   async recoverOperation(
     symbol: string,
     operationKey: string,
