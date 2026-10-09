@@ -109,6 +109,15 @@ export function loadConfig(): SystemConfig {
     );
   }
 
+  // Live execution, pricing, symbol validation and reconciliation must refer
+  // to the same venue. Hybrid paper data sources remain intentionally allowed.
+  if (mode === 'binance' && dataSource !== 'binance') {
+    throw new Error('[Config] MODE=binance requires DATA_SOURCE=binance');
+  }
+  if (mode === 'mt5' && dataSource !== 'mt5') {
+    throw new Error('[Config] MODE=mt5 requires DATA_SOURCE=mt5');
+  }
+
   if (
     (deploymentProfile === 'local' ||
       deploymentProfile === 'railway-paper' ||
