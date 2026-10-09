@@ -149,7 +149,7 @@ async function verifyReplaceThenCancelExactPriorPair() {
     throw new Error("Unexpected endpoint " + path);
   };
   (executor as any).signedDelete = async (path: string, params: any) => {
-    assert(replacementVerified, "replacement protection must be verified before old protection cancellation");
+    assert(!replacementVerified, "the old pair must be canceled only after its durable intent is recorded and before replacement placement");
     assert(path === "/fapi/v1/algoOrder", "conditional protection cancellation must use the Algo endpoint");
     const algoId = Number(params?.algoId);
     assert([101, 102].includes(algoId), "only the prior operation's Algo IDs may be canceled");
@@ -181,6 +181,7 @@ async function verifyReplaceThenCancelExactPriorPair() {
     111,
     nextOperationKey,
     priorOperationKey,
+    async () => true,
   );
   assert(result, "modification should succeed after replacement and old-pair cancellation");
   assert(deleted.length === 2 && deleted.includes(101) && deleted.includes(102), "both and only the prior operation's protection orders must be canceled");
@@ -198,80 +199,94 @@ async function verifyReplacementFailureKeepsOldProtection() {
   const symbol = "BTCUSDT";
   const priorOperationKey = "old-operation";
   const nextOperationKey = "new-operation";
-  const oldOrders = new Map<string, any>();
-  for (const [kind, algoId, triggerPrice] of [["SL", 801, 90], ["TP", 802, 110]] as const) {
-    const clientAlgoId = (executor as any).makeProtectionClientOrderId(priorOperationKey, kind);
-    oldOrders.set(clientAlgoId, {
-      symbol,
-      algoId,
-      clientAlgoId,
-      algoType: "CONDITIONAL",
-      algoStatus: "NEW",
-      side: "SELL",
-      orderType: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
-      triggerPrice: String(triggerPrice),
-      closePosition: true,
-    });
-  }
-
-  let cancellations = 0;
+  const restoreKey = `PROTECTION_RESTORE:${nextOperationKey}:${priorOperationKey}`;
+  const orders = new Map<string, any>();
+  const states: any[] = [];
   let loggedWarning = "";
-  (executor as any).logger.warn = (message: unknown) => {
-    loggedWarning = String(message);
-  };
-  (executor as any).getPosition = async () => ({
-    positionAmt: 1,
-    entryPrice: 100,
-    unrealizedProfit: 0,
-  });
-  (executor as any).recoverProtectionByOperation = async (
-    _symbol: string,
-    operationKey: string,
-  ) => {
-    assert(operationKey === nextOperationKey, "replacement lookup must use the new MOVE_SL_TP key");
-    return { sl: null, tp: null };
-  };
-  (executor as any).signedPost = async (path: string, payload: any) => {
-    assert(path === "/fapi/v1/algoOrder", "replacement conditional protection must use the Algo API");
-    assert(payload.clientAlgoId === (executor as any).makeProtectionClientOrderId(nextOperationKey, "SL"), "failed SL request must retain its exact operation identity");
-    const failure: any = new Error("Binance rejected the conflicting conditional order");
-    failure.response = {
-      data: {
-        code: -4130,
-        msg: "An open stop or take profit order with GTE and closePosition in the direction is existing",
-      },
+
+  const add = (operationKey: string, kind: "SL" | "TP", algoId: number, triggerPrice: number) => {
+    const clientAlgoId = (executor as any).makeProtectionClientOrderId(operationKey, kind);
+    const raw = {
+      symbol, algoId, clientAlgoId, algoType: "CONDITIONAL",
+      algoStatus: "NEW", side: "SELL",
+      orderType: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+      triggerPrice: String(triggerPrice), closePosition: true,
     };
-    throw failure;
+    orders.set(clientAlgoId, raw);
+    return raw;
   };
-  (executor as any).getAlgoOrderByClientIdStrict = async (
-    _symbol: string,
-    clientAlgoId: string,
-  ) => oldOrders.get(clientAlgoId) ?? null;
+  const normalized = (raw: any) => ({
+    ...raw,
+    orderId: Number(raw.algoId),
+    clientOrderId: String(raw.clientAlgoId),
+    origClientOrderId: String(raw.clientAlgoId),
+    status: String(raw.algoStatus),
+    type: String(raw.orderType),
+    stopPrice: raw.triggerPrice,
+  });
+
+  add(priorOperationKey, "SL", 801, 90);
+  add(priorOperationKey, "TP", 802, 110);
+  const manual = add("manual-operation", "SL", 899, 80);
+  manual.clientAlgoId = "manual-algo-id";
+  orders.delete((executor as any).makeProtectionClientOrderId("manual-operation", "SL"));
+  orders.set(manual.clientAlgoId, manual);
+
+  (executor as any).logger.warn = (message: unknown) => { loggedWarning = String(message); };
+  (executor as any).logger.error = () => {};
+  (executor as any).getPosition = async () => ({
+    positionAmt: 1, entryPrice: 100, unrealizedProfit: 0,
+  });
+  (executor as any).recoverProtectionByOperation = async (_symbol: string, operationKey: string) => {
+    const kinds = ["SL", "TP"] as const;
+    const found: any = {};
+    for (const kind of kinds) {
+      const id = (executor as any).makeProtectionClientOrderId(operationKey, kind);
+      const raw = orders.get(id);
+      found[kind.toLowerCase()] = raw ? normalized(raw) : null;
+    }
+    return { sl: found.sl, tp: found.tp };
+  };
   (executor as any).getOpenAlgoOrders = async () =>
-    [...oldOrders.values()].filter(order => order.algoStatus === "NEW");
-  (executor as any).signedDelete = async () => {
-    cancellations += 1;
-    throw new Error("prior protection must not be canceled by a rejected replacement");
+    [...orders.values()].filter(order => order.algoStatus === "NEW").map(normalized);
+  (executor as any).cancelProtectionByOperationKey = async (_symbol: string, _side: string, operationKey: string) => {
+    for (const kind of ["SL", "TP"] as const) {
+      const id = (executor as any).makeProtectionClientOrderId(operationKey, kind);
+      const raw = orders.get(id);
+      if (raw?.algoStatus === "NEW") orders.set(id, { ...raw, algoStatus: "CANCELED" });
+    }
   };
+  (executor as any).placeSLTP = async (
+    _signal: any, _quantity: number, _ticket: number, _spec: any, operationKey: string,
+  ) => {
+    if (operationKey === nextOperationKey) {
+      throw new Error("SL placement failed code=-4130: conflicting close-position order");
+    }
+    assert(operationKey === restoreKey, "restoration must use its own deterministic operation key");
+    add(restoreKey, "SL", 811, 90);
+    add(restoreKey, "TP", 812, 110);
+  };
+
   const result = await executor.modifyPosition(
-    8,
-    symbol,
-    "BUY",
-    91,
-    111,
-    nextOperationKey,
-    priorOperationKey,
+    8, symbol, "BUY", 91, 111, nextOperationKey, priorOperationKey,
+    async state => { states.push(state); return true; },
   );
-  assert(!result, "modification must remain unresolved when Binance rejects replacement with -4130");
-  assert(cancellations === 0, "old protection must not be canceled after Binance rejects replacement");
+
+  assert(!result, "requested modification must report failure when the replacement is rejected");
+  assert(states.some(state => state.phase === "OLD_CANCEL_REQUESTED"), "durable cancel intent must be persisted before old protection is removed");
+  assert(states.some(state => state.phase === "RESTORE_REQUESTED"), "restoration intent must be persisted before restoring the prior targets");
+  assert(states.some(state => state.phase === "RESTORE_VERIFIED" && state.activeProtectionKey === restoreKey), "restored pair and its active identity must be persisted after verification");
   assert(
-    [...oldOrders.values()].every(order => order.algoStatus === "NEW"),
-    "the exact previous SL/TP pair must remain active after -4130",
+    [...orders.values()].some(order => order.clientAlgoId === (executor as any).makeProtectionClientOrderId(restoreKey, "SL") && order.algoStatus === "NEW") &&
+    [...orders.values()].some(order => order.clientAlgoId === (executor as any).makeProtectionClientOrderId(restoreKey, "TP") && order.algoStatus === "NEW"),
+    "both restored protection legs must be active",
   );
   assert(
-    loggedWarning.includes("code=-4130"),
-    "Binance conditional-order error code must remain visible for diagnosis and safe recovery",
+    ![...orders.values()].some(order => order.clientAlgoId === (executor as any).makeProtectionClientOrderId(nextOperationKey, "SL") && order.algoStatus === "NEW"),
+    "a failed replacement must not remain open",
   );
+  assert(manual.algoStatus === "NEW", "unrelated manual protection must remain untouched");
+  assert(loggedWarning.includes("code=-4130"), "the broker conflict code must remain visible");
 }
 
 async function verifyExistingAlgoPairIsRecoveredWithoutDuplicateSubmission() {
