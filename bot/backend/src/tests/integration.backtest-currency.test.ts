@@ -1,5 +1,7 @@
 import { Backtester } from '../backtest/Backtester';
 import { Candle, SystemConfig } from '../types/trading.types';
+import * as fs from 'fs';
+import * as os from 'os';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -39,14 +41,26 @@ const candles: Candle[] = Array.from({ length: 260 }, (_, i) => ({
 }));
 
 async function main() {
-  const result = await new Backtester(config).run('EURGBP', candles);
+  const originalNow = Date.now;
+  const marker = originalNow() + 12345;
+  const tempPrefix = `backtest_${marker}_`;
+  let result: Awaited<ReturnType<Backtester['run']>>;
+  try {
+    Date.now = () => marker;
+    result = await new Backtester(config).run('EURGBP', candles);
+  } finally {
+    Date.now = originalNow;
+  }
+
+  const leakedTempDbs = fs.readdirSync(os.tmpdir()).filter(name => name.startsWith(tempPrefix));
+  assert(leakedTempDbs.length === 0, 'backtest must close and remove its temporary DB on early invalid-result returns');
   assert(!result.valid, 'EURGBP backtest without historical FX should be invalid');
   assert(
     result.blockedReason?.includes('Missing historical GBP->USD'),
     'missing FX reason should identify GBP->USD',
   );
   assert(result.totalTrades === 0, 'invalid FX backtest must not simulate trades');
-  console.log('Result: 4 passed, 0 failed');
+  console.log('Result: 5 passed, 0 failed');
 }
 
 main().catch(error => {
