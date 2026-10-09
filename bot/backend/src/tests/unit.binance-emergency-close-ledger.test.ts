@@ -143,6 +143,48 @@ async function main() {
   assert(ledger.status === "UNKNOWN", "recovery evidence must not bypass atomic accounting settlement");
   assert(positionReads === 3, "recovery must query and validate the post-close inventory again");
 
+  let flipLedgerWrites = 0;
+  const flipDb = {
+    updateExecutionLedger() {
+      flipLedgerWrites += 1;
+      return true;
+    },
+  };
+  const flipExecutor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any, flipDb as any);
+  (flipExecutor as any).getPosition = async () => ({
+    positionAmt: -1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
+  let signedFlipRejected = false;
+  try {
+    await (flipExecutor as any).verifyAndRecordEmergencyClose(
+      "flip-execution",
+      "PROTECTION_FAIL:flip-parent",
+      "ta_emergency_flip",
+      "flip-parent",
+      signal,
+      1,
+      2,
+      2,
+      {
+        symbol: "BTCUSDT",
+        clientOrderId: "ta_emergency_flip",
+        orderId: 903,
+        status: "FILLED",
+        executedQty: "1",
+      },
+      "ta_parent_flip",
+      { orderId: 901, entryPrice: 100, executedQty: 2 },
+    );
+  } catch {
+    signedFlipRejected = true;
+  }
+  assert(signedFlipRejected, "matching absolute quantity must not conceal a flipped Futures position");
+  assert(flipLedgerWrites === 0, "unverified signed inventory must not be marked as verified in the ledger");
+
   console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
