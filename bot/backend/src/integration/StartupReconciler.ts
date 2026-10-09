@@ -1417,17 +1417,19 @@ export class StartupReconciler {
         throw new Error(`Binance volume mismatch ${t.symbol}: DB=${t.volume} broker=${volume}`);
       if (!(p.entryPrice > 0)) throw new Error(`Binance entry price invalid for ${t.symbol}`);
 
-      const openOrders = await exec.getOpenOrders(t.symbol);
+      const openOrders = await exec.getOpenAlgoOrders(t.symbol);
       const closeSide = t.side === 'BUY' ? 'SELL' : 'BUY';
       const matching = openOrders.filter((o: any) => String(o.side).toUpperCase() === closeSide);
       const tolerance = (target: number) => Math.max(1e-8, Math.abs(target) * 1e-6);
       const stopOrders = matching.filter((o: any) =>
         String(o.type ?? '').toUpperCase() === 'STOP_MARKET' &&
-        String(o.closePosition).toLowerCase() === 'true',
+        String(o.closePosition).toLowerCase() === 'true' &&
+        String(o.status ?? '').toUpperCase() === 'NEW',
       );
       const takeOrders = matching.filter((o: any) =>
         String(o.type ?? '').toUpperCase() === 'TAKE_PROFIT_MARKET' &&
-        String(o.closePosition).toLowerCase() === 'true',
+        String(o.closePosition).toLowerCase() === 'true' &&
+        String(o.status ?? '').toUpperCase() === 'NEW',
       );
       const slOk = stopOrders.some((o: any) =>
         Number.isFinite(Number(o.stopPrice)) &&
