@@ -6,6 +6,8 @@ import { TelegramBot } from '../notifications/TelegramBot';
 import { Logger } from '../utils/Logger';
 import { MarketScanner } from '../core/MarketScanner';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
+import { resolveHistoricalQuoteToAccount } from '../market/HistoricalCurrencySeries';
+import { loadHistoricalCurrencySeries } from '../market/HistoricalCurrencySeriesLoader';
 import { getSymbolSpec } from '../config/symbolConfig';
 import { isTimeframe } from '../market/market.types';
 
@@ -822,6 +824,51 @@ export class StartupReconciler {
     }
   }
 
+  private async resolveHistoricalProtectionFailureConversionRate(
+    scanner: MarketScanner,
+    quoteCurrency: string,
+    accountCurrency: string,
+    fillTimestamp: number,
+  ): Promise<number> {
+    const quote = String(quoteCurrency ?? '').trim().toUpperCase();
+    const account = String(accountCurrency ?? '').trim().toUpperCase();
+    if (!quote || !account) {
+      throw new Error('Historical FX conversion requires explicit quote and account currencies');
+    }
+    if (quote === account) return 1;
+    if (account === 'USD' && ['USD', 'USDT', 'USDC', 'BUSD'].includes(quote)) return 1;
+    if (!(fillTimestamp > 0) || !Number.isFinite(fillTimestamp)) {
+      throw new Error(
+        `Historical FX conversion timestamp is missing for ${quote}->${account}`,
+      );
+    }
+
+    const series = await loadHistoricalCurrencySeries(
+      quote,
+      account,
+      async (symbol, count) => {
+        const candles = await scanner.fetchCandles(symbol, 'D1', count);
+        return candles.map(candle => ({
+          time: Number(candle.time),
+          close: Number(candle.close),
+        }));
+      },
+      2000,
+    );
+    const rate = resolveHistoricalQuoteToAccount(
+      quote,
+      account,
+      fillTimestamp,
+      series,
+    );
+    if (!(rate != null && rate > 0 && Number.isFinite(rate))) {
+      throw new Error(
+        `Timestamp-aligned FX conversion unavailable or stale at fill time: ${quote}->${account} @${fillTimestamp}`,
+      );
+    }
+    return rate;
+  }
+
   private async resolveProtectionFailureEmergencyCloseLedgers(
     exec: BinanceExecutor,
   ): Promise<void> {
@@ -846,10 +893,7 @@ export class StartupReconciler {
     if (rows.length === 0) return;
 
     const accountCurrency = String(this.config.accountCurrency ?? 'USD').trim().toUpperCase();
-    const fx = new CurrencyConversionProvider(
-      new MarketScanner(this.config),
-      accountCurrency,
-    );
+    const conversionScanner = new MarketScanner(this.config);
 
     for (const row of rows) {
       try {
@@ -1076,12 +1120,20 @@ export class StartupReconciler {
           }
         }
 
-        const conversionRate = await fx.getRate(exitProfitCurrency);
-        if (!(conversionRate != null && conversionRate > 0 && Number.isFinite(conversionRate))) {
-          throw new Error('Broker quote-currency to account-currency conversion is unavailable');
-        }
-        const entryCommissionAccount = Number(entryFill.commission) * conversionRate;
-        const exitProfitAccount = exitProfitQuote * conversionRate;
+        const entryConversionRate = await this.resolveHistoricalProtectionFailureConversionRate(
+          conversionScanner,
+          exitProfitCurrency,
+          accountCurrency,
+          Number(entryFill.brokerTimestamp),
+        );
+        const exitConversionRate = await this.resolveHistoricalProtectionFailureConversionRate(
+          conversionScanner,
+          exitProfitCurrency,
+          accountCurrency,
+          Number(closeFill.brokerTimestamp),
+        );
+        const entryCommissionAccount = Number(entryFill.commission) * entryConversionRate;
+        const exitProfitAccount = exitProfitQuote * exitConversionRate;
         if (
           !(entryCommissionAccount >= 0) ||
           !Number.isFinite(entryCommissionAccount) ||
@@ -1120,8 +1172,8 @@ export class StartupReconciler {
           exitReason: 'PROTECTION_FAILURE',
           commission: entryCommissionAccount,
           commissionCurrency: accountCurrency,
-          entryQuoteToAccount: conversionRate,
-          exitQuoteToAccount: conversionRate,
+          entryQuoteToAccount: entryConversionRate,
+          exitQuoteToAccount: exitConversionRate,
           account: this.config.accountName ?? 'default',
           mlPredictionId,
         };
@@ -1140,7 +1192,8 @@ export class StartupReconciler {
             entryCommission: entryFill.commission,
             entryCommissionCurrency: entryFill.commissionCurrency,
             accountCurrency,
-            conversionRate,
+            entryConversionRate,
+            exitConversionRate,
           },
           childExecutionId: String(row.executionId),
           childOperationKey,
@@ -1158,7 +1211,8 @@ export class StartupReconciler {
             exitProfitQuote,
             exitProfitCurrency,
             exitProfitAccount,
-            conversionRate,
+            entryConversionRate,
+            exitConversionRate,
             positionBeforeSigned,
             positionAfterSigned: actualSignedAfter,
             positionDeltaVerified: true,
