@@ -541,6 +541,10 @@ export class BinanceExecutor {
     });
     if (!Array.isArray(fills) || fills.length === 0) return null;
 
+    const quoteCurrency = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
+    if (!quoteCurrency) return null;
+    const quoteCurrency = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
+    if (!quoteCurrency) return null;
     let currency = '';
     let weightedPrice = 0;
     let totalQty = 0;
@@ -559,7 +563,7 @@ export class BinanceExecutor {
         !Number.isFinite(fillQty) ||
         !Number.isFinite(fee) ||
         fee < 0 ||
-        !['USDT', 'USDC', 'BUSD'].includes(feeAsset)
+        feeAsset !== quoteCurrency
       ) {
         return null;
       }
@@ -633,7 +637,8 @@ export class BinanceExecutor {
         return null;
       }
 
-      if (!['USDT', 'USDC', 'BUSD'].includes(commissionAsset)) {
+      // realizedPnl and commission must share a quote asset before subtraction.
+      if (commissionAsset !== quoteCurrency) {
         return null;
       }
 
