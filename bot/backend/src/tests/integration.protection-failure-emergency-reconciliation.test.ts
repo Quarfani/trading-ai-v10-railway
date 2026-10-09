@@ -270,6 +270,10 @@ async function verifyPrecheckFailurePersistsIntent() {
     source: 'phase2-precheck-failure',
   };
   let brokerPosts = 0;
+  let cleanupCalls = 0;
+  (executor as any).cancelProtectionForEmergencyClose = async () => {
+    cleanupCalls += 1;
+  };
   (executor as any).getPosition = async () => {
     throw new Error('simulated position endpoint failure');
   };
@@ -293,6 +297,7 @@ async function verifyPrecheckFailurePersistsIntent() {
   try {
     const child = db.getExecutionByOperationKey(childOperationKey);
     assert(thrown, 'failed broker position precheck must stop the emergency order flow');
+    assert(cleanupCalls === 1, 'operation-owned protection cleanup must run before the broker position precheck');
     assert(child !== null, 'emergency intent must be durable even if the precheck fails');
     assert(child.status === 'UNKNOWN', 'precheck failure must leave an unresolved emergency child');
     assert(brokerPosts === 0, 'no emergency market order may be sent without verified position state');
@@ -338,8 +343,100 @@ async function verifyAtomicRollback() {
   }
 }
 
+async function verifyOrphanedOpenIncidentFailsClosed() {
+  const db = new DatabaseManager(':memory:');
+  await db.initialize();
+  const config = makeConfig(true);
+  const executor = new BinanceExecutor(config);
+  const operationKey = 'phase2-orphaned-open-key';
+  const symbol = 'BTCUSDT';
+  const clientOrderId = executor.clientOrderIdForOperationKey(operationKey);
+  const now = Date.now();
+  const signal = {
+    symbol,
+    side: 'BUY',
+    price: 100,
+    sl: 90,
+    tp: 120,
+    confidence: 0.8,
+    timestamp: now,
+    source: 'phase2-orphaned-open',
+  };
+  assert(db.createExecutionLedger({
+    executionId: 'phase2-orphaned-open-ledger',
+    operationKey,
+    action: 'OPEN',
+    status: 'UNKNOWN',
+    symbol,
+    side: 'BUY',
+    volume: 1,
+    request: { timeframe: 'H1', signal, volume: 1 },
+  }), 'orphaned OPEN ledger should be available for recovery');
+
+  let queriedSymbol = '';
+  let queriedOperationKey = '';
+  let brokerPosts = 0;
+  (executor as any).recoverOperationOrderForReconciliation = async (
+    requestedSymbol: string,
+    requestedOperationKey: string,
+  ) => {
+    queriedSymbol = requestedSymbol;
+    queriedOperationKey = requestedOperationKey;
+    return {
+      symbol,
+      clientOrderId,
+      orderId: 990,
+      status: 'FILLED',
+      origQty: '1',
+      executedQty: '1',
+      updateTime: now,
+    };
+  };
+  (executor as any).signedPost = async () => {
+    brokerPosts += 1;
+    throw new Error('no broker submission is allowed during orphaned OPEN reconciliation');
+  };
+  const reconciler = new StartupReconciler(
+    config,
+    db,
+    { sendMessage: async () => {} } as any,
+  );
+
+  let blocked = false;
+  try {
+    await (reconciler as any).blockOrphanedBinanceOpenIntents(executor);
+  } catch (error: any) {
+    blocked = String(error?.message ?? error).includes('ORPHANED_BINANCE_OPEN');
+  }
+
+  try {
+    assert(blocked, 'orphaned OPEN must block startup with a specific incident');
+    assert(queriedSymbol === symbol && queriedOperationKey === operationKey, 'recovery must inspect the exact original OPEN identity');
+    assert(brokerPosts === 0, 'orphan incident recovery must never submit or close any broker order automatically');
+    assert(db.getExecutionByOperationKey(operationKey).status === 'UNKNOWN', 'orphaned OPEN must remain unresolved for operator reconciliation');
+    assert(db.getExecutionByOperationKey('PROTECTION_FAIL:' + operationKey) === null, 'startup incident reporting must not fabricate an emergency-close child ledger');
+
+    const incident = db.raw().prepare(`
+      SELECT status, reason, brokerJson
+      FROM reconciliation_events
+      WHERE reason LIKE '%ORPHANED_BINANCE_OPEN%'
+      ORDER BY timestamp DESC
+      LIMIT 1
+    `).get() as any;
+    assert(incident != null, 'orphaned OPEN incident must be durably recorded');
+    assert(String(incident.status) === 'BLOCKED', 'orphaned OPEN incident must be recorded as BLOCKED');
+    assert(String(incident.reason).includes(operationKey), 'incident must retain the original operation identity');
+    const evidence = JSON.parse(String(incident.brokerJson ?? 'null'));
+    assert(Number(evidence.brokerEvidence?.orderId) === 990, 'incident must preserve exact broker order evidence');
+    assert(String(evidence.brokerEvidence?.status) === 'FILLED', 'incident must record the broker fill status');
+  } finally {
+    db.raw().close();
+  }
+}
+
 async function main() {
   await verifyPrecheckFailurePersistsIntent();
+  await verifyOrphanedOpenIncidentFailsClosed();
   await verifyExactFillRecovery();
   await verifySettlement(false);
   await verifySettlement(true);
