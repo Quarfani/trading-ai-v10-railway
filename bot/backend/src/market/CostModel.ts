@@ -15,7 +15,7 @@ export interface CostProfile {
   spreadPricePerSide: number;
   marketImpactBpsPerSide: number;
   holdingRatePerDay: number;
-  source: 'REPOSITORY_DEFAULT' | 'ENV_EXPLICIT';
+  source: 'REPOSITORY_DEFAULT' | 'ENV_EXPLICIT' | 'MIXED';
 }
 
 export interface CostInput {
