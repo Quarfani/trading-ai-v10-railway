@@ -1079,6 +1079,10 @@ export class BinanceExecutor {
   // ─── Place Order with SL/TP ────────────────────────────────────────────
 
   async placeMarketOrder(signal: Signal, quantity: number, clientOrderId?: string, operationKey?: string): Promise<Trade | null> {
+    if (this.db && (!clientOrderId?.trim() || !operationKey?.trim())) {
+      this.logger.error('Binance entry blocked: durable execution identity is required for recovery');
+      return null;
+    }
     const spec = getSymbolSpec(signal.symbol);
     if (!this.isFutures && signal.side === 'SELL') {
       this.logger.error(`[Binance Spot] SELL/short semantics are unsupported by this executor; trade blocked`);
