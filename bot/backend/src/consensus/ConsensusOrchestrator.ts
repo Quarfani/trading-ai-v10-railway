@@ -118,6 +118,7 @@ export class ConsensusOrchestrator {
     symbol?: string,
     timeframe: Timeframe = 'H1',
     regime?: string,
+    requiredStage?: 'PAPER' | 'TESTNET' | 'PRODUCTION',
   ): { allowed: boolean; reason: string } {
     const names = source.split('+').map(s => s.trim()).filter(Boolean);
     if (!names.length) return { allowed: false, reason: 'empty strategy source' };
@@ -133,9 +134,8 @@ export class ConsensusOrchestrator {
           : getBrokerMarketDefinition(symbol, timeframe) ?? getMarketDefinition(symbol, timeframe))
         : null;
 
-    const required =
-      mode === 'paper' ? 'PAPER' :
-      'PRODUCTION';
+    const required: 'PAPER' | 'TESTNET' | 'PRODUCTION' =
+      requiredStage ?? (mode === 'paper' ? 'PAPER' : 'PRODUCTION');
 
     const rank: Record<string, number> = {
       RESEARCH: 0,
