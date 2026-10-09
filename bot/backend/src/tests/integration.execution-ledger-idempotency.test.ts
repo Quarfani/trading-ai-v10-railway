@@ -55,6 +55,16 @@ async function main() {
   assert(second.trade.ticket === first.trade.ticket, "replay must return the same ticket");
   assert(db.getRecentTrades(20).length === 1, "replay must not create a duplicate trade");
 
+  const openIdentity = db.getLatestExecutedOpenOperationForTrade(Number(first.trade.id));
+  assert(openIdentity?.operationKey, "successful OPEN must be linked to its persisted local trade id");
+  const openLedger = db.getExecutionByOperationKey(openIdentity.operationKey);
+  assert(Number(openLedger?.tradeId) === Number(first.trade.id), "OPEN settlement must atomically persist tradeId on the execution ledger");
+
+  db.raw().prepare("UPDATE execution_ledger SET tradeId=NULL WHERE executionId=?").run(openIdentity.executionId);
+  const legacyOpenIdentity = db.getLatestExecutedOpenOperationForTrade(Number(first.trade.id));
+  assert(legacyOpenIdentity?.operationKey === openIdentity.operationKey, "legacy OPEN ledger without tradeId index must recover identity from resultJson.id");
+  db.raw().prepare("UPDATE execution_ledger SET tradeId=? WHERE executionId=?").run(Number(first.trade.id), openIdentity.executionId);
+
   // Live MT5 failures become UNKNOWN. A repeated call with the same key must
   // be blocked instead of sending the order a second time.
   registerBrokerContract({
