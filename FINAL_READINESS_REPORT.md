@@ -242,36 +242,41 @@ Production requires: reproducible builds; complete Node/Python test suites; Dock
 
 **DO NOT ENABLE REAL-MONEY PRODUCTION TRADING FROM THIS AUDIT RESULT.** The system has materially stronger safety boundaries after the applied fixes, but the final production gate remains BLOCKED.
 
-## Railway Paper Deployment Hardening — 2026-09-23
+## Current Development Gate — 2026-10-09 (Supersedes Earlier Notes)
 
-A dedicated low-resource `railway-paper` profile was added after the original audit.
+This section supersedes stale statements below the original Railway hardening report, especially earlier references to missing Node lockfiles and absent cost/exposure controls.
 
-### Configured
+### Present in the development branch (source-level; not yet full-suite validated)
 
-- `DEPLOYMENT_PROFILE=railway-paper` is a hard safety profile.
-- The profile only permits `MODE=paper`.
-- The profile requires `DATA_SOURCE=binance` and Binance-quoted symbols.
-- Automatic ML training, automatic WFO parameter mutation, and the unfinished S3-compatible upload path are rejected by configuration in this profile.
-- The default scan interval is 30 seconds for this profile to reduce CPU/network usage.
-- Railway health readiness now requires the engine to be running **and** at least one market symbol to have passed broker/source validation.
-- The backend listens on Railway's injected `PORT`.
-- The Dockerfile works with the current repository even though a package lockfile has not yet been committed; once a lockfile exists, the image automatically switches to `npm ci`.
-- Direct dependency ranges were pinned in `package.json`.
-- The `postinstall ... || true` silent native-build fallback was removed so native SQLite installation errors cannot be hidden.
-- SQLite backups are now written beside the database, allowing `/app/data` to be persisted by a Railway volume.
-- Runtime Node heap is capped at 384MB for the 1GB Railway trial resource ceiling.
+- Backend and frontend have committed `package-lock.json` files. Both Dockerfiles now require the lockfile and use `npm ci`; they no longer silently fall back to `npm install`.
+- The local example environment is now a conservative Paper-only configuration using public Binance market data, with ML/WFO disabled, blank exchange credentials, and unique-secret placeholders.
+- Deployment profile checks separate local/Railway Paper, cloud Paper, Binance Testnet, and production broker modes. Binance Testnet requires Testnet endpoints; production mainnet requires an explicit acknowledgment; MT5 has a distinct live-trading acknowledgment.
+- Risk code includes cost profiles, exposure/leverage checks, and broker-side reconciliation controls. Their actual behavior still requires executed regression tests and market-data/broker verification.
+- API controls now use a client-IP resolver that ignores untrusted `X-Forwarded-For`, explicitly opt in to Railway's `X-Real-IP`, bound rate-limit/login tracking state, and validate/limit expensive research requests.
+- Backtests close their temporary SQLite databases on all return paths and use unique temp database names.
+- Database backups use SQLite `VACUUM INTO` snapshots; optional encryption preserves the `TAIB2` AES-GCM envelope but streams large files. S3 upload source now builds AWS SigV4 authorization and streams file contents. A deterministic signing vector and encryption/retention regression tests were added.
+- Startup protection recovery has additional interruption and quantity-drift regression cases; Binance strategy lifecycle gates distinguish TESTNET from PRODUCTION.
 
-### Verified in this environment
+### Validation actually completed in this environment
 
-- TypeScript/TSX parser scan: 0 syntax errors after the Railway hardening changes.
-- Backend and frontend `package.json` files parse as valid JSON.
-- The environment intentionally has no broker credentials and no live-trading variables.
+- GitHub connector read/write confirmed the development branch and file blobs.
+- A temporary isolated Node/ts-node harness using the copied SigV4 helper ran 12 assertions successfully.
+- A temporary isolated Node/ts-node harness using the copied streaming-encryption and retention methods ran 7 assertions successfully.
+- The isolated client-IP test harness previously ran 5 assertions successfully.
 
-### Not verified here
+These isolated tests are **not** execution of the repository's full test files and do not replace typecheck/build or full-suite results.
 
-- Railway deployment itself.
-- Railway outbound-network verification against Binance.
-- Docker build, because the audit environment has no Docker executable.
-- Full npm install/build/test, because the audit environment cannot reach the npm registry.
+### Still blocking a project-complete release
 
-Therefore the Railway profile is **CONFIGURED / NOT DEPLOY-TESTED**, not a production-readiness PASS.
+- Backend `npm run typecheck`, full backend `npm test`, backend build, frontend build, dependency audit, and both Docker builds have not run from a clean project checkout.
+- No complete local working tree with installed project dependencies was available in the execution environment. Shell-side DNS failures prevented retrieving dependencies there; GitHub connector access continued to work. This is not evidence that the user's Internet is down.
+- No Binance Futures Testnet end-to-end/restart/partial-fill test has run; behavior for Binance error `-4130` remains unverified.
+- No real S3-compatible target upload/restore has been tested. Unit-level signing/encryption checks do not establish provider interoperability.
+- No sustained Paper soak, measured-cost calibration, OOS/WFO/Monte Carlo/stress report, verified restore drill, or rollback drill has been recorded.
+- No new GitHub repository has been created and no Railway service has been created/deployed, by design, pending completion of the release gates.
+
+### Disposition
+
+**NOT COMPLETE / NO-GO for new-repository publication or Railway release at this checkpoint.**
+
+Next: obtain a complete local checkout at the live development branch head, run backend typecheck/tests/build and frontend build, fix every observed failure, then run Docker and Testnet/backup restore validations. Creating a healthy service or passing a small isolated helper test does not establish profitability or production readiness.
