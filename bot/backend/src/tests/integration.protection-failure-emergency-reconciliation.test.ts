@@ -452,6 +452,153 @@ async function verifyOrphanedOpenIncidentFailsClosed() {
   }
 }
 
+async function verifyModifyRecoveryCancelsPreviousProtection() {
+  async function runCase(withPriorModification: boolean) {
+    const db = new DatabaseManager(':memory:');
+    await db.initialize();
+    const config = makeConfig(true);
+    const symbol = 'BTCUSDT';
+    const now = Date.now();
+    const signal = {
+      symbol,
+      side: 'BUY',
+      price: 100,
+      sl: 90,
+      tp: 120,
+      confidence: 0.8,
+      timestamp: now - 5000,
+      source: 'modify-recovery-test',
+    };
+
+    assert(db.createExecutionLedger({
+      executionId: 'modify-recovery-open-execution',
+      operationKey: 'modify-recovery-open-key',
+      action: 'OPEN',
+      status: 'PENDING',
+      symbol,
+      side: 'BUY',
+      volume: 1,
+      request: { timeframe: 'H1', signal, volume: 1 },
+    }), 'OPEN identity ledger must be claimed');
+    const tradeId = db.persistExecutedOpenTrade({
+      ticket: 9301,
+      symbol,
+      timeframe: 'H1',
+      side: 'BUY',
+      volume: 1,
+      entry: 100,
+      sl: 90,
+      tp: 120,
+      status: 'open',
+      openedAt: now - 5000,
+      source: 'modify-recovery-test',
+    } as any, 'modify-recovery-open-execution', 9301, {
+      ticket: 9301,
+      symbol,
+      side: 'BUY',
+      volume: 1,
+      entry: 100,
+      sl: 90,
+      tp: 120,
+      status: 'open',
+    });
+    assert(tradeId > 0, 'OPEN setup must persist the trade');
+
+    let previousOperationKey = 'modify-recovery-open-key';
+    if (withPriorModification) {
+      previousOperationKey = 'modify-recovery-prior-move-key';
+      assert(db.createExecutionLedger({
+        executionId: 'modify-recovery-prior-move-execution',
+        operationKey: previousOperationKey,
+        action: 'MOVE_SL_TP',
+        status: 'EXECUTED',
+        symbol,
+        side: 'BUY',
+        volume: 1,
+        request: { tradeId, newSl: 92, newTp: 122 },
+      }), 'previous executed MOVE_SL_TP identity must be recorded');
+      db.raw().prepare('UPDATE trades SET sl=?, tp=? WHERE id=?').run(92, 122, tradeId);
+    }
+
+    assert(db.createExecutionLedger({
+      executionId: 'modify-recovery-current-execution',
+      operationKey: 'modify-recovery-current-move-key',
+      action: 'MOVE_SL_TP',
+      status: 'UNKNOWN',
+      symbol,
+      side: 'BUY',
+      volume: 1,
+      request: { tradeId, newSl: 95, newTp: 125 },
+    }), 'unresolved current MOVE_SL_TP ledger must be created');
+
+    const executor = new BinanceExecutor(config);
+    (executor as any).recoverProtectionByOperation = async (
+      requestedSymbol: string,
+      operationKey: string,
+    ) => {
+      assert(requestedSymbol === symbol, 'replacement Algo recovery must use the exact trade symbol');
+      assert(operationKey === 'modify-recovery-current-move-key', 'replacement Algo recovery must query the unresolved modification key');
+      return {
+        sl: {
+          symbol,
+          orderId: 9302,
+          clientOrderId: 'replacement-sl-client-algo-id',
+          status: 'NEW',
+          type: 'STOP_MARKET',
+          side: 'SELL',
+          closePosition: true,
+          stopPrice: 95,
+        },
+        tp: {
+          symbol,
+          orderId: 9303,
+          clientOrderId: 'replacement-tp-client-algo-id',
+          status: 'NEW',
+          type: 'TAKE_PROFIT_MARKET',
+          side: 'SELL',
+          closePosition: true,
+          stopPrice: 125,
+        },
+      };
+    };
+    let cancellationCalls = 0;
+    (executor as any).cancelProtectionByOperationKey = async (
+      requestedSymbol: string,
+      entrySide: string,
+      operationKey: string,
+    ) => {
+      cancellationCalls += 1;
+      assert(requestedSymbol === symbol, 'prior-protection cleanup must use the trade symbol');
+      assert(entrySide === 'BUY', 'prior-protection cleanup must preserve entry side');
+      assert(operationKey === previousOperationKey, 'recovery must cancel only the prior active protection operation');
+      assert(
+        db.getExecutionByOperationKey('modify-recovery-current-move-key').status === 'UNKNOWN',
+        'current modification must not settle before exact prior-protection cleanup succeeds',
+      );
+    };
+
+    const reconciler = new StartupReconciler(config, db, { sendMessage: async () => {} } as any);
+    try {
+      await (reconciler as any).resolveAuthoritativeBinanceModifyLedgers(
+        executor,
+        [{ symbol, positionAmt: 1, entryPrice: 100 }],
+      );
+      assert(cancellationCalls === 1, 'recovery must cancel one prior operation-owned protection pair');
+      assert(
+        db.getExecutionByOperationKey('modify-recovery-current-move-key').status === 'EXECUTED',
+        'replacement modification may settle after prior protection cleanup is verified',
+      );
+      const trade = db.raw().prepare('SELECT sl, tp FROM trades WHERE id=?').get(tradeId) as any;
+      assert(Number(trade.sl) === 95 && Number(trade.tp) === 125, 'recovered replacement targets must be persisted on the trade');
+    } finally {
+      db.raw().close();
+    }
+  }
+
+  await runCase(false);
+  await runCase(true);
+}
+
 async function main() {
   await verifyPrecheckFailurePersistsIntent();
   await verifyOrphanedOpenIncidentFailsClosed();
@@ -461,6 +608,7 @@ async function main() {
   await verifyMissingProtectionCleanupEvidenceBlocksSettlement();
   await verifyUnresolvedCloseStaysBlocked();
   await verifyAtomicRollback();
+  await verifyModifyRecoveryCancelsPreviousProtection();
   console.log(`Result: ${assertions} passed, 0 failed`);
 }
 
