@@ -1396,9 +1396,13 @@ export class StartupReconciler {
       return balances;
     }
 
+    const initialPositions = await exec.getAllPositions();
+    await this.resolveAuthoritativeBinanceModifyLedgers(exec, initialPositions);
+    await this.resolveAuthoritativeBinanceLedgers(exec, initialPositions);
+
+    // Recovery can settle a close or replace protective orders. Re-read live
+    // exposure after those operations so startup never validates a stale snapshot.
     const positions = await exec.getAllPositions();
-    await this.resolveAuthoritativeBinanceModifyLedgers(exec, positions);
-    await this.resolveAuthoritativeBinanceLedgers(exec, positions);
     const openTrades = this.db.getOpenTrades();
     const bySymbol = new Map<string, any>(
       positions.map(p => [p.symbol, p]),
