@@ -819,7 +819,10 @@ export class BinanceExecutor {
       const order = await this.findOrderByClientId(symbol, clientOrderId);
       if (!order) return null;
       const brokerClientOrderId = String(order.clientOrderId ?? order.origClientOrderId ?? '');
-      if (brokerClientOrderId !== clientOrderId) return null;
+      if (
+        brokerClientOrderId !== clientOrderId ||
+        String(order.symbol ?? '').trim().toUpperCase() !== String(symbol).trim().toUpperCase()
+      ) return null;
       const orderId = Number(order.orderId);
       const status = String(order.status ?? '').toUpperCase();
       const executedQty = Number(order.executedQty ?? order.cumQty ?? 0);
