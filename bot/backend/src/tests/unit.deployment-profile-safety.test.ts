@@ -6,7 +6,7 @@ const KEYS = [
   'BINANCE_API_KEY', 'BINANCE_SECRET', 'BINANCE_ENV', 'LIVE_TRADING_ACK',
   'MT5_LIVE_TRADING_ACK', 'MT5_LOGIN', 'MT5_PASSWORD', 'MT5_BRIDGE_API_KEY',
   'MT5_SERVER_NAME', 'MT5_BRIDGE_URL', 'ML_ENABLED', 'ML_AUTO_TRAIN_ENABLED',
-  'AUTO_WFO_ENABLED', 'S3_BACKUP_ENABLED', 'S3_BACKUP_ENABLED',
+  'AUTO_WFO_ENABLED', 'S3_BACKUP_ENABLED',
 ] as const;
 
 const original = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
@@ -80,12 +80,12 @@ function main(): void {
       'Railway paper must reject non-Binance symbols',
     );
 
-    setBase({ DEPLOYMENT_PROFILE: 'railway-paper', MODE: 'paper', BINANCE_ENV: 'mainnet' });
+    setBase({ DEPLOYMENT_PROFILE: 'railway-paper', MODE: 'paper', BINANCE_ENV: 'mainnet', BINANCE_API_KEY: '', BINANCE_SECRET: '' });
     const railwayPaper = loadConfig();
     assert(
       railwayPaper.mode === 'paper' &&
       railwayPaper.dataSource === 'binance' &&
-      railwayPaper.binance.apiKey === '',
+      railwayPaper.binance.apiKey === '' && railwayPaper.binance.secret === '',
       'valid Railway paper profile must remain paper-only with no Binance credentials required',
     );
 
