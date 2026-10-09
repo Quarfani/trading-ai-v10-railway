@@ -56,3 +56,25 @@ The v10 package is designed for **paper mode first**. Do not add live Binance cr
 
 ## Disposition
 **Ready to continue the controlled GitHub → Railway Paper → MEGA archive setup. Not ready for real-money production trading.**
+
+
+## Current Status — 2026-10-09
+
+This status supersedes earlier statements in this historical report about missing lockfiles and the earlier list of remaining economic-control work.
+
+### Source-level hardening since the earlier report
+
+- Backend/frontend lockfiles are present; Docker builds use `npm ci` and fail if a lockfile is missing.
+- Shared cost profiles, exposure/leverage controls, and broker reconciliation are present in the development branch and require executed regression evidence.
+- Deployment profiles now hard-stop unsafe combinations of Paper, Testnet, MT5, and production Binance environments.
+- API IP resolution, state-map bounds, research endpoint schemas/rate limits, backtest SQLite cleanup, and backup encryption/S3 signing have been hardened.
+- Tests were added for client IP resolution, deployment-profile safety, lifecycle separation, backtest temp-file cleanup, S3 SigV4, and streaming backup encryption/retention.
+
+### Validation status
+
+- Full Node typecheck/test/build, frontend build, dependency audit and Docker builds: **NOT RUN**.
+- Isolated copied-helper checks: 12 SigV4 assertions, 7 encryption/retention assertions, and 5 client-IP assertions passed. These are not the repository's actual test suite.
+- Binance Futures Testnet, S3-compatible live upload/restore, sustained Paper soak, recovery drills, and economic validation: **NOT RUN**.
+- No new GitHub repository or Railway deployment has been created. No real trading enabled.
+
+**Release disposition: NOT COMPLETE / NO-GO** until clean local installs, complete tests/builds, Testnet and restore/recovery evidence, and the release checklist pass.
