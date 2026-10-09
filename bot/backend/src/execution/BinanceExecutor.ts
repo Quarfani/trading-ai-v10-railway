@@ -1930,8 +1930,10 @@ export class BinanceExecutor {
           return;
         }
       }
+      const brokerCode = e?.response?.data?.code;
+      const brokerMessage = e?.response?.data?.msg ?? e?.message ?? String(e);
       throw new Error(
-        `SL placement failed: ${e.response?.data?.msg ?? e.message}`,
+        `SL placement failed${brokerCode != null ? ` code=${brokerCode}` : ''}: ${brokerMessage}`,
       );
     }
 
@@ -1988,8 +1990,10 @@ export class BinanceExecutor {
           algoId: ids.slOrderId,
         }).catch(() => {});
       }
+      const brokerCode = e?.response?.data?.code;
+      const brokerMessage = e?.response?.data?.msg ?? e?.message ?? String(e);
       throw new Error(
-        `TP placement failed: ${e.response?.data?.msg ?? e.message}`,
+        `TP placement failed${brokerCode != null ? ` code=${brokerCode}` : ''}: ${brokerMessage}`,
       );
     }
 
