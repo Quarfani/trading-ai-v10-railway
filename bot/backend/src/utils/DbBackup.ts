@@ -178,7 +178,9 @@ export class DbBackup {
     const key = crypto.scryptSync(this.encKey!, 'trading-ai-backup-v2', 32);
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    const encryptedTemp = `${dst}.cipher-${crypto.randomBytes(8).toString('hex')}`;
+    const tempDir = fs.mkdtempSync(path.join(path.dirname(dst), '.trading-ai-encrypt-'));
+    const encryptedTemp = path.join(tempDir, 'ciphertext.tmp');
+    let destinationCreated = false;
 
     try {
       await pipeline(
@@ -189,13 +191,14 @@ export class DbBackup {
 
       const tag = cipher.getAuthTag();
       const output = fs.createWriteStream(dst, { flags: 'wx' });
+      output.once('open', () => { destinationCreated = true; });
       output.write(Buffer.concat([Buffer.from('TAIB2'), iv, tag]));
       await pipeline(fs.createReadStream(encryptedTemp), output);
     } catch (error) {
-      fs.rmSync(dst, { force: true });
+      if (destinationCreated) fs.rmSync(dst, { force: true });
       throw error;
     } finally {
-      fs.rmSync(encryptedTemp, { force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
