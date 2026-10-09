@@ -237,8 +237,6 @@ async function verifyReplacementFailureKeepsOldProtection() {
     cancellations += 1;
     throw new Error("prior protection must not be canceled by a rejected replacement");
   };
-  (executor as any).placeSLTP = undefined;
-
   const result = await executor.modifyPosition(
     8,
     symbol,
