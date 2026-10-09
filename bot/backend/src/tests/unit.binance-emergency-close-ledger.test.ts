@@ -62,6 +62,9 @@ async function main() {
     brokerPosts += 1;
     assert(ledger !== null, "emergency intent must exist before the broker order is submitted");
     assert(ledger.status === "PENDING", "emergency ledger must be PENDING before order submission");
+    const persistedRequest = JSON.parse(ledger.requestJson);
+    assert(persistedRequest.submissionState === "SUBMISSION_ARMED", "position snapshot must be persisted before order submission");
+    assert(persistedRequest.positionBeforeSignedAmount === 1, "signed pre-close inventory must be durable before order submission");
     exactClientOrderIds.push(String(payload?.newClientOrderId ?? ""));
     assert(Boolean(payload?.newClientOrderId), "emergency order must carry a deterministic clientOrderId");
     return { orderId: 902, status: "FILLED", executedQty: "1" };
