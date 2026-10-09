@@ -1445,8 +1445,11 @@ export class TradingEngine extends EventEmitter {
           1e-12,
       ) * economics.volumeStep;
 
+    // Post-risk multipliers may reduce an approved volume, never increase it.
+    // Any increase must pass a new portfolio gate instead of inheriting an earlier approval.
     const adjustedVolume =
       Math.min(
+        risk.volume,
         economics.maxVolume,
         Math.max(
           0,
@@ -1504,6 +1507,22 @@ export class TradingEngine extends EventEmitter {
     ) {
       this.logger.info(
         `[PIPELINE_BLOCK] ${symbol}/${tf} stage=OPEN_POSITION_FINAL`,
+      );
+      return;
+    }
+
+    const finalRisk = this.risk.validateFinalVolume(
+      openTrades,
+      adjustedSignal,
+      volume,
+      executableEntryPrice,
+      equity,
+      livePrices,
+    );
+    if (!finalRisk.passed) {
+      this.logger.warn(
+        `[PIPELINE_BLOCK] ${symbol}/${tf} stage=FINAL_RISK ` +
+        `reason=${finalRisk.blockedBy} detail=${finalRisk.reasons[0] ?? 'unknown'}`,
       );
       return;
     }
