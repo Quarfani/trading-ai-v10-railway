@@ -438,6 +438,96 @@ async function verifyExistingEmergencyWithoutCleanupProofBlocks() {
   assert(String(ledger.error).includes("protection-cleanup proof"), "the durable ledger must explain the missing safety evidence");
 }
 
+async function verifyEntryProtectionUsesOriginalOpenOperationKey() {
+  const operationKey = "open-operation-key-for-protection";
+  const clientOrderId = "ta_market-entry-client-id";
+  const signal = {
+    symbol: "BTCUSDT",
+    side: "BUY",
+    price: 100,
+    sl: 90,
+    tp: 120,
+    confidence: 0.8,
+    timestamp: Date.now(),
+    source: "open-protection-key-unit",
+  };
+
+  const futures = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  let futuresProtectionKey = "";
+  (futures as any).signedPost = async () => ({
+    symbol: "BTCUSDT",
+    clientOrderId,
+    orderId: 801,
+    status: "FILLED",
+    avgPrice: "100",
+    executedQty: "1",
+  });
+  (futures as any).getFuturesOrderFillSummary = async () => ({
+    avgPrice: 100,
+    commission: 0.1,
+    currency: "USDT",
+  });
+  (futures as any).placeSLTP = async (
+    _signal: any,
+    _quantity: number,
+    _ticket: number,
+    _spec: any,
+    protectionKey: string,
+  ) => {
+    futuresProtectionKey = protectionKey;
+  };
+
+  const futuresTrade = await futures.placeMarketOrder(
+    signal as any,
+    1,
+    clientOrderId,
+    operationKey,
+  );
+  assert(futuresTrade !== null, "Futures entry with simulated exact fills should be accepted");
+  assert(futuresProtectionKey === operationKey, "Futures SL/TP identity must derive from the original OPEN operation key");
+  assert(futuresProtectionKey !== clientOrderId, "protective Algo identity must not hash the market-order clientOrderId a second time");
+
+  const spot = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: false },
+  } as any);
+  let spotProtectionKey = "";
+  (spot as any).signedPost = async () => ({
+    symbol: "BTCUSDT",
+    clientOrderId,
+    orderId: 802,
+    status: "FILLED",
+    avgPrice: "100",
+    executedQty: "1",
+    fills: [{ price: "100", qty: "1", commission: "0.1", commissionAsset: "USDT" }],
+  });
+  (spot as any).getSpotOrderFillSummary = async () => ({
+    avgPrice: 100,
+    feeQuote: 0.1,
+    currency: "USDT",
+  });
+  (spot as any).placeOCO = async (
+    _signal: any,
+    _quantity: number,
+    _ticket: number,
+    _spec: any,
+    protectionKey: string,
+  ) => {
+    spotProtectionKey = protectionKey;
+  };
+
+  const spotTrade = await spot.placeMarketOrder(
+    signal as any,
+    1,
+    clientOrderId,
+    operationKey,
+  );
+  assert(spotTrade !== null, "Spot entry with simulated exact fills should be accepted");
+  assert(spotProtectionKey === operationKey, "Spot OCO identity must derive from the original OPEN operation key");
+  assert(spotProtectionKey !== clientOrderId, "Spot OCO identity must not hash the market-order clientOrderId a second time");
+}
+
 async function main() {
   let ledger: any = null;
   let ledgerCreates = 0;
@@ -581,6 +671,7 @@ async function main() {
   assert(cleanupCalls === 1, "a replay of an existing emergency intent must not restart the protection/close flow");
 
   await verifyExistingEmergencyWithoutCleanupProofBlocks();
+  await verifyEntryProtectionUsesOriginalOpenOperationKey();
   await verifyProtectionCleanupFailureBlocksMarketClose();
   await verifyFuturesAlgoProtectionPlacement();
   await verifyFuturesProtectionCleanupIsOperationScoped();
