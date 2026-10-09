@@ -60,7 +60,7 @@ async function main() {
     'missing FX reason should identify GBP->USD',
   );
   assert(result.totalTrades === 0, 'invalid FX backtest must not simulate trades');
-  console.log('Result: 5 passed, 0 failed');
+  console.log('Result: 4 passed, 0 failed');
 }
 
 main().catch(error => {
