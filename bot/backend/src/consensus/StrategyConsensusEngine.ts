@@ -59,6 +59,10 @@ const BOOTSTRAP_WIN_RATE = 0.5;
 
 // Conservative maximum contribution of one fresh strategy.
 const NEW_STRATEGY_MAX_WEIGHT = 0.20;
+const SINGLE_STRATEGY_MIN_CONFIDENCE = 0.72;
+// A single high-confidence voter may meet half the aggregate-weight threshold,
+// but never bypass the confidence, dominance, or later risk gates.
+const SINGLE_STRATEGY_WEIGHT_FACTOR = 0.5;
 
 export class StrategyConsensusEngine {
   private readonly logger = new Logger('ConsensusEngine');
@@ -265,6 +269,14 @@ export class StrategyConsensusEngine {
     const total_weight =
       total_buy_weight + total_sell_weight;
 
+    const singleHighConfidenceVote =
+      votes.length === 1 &&
+      votes[0].weight > 0 &&
+      votes[0].confidence >= SINGLE_STRATEGY_MIN_CONFIDENCE;
+    const minimumRequiredWeight = singleHighConfidenceVote
+      ? this.cfg.minimum_total_weight * SINGLE_STRATEGY_WEIGHT_FACTOR
+      : this.cfg.minimum_total_weight;
+
     reasoning.push(
       `[WEIGHTS] ` +
       `buy=${total_buy_weight.toFixed(6)} ` +
@@ -278,7 +290,7 @@ export class StrategyConsensusEngine {
       `buy=${total_buy_weight.toFixed(6)} ` +
       `sell=${total_sell_weight.toFixed(6)} ` +
       `total=${total_weight.toFixed(6)} ` +
-      `minimum=${this.cfg.minimum_total_weight.toFixed(6)} ` +
+      `minimum=${minimumRequiredWeight.toFixed(6)} ` +
       `votes=${votes.length} ` +
       `active=${activeEntries.length}`,
     );
@@ -305,9 +317,9 @@ export class StrategyConsensusEngine {
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Step 6: Minimum total weight
 
-    if (total_weight < this.cfg.minimum_total_weight) {
+    if (total_weight < minimumRequiredWeight) {
       reasoning.push(
-        `[INSUFFICIENT_WEIGHT] total=${total_weight.toFixed(4)} < min=${this.cfg.minimum_total_weight}`,
+        `[INSUFFICIENT_WEIGHT] total=${total_weight.toFixed(4)} < min=${minimumRequiredWeight}`,
       );
 
       this.logger.info(
@@ -395,12 +407,12 @@ export class StrategyConsensusEngine {
 
     if (
       winnersVotes.length === 1 &&
-      winnersVotes[0].confidence < 0.72
+      winnersVotes[0].confidence < SINGLE_STRATEGY_MIN_CONFIDENCE
     ) {
       reasoning.push(
         `[SINGLE_LOW_CONF] ` +
         `single strategy conf ` +
-        `${winnersVotes[0].confidence.toFixed(3)} < 0.72`,
+        `${winnersVotes[0].confidence.toFixed(3)} < ${SINGLE_STRATEGY_MIN_CONFIDENCE}`,
       );
 
       this.logger.info(
