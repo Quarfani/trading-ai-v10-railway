@@ -826,6 +826,7 @@ export class StartupReconciler {
           !symbol ||
           !['BUY', 'SELL'].includes(side) ||
           !signal ||
+          String(row.symbol ?? '').trim().toUpperCase() !== symbol ||
           String(signal.symbol ?? '').trim().toUpperCase() !== symbol ||
           String(signal.side ?? '').trim().toUpperCase() !== side ||
           !(quantity > 0) ||
@@ -887,9 +888,14 @@ export class StartupReconciler {
         if (
           !parentSignal ||
           String(parentSignal.symbol ?? '').trim().toUpperCase() !== symbol ||
-          String(parentSignal.side ?? '').trim().toUpperCase() !== side
+          String(parentSignal.side ?? '').trim().toUpperCase() !== side ||
+          Number(parentSignal.timestamp) !== Number(signal.timestamp) ||
+          Number(parentSignal.price) !== Number(signal.price) ||
+          Number(parentSignal.sl) !== Number(signal.sl) ||
+          Number(parentSignal.tp) !== Number(signal.tp) ||
+          String(parentSignal.source ?? '') !== String(signal.source ?? '')
         ) {
-          throw new Error('Parent OPEN request identity does not match the emergency close');
+          throw new Error('Parent OPEN request signal identity does not match the emergency close');
         }
 
         const entryFill = await exec.recoverOperationFillDetails(
