@@ -1,8 +1,8 @@
 /**
  * HISTORICAL ACCOUNT-CURRENCY CONVERSION
  *
- * Research-only, deterministic conversion resolver.
- * Rates are timestamped market observations. Missing/stale observations fail closed.
+ * Deterministic conversion resolver for timestamped market observations.
+ * Missing or stale observations fail closed; completed-bar timestamps prevent lookahead.
  */
 export interface HistoricalRatePoint {
   time: number;
