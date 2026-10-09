@@ -52,6 +52,7 @@ async function makeFixture(futures: boolean, recoverClose = true) {
   const childRequest = {
     schemaVersion: 1,
     purpose: 'PROTECTION_FAILURE_EMERGENCY_CLOSE',
+    protectionCleanupState: 'VERIFIED_NO_OPERATION_OWNED_ORDERS_ACTIVE',
     parentOperationKey,
     parentClientOrderId,
     symbol,
