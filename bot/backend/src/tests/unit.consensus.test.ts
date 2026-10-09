@@ -217,6 +217,55 @@ describe('StrategyConsensusEngine', () => {
     expect(result.total_sell_weight).toBeLessThan(0.25);
   });
 
+  test('rejects non-finite or out-of-range strategy confidence', () => {
+    for (const confidence of [Number.NaN, Number.POSITIVE_INFINITY, -0.1, 1.1]) {
+      const reg = new StrategyRegistry(mockDb);
+      reg.register(mockStrategy('BROKEN_CONFIDENCE', 'BUY', confidence));
+      const eng = new StrategyConsensusEngine(reg, {
+        minimum_total_weight: 0.01,
+        dominance_ratio: 0.5,
+      });
+      const result = eng.run(testCtx);
+      expect(result.outcome).toBe('NO_TRADE');
+      expect(result.signal).toBeNull();
+      expect(result.votes).toHaveLength(0);
+    }
+  });
+
+  test('rejects non-finite established strategy weights', () => {
+    const reg = new StrategyRegistry(mockDb);
+    reg.register(mockStrategy('BROKEN_METRICS', 'BUY', 0.8));
+    const entry = reg.getAll().get('BROKEN_METRICS')!;
+    entry.metrics = {
+      ...EMPTY_METRICS_DEFAULT,
+      sharpe_ratio: Number.POSITIVE_INFINITY,
+      rolling_win_rate: 1,
+      win_rate: 1,
+      rolling_expectancy: 1,
+      expectancy: 1,
+      max_drawdown: 0,
+      total_trades: 20,
+      rolling_trades: 20,
+    };
+
+    const eng = new StrategyConsensusEngine(reg, {
+      minimum_total_weight: 0.01,
+      dominance_ratio: 0.5,
+      gate: {
+        ...DEFAULT_CONSENSUS_CONFIG.gate,
+        min_win_rate: 0,
+        min_sharpe_ratio: 0,
+        min_rolling_expectancy: -Infinity,
+        max_drawdown: 1,
+        min_trades_for_gate: 15,
+      },
+    });
+    const result = eng.run(testCtx);
+    expect(result.outcome).toBe('NO_TRADE');
+    expect(result.signal).toBeNull();
+    expect(result.votes).toHaveLength(0);
+  });
+
   test('reasoning array is non-empty and structured', () => {
     const reg = new StrategyRegistry(mockDb);
     const eng = new StrategyConsensusEngine(reg);
