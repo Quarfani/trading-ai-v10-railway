@@ -601,6 +601,83 @@ export class RiskManager {
     };
   }
 
+  /**
+   * Recheck portfolio constraints on the exact volume and executable price that
+   * will be sent to the execution gateway. The earlier signal gate cannot be
+   * reused blindly after volume multipliers and final price refreshes.
+   */
+  validateFinalVolume(
+    openTrades: Trade[],
+    signal: Pick<Signal, 'symbol' | 'side' | 'sl' | 'timeframe'>,
+    volume: number,
+    executableEntry: number,
+    equity: number,
+    livePrices: Record<string, number> = {},
+  ): { passed: boolean; blockedBy: string; reasons: string[] } {
+    if (
+      !Number.isFinite(volume) || volume <= 0 ||
+      !Number.isFinite(executableEntry) || executableEntry <= 0 ||
+      !Number.isFinite(equity) || equity <= 0 ||
+      !Number.isFinite(signal.sl) || signal.sl <= 0 ||
+      !signal.symbol?.trim() ||
+      (signal.side !== 'BUY' && signal.side !== 'SELL') ||
+      (signal.side === 'BUY' && signal.sl >= executableEntry) ||
+      (signal.side === 'SELL' && signal.sl <= executableEntry)
+    ) {
+      return {
+        passed: false,
+        blockedBy: 'final_volume_invalid',
+        reasons: ['Final executable volume, price, equity, or stop is invalid'],
+      };
+    }
+
+    const timeframe = signal.timeframe ?? 'H1';
+    const exposureCheck = checkExposureAndLeverage(
+      openTrades,
+      { symbol: signal.symbol, volume, entry: executableEntry, timeframe },
+      equity,
+      this.config.accountCurrency ?? 'USD',
+      this.config.maxExposure ?? 1,
+      this.config.maxLeverage ?? 3,
+      livePrices,
+      this.mode === 'mt5',
+    );
+    if (!exposureCheck.allowed) {
+      return {
+        passed: false,
+        blockedBy: 'final_exposure_leverage',
+        reasons: [exposureCheck.reason],
+      };
+    }
+
+    const heatCheck = this.heat.check(
+      openTrades,
+      volume,
+      executableEntry,
+      signal.sl,
+      signal.symbol,
+      equity,
+      livePrices,
+      timeframe,
+    );
+    if (!heatCheck.allowed) {
+      return {
+        passed: false,
+        blockedBy: 'final_portfolio_heat',
+        reasons: [heatCheck.reason],
+      };
+    }
+
+    return {
+      passed: true,
+      blockedBy: '',
+      reasons: [
+        `Final gross leverage ${(exposureCheck.snapshot?.resultingLeverage ?? 0).toFixed(3)}x`,
+        `Final portfolio heat ${((heatCheck.currentHeat + heatCheck.addedRisk) * 100).toFixed(2)}%`,
+      ],
+    };
+  }
+
   recordClose(profit: number) {
     this.breaker.recordResult(profit);
   }
