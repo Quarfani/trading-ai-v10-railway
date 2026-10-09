@@ -196,6 +196,7 @@ export class BinanceExecutor {
         signal,
         quantity,
         beforeAmount,
+        beforeSignedAmount,
         brokerResponse,
         entryClientOrderId,
         entryEvidence,
@@ -292,12 +293,19 @@ export class BinanceExecutor {
     }
 
     const beforeAmount = Number(request.positionBeforeAmount);
-    if (!(beforeAmount > 0) || !Number.isFinite(beforeAmount)) {
+    const beforeSignedAmount = Number(request.positionBeforeSignedAmount);
+    if (
+      !(beforeAmount > 0) ||
+      !Number.isFinite(beforeAmount) ||
+      !Number.isFinite(beforeSignedAmount) ||
+      Math.abs(Math.abs(beforeSignedAmount) - beforeAmount) >
+        Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001)
+    ) {
       db.updateExecutionLedger(String(existing.executionId), {
         status: 'UNKNOWN',
-        error: 'Stored pre-close inventory is unavailable; automatic retry is forbidden',
+        error: 'Stored signed pre-close inventory is missing or inconsistent; automatic retry is forbidden',
       });
-      throw new Error('Stored pre-close inventory is unavailable; manual reconciliation is required');
+      throw new Error('Stored signed pre-close inventory is unavailable; manual reconciliation is required');
     }
 
     let recovered: any = null;
@@ -323,6 +331,7 @@ export class BinanceExecutor {
         signal,
         quantity,
         beforeAmount,
+        beforeSignedAmount,
         recovered,
         entryClientOrderId,
         request.entryEvidence ?? undefined,
@@ -357,6 +366,7 @@ export class BinanceExecutor {
     signal: Signal,
     quantity: number,
     beforeAmount: number,
+    beforeSignedAmount: number,
     brokerResponse: any,
     entryClientOrderId?: string,
     entryEvidence?: Record<string, unknown>,
@@ -399,18 +409,25 @@ export class BinanceExecutor {
     if (!after) {
       throw new Error('Emergency close executed but post-close position state is unavailable for ' + signal.symbol);
     }
-    const remaining = Math.abs(Number(after.positionAmt));
-    const expectedRemaining = beforeAmount - executedQty;
+    const actualSignedAfter = Number(after.positionAmt);
+    const remaining = Math.abs(actualSignedAfter);
+    const expectedSignedAfter = this.isFutures
+      ? beforeSignedAmount - (signal.side === 'BUY' ? executedQty : -executedQty)
+      : beforeSignedAmount - executedQty;
+    const expectedRemaining = Math.abs(expectedSignedAfter);
     if (
-      !Number.isFinite(remaining) ||
-      !Number.isFinite(expectedRemaining) ||
-      expectedRemaining < -tolerance ||
-      Math.abs(remaining - Math.max(0, expectedRemaining)) > tolerance
+      !Number.isFinite(beforeSignedAmount) ||
+      Math.abs(Math.abs(beforeSignedAmount) - beforeAmount) > tolerance ||
+      !Number.isFinite(actualSignedAfter) ||
+      !Number.isFinite(expectedSignedAfter) ||
+      (!this.isFutures && expectedSignedAfter < -tolerance) ||
+      Math.abs(actualSignedAfter - expectedSignedAfter) > tolerance
     ) {
       throw new Error(
-        'Emergency close inventory transition is unverified for ' +
-        signal.symbol + ': before=' + beforeAmount +
-        ' executed=' + executedQty + ' after=' + remaining,
+        'Emergency close signed inventory transition is unverified for ' +
+        signal.symbol + ': beforeSigned=' + beforeSignedAmount +
+        ' executed=' + executedQty + ' expectedAfter=' + expectedSignedAfter +
+        ' actualAfter=' + actualSignedAfter,
       );
     }
 
@@ -425,9 +442,9 @@ export class BinanceExecutor {
       requestedQuantity: quantity,
       executedQty,
       positionBeforeAmount: beforeAmount,
-      positionBeforeSignedAmount: Number(beforeAmount) * (signal.side === 'SELL' ? -1 : 1),
+      positionBeforeSignedAmount: beforeSignedAmount,
       positionAfterAmount: remaining,
-      positionAfterSignedAmount: Number(after.positionAmt),
+      positionAfterSignedAmount: actualSignedAfter,
       positionDeltaVerified: true,
       entryEvidence: entryEvidence ? { ...entryEvidence } : null,
       verifiedAt: Date.now(),
