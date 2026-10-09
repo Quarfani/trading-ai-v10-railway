@@ -56,6 +56,7 @@ function safeTokenEquals(left: string, right: string): boolean {
 }
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 10;
+const MAX_LOGIN_ATTEMPT_KEYS = 5_000;
 const WINDOW_MS = 15 * 60_000;
 let loginAttemptCleanupCounter = 0;
 
@@ -112,6 +113,12 @@ export function login(req: Request, res: Response) {
   if (!role) {
     const b = bucket && now < bucket.resetAt ? bucket : { count: 0, resetAt: now + WINDOW_MS };
     b.count++;
+
+    if (!loginAttempts.has(ip) && loginAttempts.size >= MAX_LOGIN_ATTEMPT_KEYS) {
+      const oldestIp = loginAttempts.keys().next().value;
+      if (oldestIp !== undefined) loginAttempts.delete(oldestIp);
+    }
+    loginAttempts.delete(ip);
     loginAttempts.set(ip, b);
     return res.status(401).json({ error: 'Wrong password' });
   }
