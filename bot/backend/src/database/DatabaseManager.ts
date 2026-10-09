@@ -383,9 +383,10 @@ export class DatabaseManager {
 
       const ledgerChanged = this.db.prepare(`
         UPDATE execution_ledger
-        SET status='EXECUTED', brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
+        SET status='EXECUTED', tradeId=?, brokerOrderId=?, resultJson=?, error=NULL, updatedAt=?
         WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
       `).run(
+        localTradeId,
         brokerOrderId != null ? String(brokerOrderId) : null,
         persistedResult === undefined ? null : JSON.stringify(persistedResult),
         Date.now(),
@@ -427,12 +428,24 @@ export class DatabaseManager {
 
     const matches = rows.filter(row => {
       if (Number(row.tradeId) === tradeId) return true;
-      if (!row.requestJson) return false;
-      try {
-        return Number(JSON.parse(row.requestJson)?.tradeId) === tradeId;
-      } catch {
-        return false;
+
+      let requestTradeId = Number.NaN;
+      let resultTradeId = Number.NaN;
+      if (row.requestJson) {
+        try {
+          requestTradeId = Number(JSON.parse(row.requestJson)?.tradeId);
+        } catch {
+          // A malformed request does not invalidate an independently persisted result identity.
+        }
       }
+      if (row.resultJson) {
+        try {
+          resultTradeId = Number(JSON.parse(row.resultJson)?.id);
+        } catch {
+          // A malformed result cannot establish historical identity.
+        }
+      }
+      return requestTradeId === tradeId || resultTradeId === tradeId;
     });
 
     const uniqueKeys = new Set(matches.map(row => row.operationKey));
