@@ -7,6 +7,7 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import * as crypto from 'crypto';
+import { getClientIp } from './clientIp';
 
 export type Role = 'admin' | 'operator';
 
@@ -56,6 +57,7 @@ function safeTokenEquals(left: string, right: string): boolean {
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 10;
 const WINDOW_MS = 15 * 60_000;
+let loginAttemptCleanupCounter = 0;
 
 function sign(payload: string): string {
   const sig = crypto.createHmac('sha256', EFFECTIVE_SECRET).update(payload).digest('hex');
@@ -86,8 +88,15 @@ function verify(token: string): { valid: boolean; expired: boolean; role?: Role 
 }
 
 export function login(req: Request, res: Response) {
-  const ip = req.ip ?? 'unknown';
+  const ip = getClientIp(req);
   const now = Date.now();
+
+  // Bound the in-memory login-attempt map under distributed credential guessing.
+  if (++loginAttemptCleanupCounter % 64 === 0) {
+    for (const [key, value] of loginAttempts) {
+      if (now >= value.resetAt) loginAttempts.delete(key);
+    }
+  }
   const bucket = loginAttempts.get(ip);
 
   if (bucket && now < bucket.resetAt && bucket.count >= MAX_ATTEMPTS) {
