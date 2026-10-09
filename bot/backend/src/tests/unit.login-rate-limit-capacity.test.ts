@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     assert(targetAfterFlood.statusCode === 429, 'active target throttle must survive a high-cardinality identity flood');
     assert(String(targetAfterFlood.body?.error).includes('Too many attempts'), 'existing per-IP lockout should remain authoritative');
 
-    console.log('Result: 14 passed, 0 failed');
+    console.log(`Result: ${passed} passed, 0 failed`);
   } finally {
     for (const key of ENV_KEYS) {
       const value = original[key];
