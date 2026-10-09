@@ -8,7 +8,7 @@
 - Venue matching for live execution and market-data source, so Binance execution cannot silently use MT5 tickers and vice versa.
 - HMAC-signed sessions with timing-safe signature/password comparisons.
 - Request body limits, CORS configuration, schema validation, global and expensive-research route limits.
-- Client IP resolution ignores client-supplied `X-Forwarded-For`; Railway `X-Real-IP` is used only when explicitly enabled. A proxy header cannot grant the local-loopback rate-limit exemption.
+- Client IP resolution ignores client-supplied `X-Forwarded-For`; Railway `X-Real-IP` is used only when explicitly enabled. A proxy header cannot grant the local-loopback rate-limit exemption. This trust applies only to requests arriving through Railway's public HTTP edge: private `railway.internal` traffic can bypass edge header sanitization and must not be accepted from untrusted internal callers while proxy trust is enabled.
 - Rate-limit and login-attempt state maps have capacity bounds; the rate-limit cleanup timer does not pin short-lived processes.
 - Unresolved execution operations and failed startup reconciliation block trading readiness.
 - Binance protection changes use persisted operation identity and restart reconciliation.
