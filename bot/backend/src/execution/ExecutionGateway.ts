@@ -369,6 +369,21 @@ export class ExecutionGateway {
       return false;
     }
 
+    const currentProtectionOperationKey =
+      this.config.mode === 'binance' && t.id
+        ? this.getProtectionOperationKeyForTrade(t.id)
+        : undefined;
+    if (
+      this.config.mode === 'binance' &&
+      t.id &&
+      !currentProtectionOperationKey
+    ) {
+      this.logger.error(
+        `SL/TP modification blocked because the current protection identity is unresolved for trade id=${t.id}`,
+      );
+      return false;
+    }
+
     const key = this.stableKey('MOVE_SL_TP', { id: t.id, ticket: t.ticket, symbol: t.symbol, sl: newSl, tp: newTp });
     const op = this.beginDestructive(key, 'MOVE_SL_TP', t, { newSl, newTp });
     if (op.existing) return op.existing.status === 'EXECUTED';
@@ -394,7 +409,20 @@ export class ExecutionGateway {
           );
         }
       } else if (this.config.mode === 'binance') {
-        if (!t.ticket || !(await this.binance.modifyPosition(t.ticket, t.symbol, t.side, newSl, newTp, key))) throw new Error('Binance modify rejected');
+        if (
+          !t.ticket ||
+          !(await this.binance.modifyPosition(
+            t.ticket,
+            t.symbol,
+            t.side,
+            newSl,
+            newTp,
+            key,
+            currentProtectionOperationKey,
+          ))
+        ) {
+          throw new Error('Binance modify rejected');
+        }
       } else {
         if (!t.ticket || !this.paper.modifyTrade(t.ticket, newSl, newTp)) throw new Error('Paper modify rejected');
       }
