@@ -136,7 +136,7 @@ async function verifyReplaceThenCancelExactPriorPair() {
     };
   };
   (executor as any).signedGet = async (path: string, params: any) => {
-    if (path === "/fapi/v1.algoOrder" || path === "/fapi/v1/algoOrder") {
+    if (path === "/fapi/v1/algoOrder") {
       const found = orders.get(String(params?.clientAlgoId ?? ""));
       if (found) return { ...found };
       const missing: any = new Error("Algo order not found");
