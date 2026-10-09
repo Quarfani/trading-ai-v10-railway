@@ -22,6 +22,7 @@
 import axios, { AxiosInstance } from 'axios';
 import * as crypto               from 'crypto';
 import { Signal, SystemConfig, Trade } from '../types/trading.types';
+import type { DatabaseManager } from '../database/DatabaseManager';
 import { getSymbolSpec }               from '../config/symbolConfig';
 import { Logger }                      from '../utils/Logger';
 
@@ -40,7 +41,7 @@ export class BinanceExecutor {
   // Map ticket → {slOrderId, tpOrderId}
   private orderMap = new Map<number, OpenOrderIds>();
 
-  constructor(private config: SystemConfig) {
+  constructor(private config: SystemConfig, private db?: DatabaseManager) {
     const isTestnet=config.binance.env==='testnet';
     this.isFutures=config.binance.futures;
     const baseURL=this.isFutures?(isTestnet?'https://testnet.binancefuture.com':'https://fapi.binance.com'):(isTestnet?'https://testnet.binance.vision':'https://api.binance.com');
@@ -55,81 +56,345 @@ export class BinanceExecutor {
   private async emergencyCloseAfterProtectionFailure(
     signal: Signal,
     quantity: number,
-    operationKey?: string,
+    parentOperationKey?: string,
+    entryClientOrderId?: string,
+    entryEvidence?: Record<string, unknown>,
+    failureReason = 'protection failure',
   ): Promise<void> {
+    const db = this.db;
+    if (!db) {
+      throw new Error('Emergency close ledger is unavailable; refusing to send an untracked Binance order');
+    }
+    if (!parentOperationKey || !parentOperationKey.trim()) {
+      throw new Error('Emergency close parent operation key is missing; refusing to send an untracked Binance order');
+    }
+    if (!(quantity > 0) || !Number.isFinite(quantity)) {
+      throw new Error('Emergency close quantity is invalid');
+    }
+
     const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
     const spec = getSymbolSpec(signal.symbol);
+    const emergencyOperationKey = 'PROTECTION_FAIL:' + parentOperationKey;
+    const emergencyClientOrderId = this.makeClientOrderId(emergencyOperationKey);
+    const existing = db.getExecutionByOperationKey(emergencyOperationKey);
+
+    if (existing) {
+      await this.recoverOrBlockExistingEmergencyClose(
+        signal,
+        quantity,
+        parentOperationKey,
+        entryClientOrderId,
+        emergencyOperationKey,
+        emergencyClientOrderId,
+        existing,
+      );
+      return;
+    }
 
     const before = await this.getPosition(signal.symbol);
     if (!before) {
-      throw new Error(
-        `Emergency close position state unavailable for ${signal.symbol}`,
-      );
+      throw new Error('Emergency close position state unavailable for ' + signal.symbol);
     }
 
     const beforeAmount = Math.abs(Number(before.positionAmt));
-    const quantityTolerance = Math.max(
-      spec.volumeStep,
-      Math.abs(quantity) * 0.0001,
-    );
+    const quantityTolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
     if (
       !Number.isFinite(beforeAmount) ||
-      beforeAmount < quantity - quantityTolerance
+      beforeAmount + quantityTolerance < quantity
     ) {
       throw new Error(
-        `Emergency close quantity exceeds verified Binance inventory for ${signal.symbol}: requested=${quantity} available=${beforeAmount}`,
+        'Emergency close quantity exceeds verified Binance inventory for ' +
+        signal.symbol + ': requested=' + quantity + ' available=' + beforeAmount,
       );
     }
 
-    const result = await this.signedPost(
-      this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
-      {
-        symbol: signal.symbol,
-        side: closeSide,
-        type: 'MARKET',
-        quantity: this.formatQty(quantity, spec.volumeStep),
-        ...(this.isFutures ? { reduceOnly: 'true' } : {}),
-        ...(operationKey
-          ? { newClientOrderId: this.makeClientOrderId(`PROTECTION_FAIL:${operationKey}`) }
-          : {}),
-      },
-    );
+    const request = {
+      schemaVersion: 1,
+      purpose: 'PROTECTION_FAILURE_EMERGENCY_CLOSE',
+      parentOperationKey,
+      parentClientOrderId: entryClientOrderId ?? null,
+      symbol: String(signal.symbol).toUpperCase(),
+      entrySide: signal.side,
+      closeSide,
+      requestedQuantity: quantity,
+      positionBeforeAmount: beforeAmount,
+      signal: { ...signal },
+      entryEvidence: entryEvidence ? { ...entryEvidence } : null,
+      failureReason: String(failureReason || 'protection failure').slice(0, 500),
+      emergencyClientOrderId,
+    };
 
-    const status = String(result?.status ?? '').toUpperCase();
-    const executed = Number(result?.executedQty ?? result?.origQty ?? 0);
-    if (status && status !== 'FILLED') {
-      throw new Error(`Emergency close order not fully filled: status=${status}`);
-    }
-    if (!(executed > 0) || executed + Math.max(spec.volumeStep, 1e-12) < quantity) {
+    const executionId = crypto.randomUUID();
+    const claimed = db.createExecutionLedger({
+      executionId,
+      operationKey: emergencyOperationKey,
+      action: 'PROTECTION_FAIL_CLOSE',
+      status: 'PENDING',
+      symbol: signal.symbol,
+      side: closeSide,
+      volume: quantity,
+      request,
+    });
+    if (!claimed) {
       throw new Error(
-        `Emergency close executed insufficient quantity: requested=${quantity} executed=${executed}`,
+        'Emergency close intent could not be claimed; no order was sent and reconciliation is required',
       );
     }
 
-    {
-      const after = await this.getPosition(signal.symbol);
-      if (!after) {
-        throw new Error(
-          `Emergency close executed but post-close position state is unavailable for ${signal.symbol}`,
-        );
+    let brokerResponse: any = null;
+    try {
+      brokerResponse = await this.signedPost(
+        this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
+        {
+          symbol: signal.symbol,
+          side: closeSide,
+          type: 'MARKET',
+          quantity: this.formatQty(quantity, spec.volumeStep),
+          ...(this.isFutures ? { reduceOnly: 'true' } : {}),
+          newClientOrderId: emergencyClientOrderId,
+        },
+      );
+
+      await this.verifyAndRecordEmergencyClose(
+        executionId,
+        emergencyOperationKey,
+        emergencyClientOrderId,
+        parentOperationKey,
+        signal,
+        quantity,
+        beforeAmount,
+        brokerResponse,
+        entryClientOrderId,
+        entryEvidence,
+      );
+    } catch (e: any) {
+      const current = db.getExecutionByOperationKey(emergencyOperationKey);
+      if (current && (current.status === 'PENDING' || current.status === 'UNKNOWN')) {
+        const patch: any = {
+          status: 'UNKNOWN',
+          error: String(e?.message ?? e).slice(0, 1000),
+        };
+        if (brokerResponse && brokerResponse.orderId != null) {
+          patch.brokerOrderId = brokerResponse.orderId;
+        }
+        if (brokerResponse) {
+          patch.result = {
+            schemaVersion: 1,
+            emergencyClientOrderId,
+            brokerOrderId: brokerResponse.orderId ?? null,
+            brokerStatus: String(brokerResponse.status ?? 'UNKNOWN').toUpperCase(),
+            executedQty: Number.isFinite(Number(brokerResponse.executedQty))
+              ? Number(brokerResponse.executedQty)
+              : null,
+            positionBeforeAmount: beforeAmount,
+            positionDeltaVerified: false,
+            parentOperationKey,
+          };
+        }
+        db.updateExecutionLedger(String(current.executionId), patch);
       }
-      const remaining = Math.abs(Number(after.positionAmt));
-      const expectedRemaining = beforeAmount - executed;
-      if (
-        !Number.isFinite(remaining) ||
-        !Number.isFinite(expectedRemaining) ||
-        expectedRemaining < -quantityTolerance ||
-        Math.abs(remaining - Math.max(0, expectedRemaining)) > quantityTolerance
-      ) {
-        throw new Error(
-          `Emergency close produced an unverified Binance inventory transition for ${signal.symbol}: before=${beforeAmount} executed=${executed} after=${remaining}`,
-        );
-      }
+      throw new Error(
+        'Emergency close could not be authoritatively confirmed for ' +
+        signal.symbol + ': ' + String(e?.message ?? e),
+      );
     }
 
     this.logger.error(
-      `[Binance] Emergency close filled after protection failure: ${signal.symbol} qty=${executed}`,
+      '[Binance] Emergency close verified after protection failure: ' +
+      signal.symbol + ' qty=' + quantity,
     );
+  }
+
+  private async recoverOrBlockExistingEmergencyClose(
+    signal: Signal,
+    quantity: number,
+    parentOperationKey: string,
+    entryClientOrderId: string | undefined,
+    emergencyOperationKey: string,
+    emergencyClientOrderId: string,
+    existing: any,
+  ): Promise<void> {
+    const db = this.db;
+    if (!db) throw new Error('Emergency close ledger is unavailable');
+
+    let request: any;
+    try {
+      request = JSON.parse(String(existing.requestJson ?? 'null'));
+    } catch {
+      throw new Error('Existing emergency close ledger request is malformed; manual reconciliation is required');
+    }
+    const spec = getSymbolSpec(signal.symbol);
+    const tolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
+    if (
+      !request ||
+      String(request.parentOperationKey ?? '') !== parentOperationKey ||
+      String(request.symbol ?? '').toUpperCase() !== String(signal.symbol).toUpperCase() ||
+      Math.abs(Number(request.requestedQuantity) - quantity) > tolerance ||
+      (entryClientOrderId && String(request.parentClientOrderId ?? '') !== entryClientOrderId)
+    ) {
+      throw new Error('Existing emergency close identity conflicts with this open operation; manual reconciliation is required');
+    }
+
+    if (existing.status === 'EXECUTED') {
+      let result: any;
+      try {
+        result = JSON.parse(String(existing.resultJson ?? 'null'));
+      } catch {
+        throw new Error('Executed emergency close result is malformed; manual reconciliation is required');
+      }
+      if (
+        result?.positionDeltaVerified !== true ||
+        String(result?.status ?? '').toUpperCase() !== 'FILLED' ||
+        Math.abs(Number(result?.executedQty) - quantity) > tolerance ||
+        !(Number(result?.orderId) > 0)
+      ) {
+        throw new Error('Executed emergency close lacks complete broker evidence; manual reconciliation is required');
+      }
+      return;
+    }
+
+    if (existing.status !== 'PENDING' && existing.status !== 'UNKNOWN') {
+      throw new Error('Existing emergency close has terminal status=' + String(existing.status) + '; automatic retry is forbidden');
+    }
+
+    const beforeAmount = Number(request.positionBeforeAmount);
+    if (!(beforeAmount > 0) || !Number.isFinite(beforeAmount)) {
+      db.updateExecutionLedger(String(existing.executionId), {
+        status: 'UNKNOWN',
+        error: 'Stored pre-close inventory is unavailable; automatic retry is forbidden',
+      });
+      throw new Error('Stored pre-close inventory is unavailable; manual reconciliation is required');
+    }
+
+    let recovered: any = null;
+    try {
+      recovered = await this.findOrderByClientId(signal.symbol, emergencyClientOrderId);
+    } catch {
+      recovered = null;
+    }
+    if (!recovered) {
+      db.updateExecutionLedger(String(existing.executionId), {
+        status: 'UNKNOWN',
+        error: 'Exact emergency clientOrderId was not found; no replacement order was sent',
+      });
+      throw new Error('Emergency close outcome is ambiguous; exact order was not found and no replacement order was sent');
+    }
+
+    try {
+      await this.verifyAndRecordEmergencyClose(
+        String(existing.executionId),
+        emergencyOperationKey,
+        emergencyClientOrderId,
+        parentOperationKey,
+        signal,
+        quantity,
+        beforeAmount,
+        recovered,
+        entryClientOrderId,
+        request.entryEvidence ?? undefined,
+      );
+    } catch (e: any) {
+      db.updateExecutionLedger(String(existing.executionId), {
+        status: 'UNKNOWN',
+        brokerOrderId: recovered.orderId ?? undefined,
+        result: {
+          schemaVersion: 1,
+          emergencyClientOrderId,
+          brokerOrderId: recovered.orderId ?? null,
+          brokerStatus: String(recovered.status ?? 'UNKNOWN').toUpperCase(),
+          executedQty: Number.isFinite(Number(recovered.executedQty))
+            ? Number(recovered.executedQty)
+            : null,
+          positionBeforeAmount: beforeAmount,
+          positionDeltaVerified: false,
+          parentOperationKey,
+        },
+        error: String(e?.message ?? e).slice(0, 1000),
+      });
+      throw new Error('Recovered emergency close could not be verified; manual reconciliation is required');
+    }
+  }
+
+  private async verifyAndRecordEmergencyClose(
+    executionId: string,
+    emergencyOperationKey: string,
+    emergencyClientOrderId: string,
+    parentOperationKey: string,
+    signal: Signal,
+    quantity: number,
+    beforeAmount: number,
+    brokerResponse: any,
+    entryClientOrderId?: string,
+    entryEvidence?: Record<string, unknown>,
+  ): Promise<void> {
+    const db = this.db;
+    if (!db) throw new Error('Emergency close ledger is unavailable');
+
+    const spec = getSymbolSpec(signal.symbol);
+    const tolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
+    const status = String(brokerResponse?.status ?? '').toUpperCase();
+    const orderId = Number(brokerResponse?.orderId);
+    const executedQty = Number(brokerResponse?.executedQty);
+    if (status !== 'FILLED') {
+      throw new Error('Emergency close order is not authoritatively FILLED; status=' + (status || 'MISSING'));
+    }
+    if (!(orderId > 0) || !Number.isFinite(orderId)) {
+      throw new Error('Emergency close order id is missing or invalid');
+    }
+    if (
+      !(executedQty > 0) ||
+      !Number.isFinite(executedQty) ||
+      Math.abs(executedQty - quantity) > tolerance
+    ) {
+      throw new Error(
+        'Emergency close executed quantity mismatch: requested=' + quantity + ' executed=' + executedQty,
+      );
+    }
+
+    const after = await this.getPosition(signal.symbol);
+    if (!after) {
+      throw new Error('Emergency close executed but post-close position state is unavailable for ' + signal.symbol);
+    }
+    const remaining = Math.abs(Number(after.positionAmt));
+    const expectedRemaining = beforeAmount - executedQty;
+    if (
+      !Number.isFinite(remaining) ||
+      !Number.isFinite(expectedRemaining) ||
+      expectedRemaining < -tolerance ||
+      Math.abs(remaining - Math.max(0, expectedRemaining)) > tolerance
+    ) {
+      throw new Error(
+        'Emergency close inventory transition is unverified for ' +
+        signal.symbol + ': before=' + beforeAmount +
+        ' executed=' + executedQty + ' after=' + remaining,
+      );
+    }
+
+    const result = {
+      schemaVersion: 1,
+      emergencyOperationKey,
+      emergencyClientOrderId,
+      parentOperationKey,
+      parentClientOrderId: entryClientOrderId ?? null,
+      orderId,
+      status,
+      requestedQuantity: quantity,
+      executedQty,
+      positionBeforeAmount: beforeAmount,
+      positionAfterAmount: remaining,
+      positionDeltaVerified: true,
+      entryEvidence: entryEvidence ? { ...entryEvidence } : null,
+      verifiedAt: Date.now(),
+    };
+    const changed = db.updateExecutionLedger(executionId, {
+      status: 'EXECUTED',
+      brokerOrderId: orderId,
+      result,
+      error: null,
+    });
+    if (!changed) {
+      throw new Error('Broker close was verified but emergency ledger settlement failed');
+    }
   }
 
   private async getSpotOrderFillSummary(
@@ -665,12 +930,13 @@ export class BinanceExecutor {
 
   // ─── Place Order with SL/TP ────────────────────────────────────────────
 
-  async placeMarketOrder(signal: Signal, quantity: number, clientOrderId?: string): Promise<Trade | null> {
+  async placeMarketOrder(signal: Signal, quantity: number, clientOrderId?: string, operationKey?: string): Promise<Trade | null> {
     const spec = getSymbolSpec(signal.symbol);
     if (!this.isFutures && signal.side === 'SELL') {
       this.logger.error(`[Binance Spot] SELL/short semantics are unsupported by this executor; trade blocked`);
       return null;
     }
+    let emergencyCloseAttempted = false;
     try {
       // 1. Market entry order
       const entry = await this.signedPost(
@@ -747,10 +1013,20 @@ export class BinanceExecutor {
         }
       } catch (protectionError: any) {
         this.logger.error(`CRITICAL: protective orders failed for ${signal.symbol}: ${protectionError?.message ?? protectionError}`);
+        emergencyCloseAttempted = true;
         const emergencyError = await this.emergencyCloseAfterProtectionFailure(
           signal,
           executedQty,
+          operationKey,
           clientOrderId,
+          {
+            orderId: ticket,
+            entryPrice: fillPrice,
+            executedQty,
+            commission: entryCommission,
+            commissionCurrency: entryCommissionCurrency ?? null,
+          },
+          String(protectionError?.message ?? protectionError),
         ).catch(e => e);
         if (emergencyError) throw new Error(`Protection failed and emergency close failed for ${signal.symbol}`);
         if (this.isFutures) {
@@ -781,6 +1057,10 @@ export class BinanceExecutor {
       };
 
     } catch (e: any) {
+      if (emergencyCloseAttempted) {
+        this.logger.error('Emergency-close recovery required; refusing to retry entry/protection flow: ' + String(e?.message ?? e));
+        return null;
+      }
       if (clientOrderId) {
         const recovered = await this.findOrderByClientId(signal.symbol, clientOrderId);
         if (recovered && !['CANCELED','REJECTED','EXPIRED'].includes(String(recovered.status ?? '').toUpperCase())) {
@@ -818,10 +1098,20 @@ export class BinanceExecutor {
               : summary.feeQuote;
             entryCommissionCurrencyRecovered = summary.currency;
           } catch (summaryError: any) {
+              emergencyCloseAttempted = true;
               const emergencyError = await this.emergencyCloseAfterProtectionFailure(
                 signal,
                 executedQtyRecovered,
+                operationKey,
                 clientOrderId,
+                {
+                  orderId: recoveredTicket,
+                  entryPrice: fillPriceRecovered,
+                  executedQty: executedQtyRecovered,
+                  commission: null,
+                  commissionCurrency: null,
+                },
+                String(summaryError?.message ?? summaryError),
               ).catch(e => e);
               if (emergencyError) {
                 throw new Error(
@@ -853,10 +1143,20 @@ export class BinanceExecutor {
               clientOrderId,
             );
           } catch (protectionError: any) {
+            emergencyCloseAttempted = true;
             const emergencyError = await this.emergencyCloseAfterProtectionFailure(
               signal,
               executedQtyRecovered,
+              operationKey,
               clientOrderId,
+              {
+                orderId: recoveredTicket,
+                entryPrice: fillPriceRecovered,
+                executedQty: executedQtyRecovered,
+                commission: entryCommissionRecovered,
+                commissionCurrency: entryCommissionCurrencyRecovered ?? null,
+              },
+              String(protectionError?.message ?? protectionError),
             ).catch(e => e);
             if (emergencyError) throw new Error(`Recovered order protection failed and emergency close failed: ${protectionError?.message ?? protectionError}`);
             if (this.isFutures) {
