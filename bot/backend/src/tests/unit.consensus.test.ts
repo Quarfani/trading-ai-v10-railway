@@ -170,13 +170,12 @@ describe('StrategyConsensusEngine', () => {
     expect(r.block_reason).toBe('SINGLE_STRATEGY_LOW_CONFIDENCE');
   });
 
-  test('blocks a single high-confidence strategy when weight is below minimum', () => {
+  test('approves a single high-confidence fresh strategy below the aggregate weight threshold', () => {
     const reg = new StrategyRegistry(mockDb);
-
     reg.register(mockStrategy('ICHIMOKU', 'SELL', 0.80));
 
-    const e = reg.getAll().get('ICHIMOKU')!;
-    e.metrics = {
+    const entry = reg.getAll().get('ICHIMOKU')!;
+    entry.metrics = {
       ...EMPTY_METRICS_DEFAULT,
       total_trades: 0,
       rolling_trades: 0,
@@ -186,12 +185,36 @@ describe('StrategyConsensusEngine', () => {
       minimum_total_weight: 0.25,
       dominance_ratio: 0.60,
     });
+    const result = eng.run(testCtx);
 
-    const r = eng.run(testCtx);
+    expect(result.outcome).toBe('SELL');
+    expect(result.block_reason).toBe('APPROVED');
+    expect(result.signal).not.toBeNull();
+    expect(result.total_sell_weight).toBeLessThan(0.25);
+    expect(result.total_sell_weight).toBeGreaterThanOrEqual(0.125);
+  });
 
-    expect(r.outcome).toBe('NO_TRADE');
-    expect(r.block_reason).toBe('INSUFFICIENT_WEIGHT');
-    expect(r.signal).toBeNull();
+  test('keeps a medium-confidence single strategy blocked below the aggregate weight threshold', () => {
+    const reg = new StrategyRegistry(mockDb);
+    reg.register(mockStrategy('ICHIMOKU', 'SELL', 0.56));
+
+    const entry = reg.getAll().get('ICHIMOKU')!;
+    entry.metrics = {
+      ...EMPTY_METRICS_DEFAULT,
+      total_trades: 0,
+      rolling_trades: 0,
+    };
+
+    const eng = new StrategyConsensusEngine(reg, {
+      minimum_total_weight: 0.25,
+      dominance_ratio: 0.60,
+    });
+    const result = eng.run(testCtx);
+
+    expect(result.outcome).toBe('NO_TRADE');
+    expect(result.block_reason).toBe('INSUFFICIENT_WEIGHT');
+    expect(result.signal).toBeNull();
+    expect(result.total_sell_weight).toBeLessThan(0.25);
   });
 
   test('reasoning array is non-empty and structured', () => {
