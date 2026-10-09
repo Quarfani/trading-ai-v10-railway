@@ -358,6 +358,86 @@ async function verifySpotOcoCleanupIsOperationScoped() {
   assert(blocked.deletedOrderIds.length === 1 && blocked.deletedOrderIds[0] === 930, "Spot cleanup must cancel only the exact owned OCO list, never an unrelated order");
 }
 
+async function verifyExistingEmergencyWithoutCleanupProofBlocks() {
+  let ledger: any = {
+    executionId: "legacy-child",
+    operationKey: "PROTECTION_FAIL:legacy-parent",
+    action: "PROTECTION_FAIL_CLOSE",
+    status: "UNKNOWN",
+    requestJson: JSON.stringify({
+      schemaVersion: 1,
+      parentOperationKey: "legacy-parent",
+      parentClientOrderId: "legacy-entry-client",
+      symbol: "BTCUSDT",
+      requestedQuantity: 1,
+      positionBeforeAmount: 1,
+      positionBeforeSignedAmount: 1,
+      submissionState: "SUBMISSION_ARMED",
+      signal: {
+        symbol: "BTCUSDT",
+        side: "BUY",
+        price: 100,
+        sl: 90,
+        tp: 120,
+        confidence: 0.8,
+        timestamp: 123456,
+        source: "legacy-test",
+      },
+    }),
+    resultJson: null,
+  };
+  let exactOrderLookups = 0;
+  const db = {
+    updateExecutionLedger(executionId: string, patch: any) {
+      if (executionId !== ledger.executionId) return false;
+      ledger = { ...ledger, ...patch };
+      return true;
+    },
+  };
+  const executor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any, db as any);
+  (executor as any).findOrderByClientId = async () => {
+    exactOrderLookups += 1;
+    return {
+      symbol: "BTCUSDT",
+      clientOrderId: "legacy-emergency-client",
+      orderId: 777,
+      status: "FILLED",
+      executedQty: "1",
+    };
+  };
+
+  let threw = false;
+  try {
+    await (executor as any).recoverOrBlockExistingEmergencyClose(
+      {
+        symbol: "BTCUSDT",
+        side: "BUY",
+        price: 100,
+        sl: 90,
+        tp: 120,
+        confidence: 0.8,
+        timestamp: 123456,
+        source: "legacy-test",
+      },
+      1,
+      "legacy-parent",
+      "legacy-entry-client",
+      "PROTECTION_FAIL:legacy-parent",
+      "legacy-emergency-client",
+      { ...ledger },
+    );
+  } catch (error: any) {
+    threw = String(error?.message ?? error).includes("cleanup proof");
+  }
+
+  assert(threw, "existing emergency recovery must reject a ledger without durable protection-cleanup evidence");
+  assert(exactOrderLookups === 0, "legacy cleanup-ambiguous emergency must not perform automatic broker settlement");
+  assert(ledger.status === "UNKNOWN", "legacy cleanup-ambiguous emergency must remain UNKNOWN");
+  assert(String(ledger.error).includes("protection-cleanup proof"), "the durable ledger must explain the missing safety evidence");
+}
+
 async function main() {
   let ledger: any = null;
   let ledgerCreates = 0;
@@ -500,6 +580,7 @@ async function main() {
   assert(positionReads === 3, "recovery must query and validate the post-close inventory again");
   assert(cleanupCalls === 1, "a replay of an existing emergency intent must not restart the protection/close flow");
 
+  await verifyExistingEmergencyWithoutCleanupProofBlocks();
   await verifyProtectionCleanupFailureBlocksMarketClose();
   await verifyFuturesAlgoProtectionPlacement();
   await verifyFuturesProtectionCleanupIsOperationScoped();
