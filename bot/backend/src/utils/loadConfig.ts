@@ -109,6 +109,23 @@ export function loadConfig(): SystemConfig {
     );
   }
 
+  if (
+    (deploymentProfile === 'local' ||
+      deploymentProfile === 'railway-paper' ||
+      deploymentProfile === 'cloud-paper') &&
+    mode !== 'paper'
+  ) {
+    throw new Error(
+      `[Config] ${deploymentProfile} profile only permits MODE=paper`,
+    );
+  }
+  if (deploymentProfile === 'cloud-testnet' && mode !== 'binance') {
+    throw new Error('[Config] cloud-testnet profile requires MODE=binance');
+  }
+  if (deploymentProfile === 'production' && mode === 'paper') {
+    throw new Error('[Config] production profile requires a non-paper broker mode');
+  }
+
   const rawTfs = env('TIMEFRAMES', 'M5,M15,H1')
     .split(',')
     .map(s => s.trim())
@@ -165,25 +182,19 @@ export function loadConfig(): SystemConfig {
       );
     }
 
-    if (
-      dataSource !== 'binance' &&
-      dataSource !== 'auto'
-    ) {
+    if (dataSource !== 'binance') {
       throw new Error(
-        '[Config] railway-paper profile requires DATA_SOURCE=binance or DATA_SOURCE=auto',
+        '[Config] railway-paper profile requires DATA_SOURCE=binance; auto mode may select MT5',
       );
     }
 
-    if (
-      dataSource === 'binance' &&
-      !symbols.every(s =>
-        /(USDT|USDC|BUSD)$/.test(
-          s.toUpperCase().replace(/[^A-Z0-9]/g, ''),
-        ),
-      )
-    ) {
+    if (!symbols.every(s =>
+      /(USDT|USDC|BUSD)$/.test(
+        s.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+      ),
+    )) {
       throw new Error(
-        '[Config] railway-paper profile with DATA_SOURCE=binance only supports Binance quote symbols (USDT/USDC/BUSD)',
+        '[Config] railway-paper profile only supports Binance quote symbols (USDT/USDC/BUSD)',
       );
     }
 
@@ -439,18 +450,40 @@ export function loadConfig(): SystemConfig {
     );
   }
 
-  const liveTradingAck = env(
-    'LIVE_TRADING_ACK',
-    '',
-  );
+  if (deploymentProfile === 'cloud-testnet') {
+    if (binanceEnv !== 'testnet') {
+      throw new Error('[Config] cloud-testnet profile requires BINANCE_ENV=testnet');
+    }
+    if (dataSource !== 'binance') {
+      throw new Error('[Config] cloud-testnet profile requires DATA_SOURCE=binance');
+    }
+    if (!symbols.every(s =>
+      /(USDT|USDC|BUSD)$/.test(
+        s.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+      ),
+    )) {
+      throw new Error('[Config] cloud-testnet profile only supports Binance quote symbols (USDT/USDC/BUSD)');
+    }
+  }
+
+  if (deploymentProfile === 'production' && mode === 'binance' && binanceEnv !== 'mainnet') {
+    throw new Error('[Config] production Binance profile requires BINANCE_ENV=mainnet');
+  }
+
+  const liveTradingAck = env('LIVE_TRADING_ACK', '');
   if (
-    mode !== 'paper' &&
+    mode === 'binance' &&
     binanceEnv === 'mainnet' &&
-    liveTradingAck !==
-      'I_UNDERSTAND_LIVE_RISK'
+    liveTradingAck !== 'I_UNDERSTAND_LIVE_RISK'
   ) {
     throw new Error(
       '[Config] Mainnet live trading requires LIVE_TRADING_ACK=I_UNDERSTAND_LIVE_RISK',
+    );
+  }
+
+  if (mode === 'mt5' && env('MT5_LIVE_TRADING_ACK', '') !== 'I_UNDERSTAND_MT5_LIVE_RISK') {
+    throw new Error(
+      '[Config] MT5 live trading requires MT5_LIVE_TRADING_ACK=I_UNDERSTAND_MT5_LIVE_RISK',
     );
   }
 
