@@ -182,6 +182,22 @@ export class StrategyConsensusEngine {
         continue;
       }
 
+      // Reject malformed plugin output before any weight or direction math.
+      if (ss.signal !== 'BUY' && ss.signal !== 'SELL' && ss.signal !== 'NONE') {
+        reasoning.push(`[INVALID_STRATEGY_SIGNAL] ${entry.strategy.name}: unsupported vote`);
+        this.logger.warn(`[CONSENSUS_SKIP] ${ctx.symbol} strategy=${entry.strategy.name} reason=invalid_vote`);
+        continue;
+      }
+      if (
+        !Number.isFinite(ss.confidence) ||
+        ss.confidence < 0 ||
+        ss.confidence > 1
+      ) {
+        reasoning.push(`[INVALID_STRATEGY_CONFIDENCE] ${entry.strategy.name}: confidence must be finite and in [0,1]`);
+        this.logger.warn(`[CONSENSUS_SKIP] ${ctx.symbol} strategy=${entry.strategy.name} reason=invalid_confidence`);
+        continue;
+      }
+
       // Attach current strategy metrics to the generated signal.
       ss.metrics = entry.metrics;
 
@@ -204,8 +220,13 @@ export class StrategyConsensusEngine {
         entry.metrics.total_trades <
         this.cfg.gate.min_trades_for_gate;
 
-      // Compute the weight once.
+      // Compute the weight once. Invalid metrics must not poison aggregate totals.
       const weight = this.computeWeight(ss, isNew);
+      if (!Number.isFinite(weight) || weight <= 0) {
+        reasoning.push(`[INVALID_STRATEGY_WEIGHT] ${entry.strategy.name}: weight must be finite and positive`);
+        this.logger.warn(`[CONSENSUS_SKIP] ${ctx.symbol} strategy=${entry.strategy.name} reason=invalid_weight`);
+        continue;
+      }
 
       votes.push({
         strategy_name: ss.strategy_name,
@@ -268,6 +289,24 @@ export class StrategyConsensusEngine {
 
     const total_weight =
       total_buy_weight + total_sell_weight;
+
+    if (
+      !Number.isFinite(total_buy_weight) ||
+      !Number.isFinite(total_sell_weight) ||
+      !Number.isFinite(total_weight)
+    ) {
+      reasoning.push('[NON_FINITE_CONSENSUS_WEIGHT] aggregate vote weight is invalid');
+      this.logger.error(`[CONSENSUS_BLOCK] ${ctx.symbol} reason=NON_FINITE_CONSENSUS_WEIGHT`);
+      return this.noTrade(
+        'PERFORMANCE_GATE_FAILED',
+        0,
+        0,
+        [],
+        disabledSummary,
+        reasoning,
+        t0,
+      );
+    }
 
     const singleHighConfidenceVote =
       votes.length === 1 &&
