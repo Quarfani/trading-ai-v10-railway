@@ -1,6 +1,5 @@
 # Railway-ready production image for the Trading Core.
-# Uses the committed npm lockfile for deterministic production installs and switches
-# to npm install only as a compatibility fallback when no lockfile is present.
+# A committed npm lockfile is mandatory; builds fail closed if it is missing.
 FROM node:22-slim AS build
 
 WORKDIR /app
