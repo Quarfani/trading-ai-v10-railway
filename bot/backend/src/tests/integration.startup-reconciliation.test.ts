@@ -540,6 +540,25 @@ async function main() {
     ticket: 602, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 1,
     entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
   });
+  const binanceModifyOpenSignal = {
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    timestamp: Date.now() - 1000,
+    price: 100,
+    sl: 90,
+    tp: 120,
+    source: 'TEST',
+  };
+  binanceModifyDb.createExecutionLedger({
+    executionId: 'binance-startup-modify-open',
+    operationKey: 'binance-startup-modify-open-op',
+    action: 'OPEN',
+    status: 'EXECUTED',
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    volume: 1,
+    request: { tradeId: binanceModifyTradeId, timeframe: 'H1', signal: binanceModifyOpenSignal, volume: 1 },
+  });
   binanceModifyDb.createExecutionLedger({
     executionId: 'binance-startup-modify',
     operationKey: 'binance-startup-modify-op',
@@ -553,7 +572,9 @@ async function main() {
 
   const originalModifyGetAllPositions = (BinanceExecutor.prototype as any).getAllPositions;
   const originalModifyGetOpenOrders = (BinanceExecutor.prototype as any).getOpenOrders;
+  const originalModifyGetOpenAlgoOrders = (BinanceExecutor.prototype as any).getOpenAlgoOrders;
   const originalModifyRecoverProtection = (BinanceExecutor.prototype as any).recoverProtectionByOperation;
+  const originalModifyCancelProtection = (BinanceExecutor.prototype as any).cancelProtectionByOperationKey;
   try {
     (BinanceExecutor.prototype as any).ping = async () => true;
     (BinanceExecutor.prototype as any).getAllPositions = async () => [{
@@ -562,17 +583,33 @@ async function main() {
       entryPrice: 100,
       unrealizedProfit: 0,
     }];
-    (BinanceExecutor.prototype as any).getOpenOrders = async () => [
-      { side: 'SELL', type: 'STOP_MARKET', closePosition: true, stopPrice: '95' },
-      { side: 'SELL', type: 'TAKE_PROFIT_MARKET', closePosition: true, stopPrice: '110' },
-    ];
+    (BinanceExecutor.prototype as any).getOpenOrders = async () => [];
+    const modifyProbe = new BinanceExecutor(futuresCfg);
+    const modifySlClientId = (modifyProbe as any).makeProtectionClientOrderId('binance-startup-modify-op', 'SL');
+    const modifyTpClientId = (modifyProbe as any).makeProtectionClientOrderId('binance-startup-modify-op', 'TP');
+    (BinanceExecutor.prototype as any).getOpenAlgoOrders = async (symbol: string) => {
+      assert(symbol === 'BTCUSDT', 'startup Algo-order verification must use the trade symbol');
+      return [
+        { symbol, orderId: 9921, clientOrderId: modifySlClientId, side: 'SELL', type: 'STOP_MARKET', closePosition: true, stopPrice: '95', status: 'NEW' },
+        { symbol, orderId: 9922, clientOrderId: modifyTpClientId, side: 'SELL', type: 'TAKE_PROFIT_MARKET', closePosition: true, stopPrice: '110', status: 'NEW' },
+      ];
+    };
     (BinanceExecutor.prototype as any).recoverProtectionByOperation = async (symbol: string, operationKey: string) => {
       assert(symbol === 'BTCUSDT', 'startup protection recovery must use the trade symbol');
       assert(operationKey === 'binance-startup-modify-op', 'startup protection recovery must use the exact operation key');
       return {
-        sl: { orderId: 9921, side: 'SELL', type: 'STOP_MARKET', stopPrice: '95', status: 'NEW' },
-        tp: { orderId: 9922, side: 'SELL', type: 'TAKE_PROFIT_MARKET', stopPrice: '110', status: 'NEW' },
+        sl: { orderId: 9921, clientOrderId: modifySlClientId, side: 'SELL', type: 'STOP_MARKET', closePosition: true, stopPrice: '95', status: 'NEW' },
+        tp: { orderId: 9922, clientOrderId: modifyTpClientId, side: 'SELL', type: 'TAKE_PROFIT_MARKET', closePosition: true, stopPrice: '110', status: 'NEW' },
       };
+    };
+    (BinanceExecutor.prototype as any).cancelProtectionByOperationKey = async (
+      symbol: string,
+      entrySide: string,
+      operationKey: string,
+    ) => {
+      assert(symbol === 'BTCUSDT', 'prior Algo protection cancellation must use the trade symbol');
+      assert(entrySide === 'BUY', 'prior Algo protection cancellation must preserve entry side');
+      assert(operationKey === 'binance-startup-modify-open-op', 'startup must retire only the original OPEN protection pair');
     };
     await new StartupReconciler(
       futuresCfg,
@@ -591,7 +628,9 @@ async function main() {
     (BinanceExecutor.prototype as any).ping = originalFuturesPing;
     (BinanceExecutor.prototype as any).getAllPositions = originalModifyGetAllPositions;
     (BinanceExecutor.prototype as any).getOpenOrders = originalModifyGetOpenOrders;
+    (BinanceExecutor.prototype as any).getOpenAlgoOrders = originalModifyGetOpenAlgoOrders;
     (BinanceExecutor.prototype as any).recoverProtectionByOperation = originalModifyRecoverProtection;
+    (BinanceExecutor.prototype as any).cancelProtectionByOperationKey = originalModifyCancelProtection;
     binanceModifyDb.raw().close();
   }
 
