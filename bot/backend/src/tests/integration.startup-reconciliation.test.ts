@@ -915,7 +915,7 @@ async function main() {
     (BinanceExecutor.prototype as any).getOpenOrders = originalSpotOpenOrders;
   }
 
-  console.log('Result: 36 passed, 0 failed');
+  console.log('Result: 37 passed, 0 failed');
 }
 
 main().catch(error => {
