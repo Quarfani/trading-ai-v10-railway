@@ -85,6 +85,77 @@ async function verifyProtectionCleanupFailureBlocksMarketClose() {
   assert(brokerPosts === 0, "no market close may be sent while protection cancellation is ambiguous");
 }
 
+async function verifyFuturesAlgoProtectionPlacement() {
+  const executor = new BinanceExecutor({
+    binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+  } as any);
+  const operationKey = "futures-algo-protection-placement-test";
+  const slClientAlgoId = (executor as any).makeProtectionClientOrderId(operationKey, "SL");
+  const tpClientAlgoId = (executor as any).makeProtectionClientOrderId(operationKey, "TP");
+  const submitted: Array<{ path: string; payload: any }> = [];
+  (executor as any).recoverProtectionByOperation = async () => {
+    if (submitted.length < 2) return { sl: null, tp: null };
+    return {
+      sl: {
+        symbol: "BTCUSDT",
+        orderId: 951,
+        clientOrderId: slClientAlgoId,
+        status: "NEW",
+        type: "STOP_MARKET",
+        side: "SELL",
+        closePosition: true,
+        stopPrice: Number(submitted[0].payload.triggerPrice),
+      },
+      tp: {
+        symbol: "BTCUSDT",
+        orderId: 952,
+        clientOrderId: tpClientAlgoId,
+        status: "NEW",
+        type: "TAKE_PROFIT_MARKET",
+        side: "SELL",
+        closePosition: true,
+        stopPrice: Number(submitted[1].payload.triggerPrice),
+      },
+    };
+  };
+  (executor as any).signedPost = async (path: string, payload: any) => {
+    submitted.push({ path, payload: { ...payload } });
+    const orderId = payload.type === "STOP_MARKET" ? 951 : 952;
+    return {
+      symbol: "BTCUSDT",
+      algoId: orderId,
+      clientAlgoId: payload.clientAlgoId,
+      algoType: "CONDITIONAL",
+      algoStatus: "NEW",
+      side: "SELL",
+      orderType: payload.type,
+      triggerPrice: payload.triggerPrice,
+      closePosition: true,
+    };
+  };
+
+  await (executor as any).placeSLTP({
+    symbol: "BTCUSDT",
+    side: "BUY",
+    price: 100,
+    sl: 90,
+    tp: 120,
+    confidence: 0.8,
+    timestamp: 123456,
+    source: "algo-placement-unit",
+  }, 1, 950, require("../config/symbolConfig").getSymbolSpec("BTCUSDT"), operationKey);
+
+  assert(submitted.length === 2, "Futures protection must submit both SL and TP Algo orders");
+  assert(submitted.every(item => item.path === "/fapi/v1/algoOrder"), "Futures conditional protection must use the Algo Order endpoint");
+  assert(submitted[0].payload.algoType === "CONDITIONAL" && submitted[1].payload.algoType === "CONDITIONAL", "each conditional order must declare algoType CONDITIONAL");
+  assert(submitted[0].payload.type === "STOP_MARKET" && submitted[1].payload.type === "TAKE_PROFIT_MARKET", "SL and TP must preserve exact conditional order types");
+  assert(submitted[0].payload.triggerPrice != null && submitted[0].payload.stopPrice == null, "SL must use triggerPrice, not the retired stopPrice parameter");
+  assert(submitted[1].payload.triggerPrice != null && submitted[1].payload.stopPrice == null, "TP must use triggerPrice, not the retired stopPrice parameter");
+  assert(submitted[0].payload.clientAlgoId === slClientAlgoId && submitted[1].payload.clientAlgoId === tpClientAlgoId, "SL/TP Algo orders must carry operation-keyed clientAlgoId values");
+  assert(submitted.every(item => String(item.payload.clientAlgoId).length <= 32), "each operation-keyed clientAlgoId must respect the broker length limit");
+  assert((executor as any).orderMap.get(950)?.slOrderId === 951 && (executor as any).orderMap.get(950)?.tpOrderId === 952, "verified Algo IDs must be retained for later exact cancellation");
+}
+
 async function verifyFuturesProtectionCleanupIsOperationScoped() {
   async function runCase(withUnrelatedOrder: boolean) {
     const executor = new BinanceExecutor({
@@ -430,6 +501,7 @@ async function main() {
   assert(cleanupCalls === 1, "a replay of an existing emergency intent must not restart the protection/close flow");
 
   await verifyProtectionCleanupFailureBlocksMarketClose();
+  await verifyFuturesAlgoProtectionPlacement();
   await verifyFuturesProtectionCleanupIsOperationScoped();
   await verifySpotOcoCleanupIsOperationScoped();
 
