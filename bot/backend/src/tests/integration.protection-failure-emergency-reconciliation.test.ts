@@ -153,6 +153,67 @@ async function makeFixture(futures: boolean, recoverClose = true) {
   };
 }
 
+async function verifyExactFillRecovery() {
+  const futuresConfig = makeConfig(true);
+  const futuresExec = new BinanceExecutor(futuresConfig);
+  const futuresKey = 'phase2-exact-futures-fill';
+  const expectedFuturesClientId = futuresExec.clientOrderIdForOperationKey(futuresKey);
+  let searchedFuturesClientId = '';
+  (futuresExec as any).findOrderByClientId = async (_symbol: string, clientOrderId: string) => {
+    searchedFuturesClientId = clientOrderId;
+    return {
+      orderId: 701,
+      status: 'FILLED',
+      executedQty: '1',
+      avgPrice: '100',
+      updateTime: Date.now(),
+    };
+  };
+  (futuresExec as any).getFuturesOrderFillSummary = async () => ({
+    currency: 'USDT',
+    avgPrice: 100,
+    commission: 0.1,
+    totalQty: 1,
+  });
+  const futuresFill = await futuresExec.recoverOperationFillDetails('BTCUSDT', futuresKey, 1);
+  assert(searchedFuturesClientId === expectedFuturesClientId, 'recovery must query the exact operation-derived clientOrderId');
+  assert(futuresFill?.orderId === 701 && futuresFill.status === 'FILLED', 'Futures recovery must return exact filled order identity');
+  assert(futuresFill?.commissionCurrency === 'USDT' && futuresFill.commission === 0.1, 'Futures recovery must include authoritative commission details');
+
+  const spotConfig = makeConfig(false);
+  const spotExec = new BinanceExecutor(spotConfig);
+  const spotKey = 'phase2-exact-spot-fill';
+  const expectedSpotClientId = spotExec.clientOrderIdForOperationKey(spotKey);
+  let searchedSpotClientId = '';
+  (spotExec as any).findOrderByClientId = async (_symbol: string, clientOrderId: string) => {
+    searchedSpotClientId = clientOrderId;
+    return {
+      orderId: 702,
+      status: 'FILLED',
+      executedQty: '1',
+      updateTime: Date.now(),
+    };
+  };
+  (spotExec as any).getSpotOrderFillSummary = async () => ({
+    currency: 'USDT',
+    avgPrice: 105,
+    feeQuote: 0.12,
+    totalQty: 1,
+    grossQuote: 105,
+  });
+  const spotFill = await spotExec.recoverOperationFillDetails('BTCUSDT', spotKey, 1);
+  assert(searchedSpotClientId === expectedSpotClientId, 'Spot recovery must query the exact operation-derived clientOrderId');
+  assert(spotFill?.grossQuote === 105 && spotFill.feeQuote === 0.12, 'Spot recovery must preserve exact proceeds and quote-equivalent fees');
+
+  (spotExec as any).findOrderByClientId = async () => ({
+    orderId: 703,
+    status: 'PARTIALLY_FILLED',
+    executedQty: '0.4',
+  });
+  const partial = await spotExec.recoverOperationFillDetails('BTCUSDT', spotKey, 1);
+  assert(partial === null, 'partial emergency fills must not be treated as fully settled operations');
+}
+
 async function verifySettlement(futures: boolean) {
   const f = await makeFixture(futures);
   try {
@@ -218,6 +279,7 @@ async function verifyAtomicRollback() {
 }
 
 async function main() {
+  await verifyExactFillRecovery();
   await verifySettlement(false);
   await verifySettlement(true);
   await verifyUnresolvedCloseStaysBlocked();
