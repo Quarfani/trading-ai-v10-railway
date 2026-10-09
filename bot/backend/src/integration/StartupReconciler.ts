@@ -1446,8 +1446,8 @@ export class StartupReconciler {
         slId !== tpId &&
         !!sl &&
         !!tp &&
-        String(sl.clientOrderId ?? '') === exec.protectionClientOrderIdForOperationKey(operationKey, 'SL') &&
-        String(tp.clientOrderId ?? '') === exec.protectionClientOrderIdForOperationKey(operationKey, 'TP') &&
+        String(sl.clientOrderId ?? '') === String(recoveredProtection.sl?.clientOrderId ?? '') &&
+        String(tp.clientOrderId ?? '') === String(recoveredProtection.tp?.clientOrderId ?? '') &&
         String(sl.side ?? '').toUpperCase() === closeSide &&
         String(tp.side ?? '').toUpperCase() === closeSide &&
         String(sl.type ?? '').toUpperCase() === 'STOP_MARKET' &&
