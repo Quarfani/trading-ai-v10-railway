@@ -764,6 +764,31 @@ async function main() {
       return true;
     };
 
+    const originalUpdateExecutionRequest = (interruptedProtectionDb as any).updateExecutionRequest.bind(interruptedProtectionDb);
+    let failRestoreVerifiedWriteOnce = true;
+    (interruptedProtectionDb as any).updateExecutionRequest = (executionId: string, request: any) => {
+      if (request?.phase === 'RESTORE_VERIFIED' && failRestoreVerifiedWriteOnce) {
+        failRestoreVerifiedWriteOnce = false;
+        return false;
+      }
+      return originalUpdateExecutionRequest(executionId, request);
+    };
+
+    let firstRecoveryBlocked = false;
+    try {
+      await new StartupReconciler(
+        futuresCfg,
+        interruptedProtectionDb,
+        new TelegramBot(futuresCfg),
+      ).run();
+    } catch {
+      firstRecoveryBlocked = true;
+    }
+    assert(firstRecoveryBlocked,
+      'startup must remain blocked if RESTORE_VERIFIED cannot be durably recorded');
+    assert(interruptedPairs.has(interruptedRestoreKey),
+      'restored protection must exist even when persisting RESTORE_VERIFIED fails');
+
     await new StartupReconciler(
       futuresCfg,
       interruptedProtectionDb,
