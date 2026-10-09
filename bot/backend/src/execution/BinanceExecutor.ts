@@ -366,6 +366,16 @@ export class BinanceExecutor {
 
     const spec = getSymbolSpec(signal.symbol);
     const tolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
+    const responseSymbol = String(brokerResponse?.symbol ?? '').trim().toUpperCase();
+    const responseClientOrderId = String(
+      brokerResponse?.clientOrderId ?? brokerResponse?.origClientOrderId ?? '',
+    );
+    if (
+      responseSymbol !== String(signal.symbol).trim().toUpperCase() ||
+      responseClientOrderId !== emergencyClientOrderId
+    ) {
+      throw new Error('Emergency-close response symbol/clientOrderId does not match the submitted order');
+    }
     const status = String(brokerResponse?.status ?? '').toUpperCase();
     const orderId = Number(brokerResponse?.orderId);
     const executedQty = Number(brokerResponse?.executedQty);
