@@ -19,7 +19,9 @@ function normalizeIp(value: unknown): string | null {
  *
  * Railway's public HTTP edge documents X-Real-IP as the remote client address.
  * Only use that header when the deployment explicitly opts in and traffic is
- * routed through Railway public ingress. Never infer trust from X-Forwarded-For.
+ * routed through Railway public HTTP ingress. Railway private-network requests
+ * can bypass edge header sanitization; do not rely on this header for untrusted
+ * private callers. Never infer trust from X-Forwarded-For.
  */
 export function getClientIp(req: Pick<Request, 'headers' | 'socket'>): string {
   if (String(process.env.TRUST_RAILWAY_X_REAL_IP ?? '').toLowerCase() === 'true') {
