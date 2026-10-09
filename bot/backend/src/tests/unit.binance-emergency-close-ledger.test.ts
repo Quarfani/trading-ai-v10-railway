@@ -96,56 +96,62 @@ async function verifyFuturesProtectionCleanupIsOperationScoped() {
     const orders = new Map<string, any>([
       [slClientOrderId, {
         symbol: "BTCUSDT",
-        clientOrderId: slClientOrderId,
-        origClientOrderId: slClientOrderId,
-        orderId: 910,
-        status: "NEW",
+        algoId: 910,
+        clientAlgoId: slClientOrderId,
+        algoType: "CONDITIONAL",
+        algoStatus: "NEW",
         side: "SELL",
-        type: "STOP_MARKET",
+        orderType: "STOP_MARKET",
+        triggerPrice: "90",
         closePosition: true,
       }],
     ]);
-    const unrelated = {
+    const unrelatedAlgo = {
       symbol: "BTCUSDT",
-      clientOrderId: "manual-order",
-      orderId: 999,
-      status: "NEW",
+      algoId: 999,
+      clientAlgoId: "manual-algo-order",
+      algoType: "CONDITIONAL",
+      algoStatus: "NEW",
       side: "SELL",
-      type: "LIMIT",
-      closePosition: false,
+      orderType: "STOP_MARKET",
+      triggerPrice: "80",
+      closePosition: true,
     };
     const deleted: number[] = [];
 
     (executor as any).signedGet = async (path: string, params: any) => {
-      if (path !== "/fapi/v1/order") throw new Error("unexpected lookup endpoint: " + path);
-      const clientOrderId = String(params?.origClientOrderId ?? "");
-      if (clientOrderId === tpClientOrderId) {
-        const missing: any = new Error("order does not exist");
+      if (path === "/fapi/v1/algoOrder") {
+        const clientAlgoId = String(params?.clientAlgoId ?? "");
+        if (clientAlgoId === tpClientOrderId) {
+          const missing: any = new Error("algo order does not exist");
+          missing.response = { data: { code: -2013 } };
+          throw missing;
+        }
+        const order = orders.get(clientAlgoId);
+        if (order) return { ...order };
+        const missing: any = new Error("algo order does not exist");
         missing.response = { data: { code: -2013 } };
         throw missing;
       }
-      const order = orders.get(clientOrderId);
-      if (!order) {
-        const missing: any = new Error("order does not exist");
-        missing.response = { data: { code: -2013 } };
-        throw missing;
+      if (path === "/fapi/v1/openAlgoOrders") {
+        const open = [...orders.values()].filter(order => order.algoStatus === "NEW");
+        return withUnrelatedOrder ? [...open, unrelatedAlgo] : open;
       }
-      return { ...order };
+      throw new Error("unexpected signed GET endpoint: " + path);
     };
     (executor as any).signedDelete = async (path: string, params: any) => {
-      assert(path === "/fapi/v1/order", "owned protective orders must use the Futures order endpoint");
-      const orderId = Number(params?.orderId);
-      deleted.push(orderId);
-      assert(orderId === 910, "cleanup may cancel only the exact operation-owned SL order");
+      assert(path === "/fapi/v1/algoOrder", "owned protective orders must use the Futures Algo endpoint");
+      const algoId = Number(params?.algoId);
+      deleted.push(algoId);
+      assert(algoId === 910, "cleanup may cancel only the exact operation-owned SL algoId");
       const sl = orders.get(slClientOrderId);
-      if (!sl || Number(sl.orderId) !== orderId) throw new Error("delete identity mismatch");
-      orders.set(slClientOrderId, { ...sl, status: "CANCELED" });
+      if (!sl || Number(sl.algoId) !== algoId) throw new Error("delete identity mismatch");
+      orders.set(slClientOrderId, { ...sl, algoStatus: "CANCELED" });
       return { ...orders.get(slClientOrderId) };
     };
     (executor as any).getOpenOrders = async (symbol: string) => {
-      assert(symbol === "BTCUSDT", "cleanup open-order verification must be symbol-scoped");
-      const open = [...orders.values()].filter(order => order.status === "NEW");
-      return withUnrelatedOrder ? [...open, unrelated] : open;
+      assert(symbol === "BTCUSDT", "regular open-order verification must be symbol-scoped");
+      return [];
     };
 
     let threw = false;
@@ -167,12 +173,12 @@ async function verifyFuturesProtectionCleanupIsOperationScoped() {
   }
 
   const clean = await runCase(false);
-  assert(!clean.threw, "exact owned protection cleanup should pass when no orders remain open");
-  assert(clean.deleted.length === 1 && clean.deleted[0] === 910, "only the exact owned SL order should be canceled");
+  assert(!clean.threw, "exact owned Futures Algo protection cleanup should pass when no orders remain open");
+  assert(clean.deleted.length === 1 && clean.deleted[0] === 910, "only the exact owned SL algo order should be canceled");
 
   const blocked = await runCase(true);
-  assert(blocked.threw, "emergency close must be blocked when an unrelated order remains open");
-  assert(blocked.deleted.length === 1 && !blocked.deleted.includes(999), "unrelated order must never be canceled by protection cleanup");
+  assert(blocked.threw, "emergency close must be blocked when an unrelated Algo order remains open");
+  assert(blocked.deleted.length === 1 && !blocked.deleted.includes(999), "unrelated Algo order must never be canceled by protection cleanup");
 }
 
 async function verifySpotOcoCleanupIsOperationScoped() {
