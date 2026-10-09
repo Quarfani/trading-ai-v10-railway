@@ -97,6 +97,7 @@ export class BinanceExecutor {
       schemaVersion: 1,
       purpose: 'PROTECTION_FAILURE_EMERGENCY_CLOSE',
       submissionState: 'PRECHECK_NOT_STARTED',
+      protectionCleanupState: 'PENDING',
       parentOperationKey,
       parentClientOrderId: entryClientOrderId ?? null,
       symbol: String(signal.symbol).toUpperCase(),
@@ -130,7 +131,20 @@ export class BinanceExecutor {
 
     let beforeAmount = 0;
     let beforeSignedAmount = 0;
+    let protectionCleanupVerified = false;
+    let durableRequest: Record<string, any> = request;
     try {
+      await this.cancelProtectionForEmergencyClose(signal, parentOperationKey);
+      const cleanupVerifiedRequest = {
+        ...durableRequest,
+        protectionCleanupState: 'VERIFIED_NO_OPERATION_OWNED_ORDERS_ACTIVE',
+      };
+      if (!db.updateExecutionRequest(executionId, cleanupVerifiedRequest)) {
+        throw new Error('Could not persist verified protection cleanup; no emergency order was sent');
+      }
+      durableRequest = cleanupVerifiedRequest;
+      protectionCleanupVerified = true;
+
       const before = await this.getPosition(signal.symbol);
       if (!before) {
         throw new Error('Emergency close position state unavailable for ' + signal.symbol);
@@ -154,7 +168,7 @@ export class BinanceExecutor {
       }
 
       const armedRequest = {
-        ...request,
+        ...durableRequest,
         positionBeforeAmount: beforeAmount,
         positionBeforeSignedAmount: beforeSignedAmount,
         submissionState: 'SUBMISSION_ARMED',
@@ -163,14 +177,23 @@ export class BinanceExecutor {
         throw new Error('Could not persist emergency-close position snapshot; no order was sent');
       }
     } catch (e: any) {
+      const cleanupError = String(e?.message ?? e).slice(0, 500);
+      if (!protectionCleanupVerified) {
+        const failedCleanupRequest = {
+          ...durableRequest,
+          protectionCleanupState: 'FAILED_OR_AMBIGUOUS',
+          protectionCleanupError: cleanupError,
+        };
+        db.updateExecutionRequest(executionId, failedCleanupRequest);
+      }
       db.updateExecutionLedger(executionId, {
         status: 'UNKNOWN',
-        error: ('Emergency close precheck failed before order submission: ' +
-          String(e?.message ?? e)).slice(0, 1000),
+        error: ('Emergency close protection-cleanup/precheck failed before order submission: ' +
+          cleanupError).slice(0, 1000),
       });
       throw new Error(
-        'Emergency close precheck failed; no order was sent and startup/manual reconciliation is required: ' +
-        String(e?.message ?? e),
+        'Emergency close protection cleanup/precheck failed; no order was sent and startup/manual reconciliation is required: ' +
+        cleanupError,
       );
     }
 
@@ -1095,14 +1118,266 @@ export class BinanceExecutor {
     return id;
   }
 
-  private async getSpotOcoByClientId(
+  private isBinanceOrderNotFoundError(error: any): boolean {
+    const code = Number(error?.response?.data?.code);
+    return code === -2011 || code === -2013;
+  }
+
+  private async getOrderByClientIdStrict(
+    symbol: string,
+    clientOrderId: string,
+  ): Promise<any | null> {
+    let order: any;
+    try {
+      order = await this.signedGet(
+        this.isFutures ? '/fapi/v1/order' : '/api/v3/order',
+        { symbol, origClientOrderId: clientOrderId },
+      );
+    } catch (error: any) {
+      if (this.isBinanceOrderNotFoundError(error)) return null;
+      throw new Error(
+        `Binance exact order lookup failed for ${symbol}/${clientOrderId}: ${String(error?.message ?? error)}`,
+      );
+    }
+
+    if (!order || typeof order !== 'object') {
+      throw new Error(`Binance exact order lookup returned invalid data for ${symbol}/${clientOrderId}`);
+    }
+    const actualClientOrderId = String(
+      order.clientOrderId ?? order.origClientOrderId ?? '',
+    );
+    if (
+      actualClientOrderId !== clientOrderId ||
+      String(order.symbol ?? '').trim().toUpperCase() !== String(symbol).trim().toUpperCase()
+    ) {
+      throw new Error(`Binance exact order identity mismatch for ${symbol}/${clientOrderId}`);
+    }
+    return order;
+  }
+
+  private async getSpotOcoByClientIdStrict(
     symbol: string,
     listClientOrderId: string,
   ): Promise<any | null> {
-    return this.signedGet('/api/v3/orderList', {
+    let list: any;
+    try {
+      list = await this.getSpotOcoByClientId(symbol, listClientOrderId);
+    } catch (error: any) {
+      if (this.isBinanceOrderNotFoundError(error)) return null;
+      throw new Error(
+        `Binance exact OCO lookup failed for ${symbol}/${listClientOrderId}: ${String(error?.message ?? error)}`,
+      );
+    }
+    if (!list || typeof list !== 'object') {
+      throw new Error(`Binance exact OCO lookup returned invalid data for ${symbol}/${listClientOrderId}`);
+    }
+    if (
+      String(list.listClientOrderId ?? '') !== listClientOrderId ||
+      (list.symbol != null &&
+        String(list.symbol).trim().toUpperCase() !== String(symbol).trim().toUpperCase())
+    ) {
+      throw new Error(`Binance exact OCO identity mismatch for ${symbol}/${listClientOrderId}`);
+    }
+    return list;
+  }
+
+  async recoverOperationOrderForReconciliation(
+    symbol: string,
+    operationKey: string,
+  ): Promise<any | null> {
+    if (!operationKey || !operationKey.trim()) {
+      throw new Error('Binance operation key is required for exact OPEN recovery');
+    }
+    return this.getOrderByClientIdStrict(
       symbol,
-      origClientOrderId: listClientOrderId,
-    });
+      this.makeClientOrderId(operationKey),
+    );
+  }
+
+  private async cancelProtectionForEmergencyClose(
+    signal: Signal,
+    operationKey: string,
+  ): Promise<void> {
+    if (!operationKey || !operationKey.trim()) {
+      throw new Error('Protection cleanup requires the original OPEN operation key');
+    }
+    const symbol = String(signal.symbol ?? '').trim().toUpperCase();
+    const closeSide = signal.side === 'BUY' ? 'SELL' : 'BUY';
+    if (!symbol || !['BUY', 'SELL'].includes(signal.side)) {
+      throw new Error('Protection cleanup received an invalid symbol or entry side');
+    }
+
+    const terminalOrderStatuses = new Set([
+      'CANCELED', 'EXPIRED', 'REJECTED', 'EXPIRED_IN_MATCH',
+    ]);
+
+    if (this.isFutures) {
+      const protectionSpecs = [
+        { kind: 'SL' as const, type: 'STOP_MARKET' },
+        { kind: 'TP' as const, type: 'TAKE_PROFIT_MARKET' },
+      ];
+      const ownedOrderIds = new Set<number>();
+
+      for (const spec of protectionSpecs) {
+        const clientOrderId = this.makeProtectionClientOrderId(operationKey, spec.kind);
+        const order = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+        if (!order) continue;
+
+        const orderId = Number(order.orderId);
+        const status = String(order.status ?? '').trim().toUpperCase();
+        if (
+          !(orderId > 0) || !Number.isFinite(orderId) ||
+          String(order.symbol ?? '').trim().toUpperCase() !== symbol ||
+          String(order.clientOrderId ?? order.origClientOrderId ?? '') !== clientOrderId ||
+          String(order.side ?? '').trim().toUpperCase() !== closeSide ||
+          String(order.type ?? '').trim().toUpperCase() !== spec.type ||
+          String(order.closePosition).trim().toLowerCase() !== 'true'
+        ) {
+          throw new Error(
+            `Operation-owned Binance Futures ${spec.kind} identity/shape mismatch for ${symbol}; refusing market close`,
+          );
+        }
+
+        ownedOrderIds.add(orderId);
+        if (status === 'FILLED' || status === 'PARTIALLY_FILLED') {
+          throw new Error(
+            `Operation-owned Binance Futures ${spec.kind} is ${status} for ${symbol}; position may already have changed`,
+          );
+        }
+        if (terminalOrderStatuses.has(status)) continue;
+        if (status !== 'NEW') {
+          throw new Error(
+            `Operation-owned Binance Futures ${spec.kind} has unsupported status=${status || 'UNKNOWN'} for ${symbol}`,
+          );
+        }
+
+        let cancelResponse: any = null;
+        try {
+          cancelResponse = await this.signedDelete('/fapi/v1/order', {
+            symbol,
+            orderId,
+          });
+        } catch (cancelError: any) {
+          const afterError = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+          const afterErrorStatus = String(afterError?.status ?? '').trim().toUpperCase();
+          if (!afterError || !terminalOrderStatuses.has(afterErrorStatus)) {
+            throw new Error(
+              `Binance Futures ${spec.kind} cancellation is ambiguous for ${symbol}/${clientOrderId}: ${String(cancelError?.message ?? cancelError)}`,
+            );
+          }
+        }
+
+        if (cancelResponse) {
+          const returnedId = Number(cancelResponse.orderId);
+          const returnedClientId = String(
+            cancelResponse.clientOrderId ?? cancelResponse.origClientOrderId ?? '',
+          );
+          if (
+            (Number.isFinite(returnedId) && returnedId > 0 && returnedId !== orderId) ||
+            (returnedClientId && returnedClientId !== clientOrderId) ||
+            (cancelResponse.symbol &&
+              String(cancelResponse.symbol).trim().toUpperCase() !== symbol)
+          ) {
+            throw new Error(
+              `Binance Futures ${spec.kind} cancellation identity mismatch for ${symbol}`,
+            );
+          }
+        }
+
+        const confirmed = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+        const confirmedStatus = String(confirmed?.status ?? '').trim().toUpperCase();
+        if (
+          !confirmed ||
+          confirmedStatus === 'FILLED' ||
+          confirmedStatus === 'PARTIALLY_FILLED' ||
+          !terminalOrderStatuses.has(confirmedStatus)
+        ) {
+          throw new Error(
+            `Binance Futures ${spec.kind} cancellation could not be authoritatively confirmed for ${symbol}`,
+          );
+        }
+      }
+
+      const openOrders = await this.getOpenOrders(symbol);
+      const liveOwned = openOrders.filter((order: any) => {
+        const clientId = String(order.clientOrderId ?? order.origClientOrderId ?? '');
+        const orderId = Number(order.orderId);
+        return (
+          ownedOrderIds.has(orderId) ||
+          clientId === this.makeProtectionClientOrderId(operationKey, 'SL') ||
+          clientId === this.makeProtectionClientOrderId(operationKey, 'TP')
+        );
+      });
+      if (liveOwned.length > 0) {
+        throw new Error(`Operation-owned Binance Futures protection is still open for ${symbol}`);
+      }
+      if (openOrders.length > 0) {
+        const outstanding = openOrders.map((order: any) =>
+          String(order.clientOrderId ?? order.origClientOrderId ?? order.orderId ?? 'unknown'),
+        ).join(',');
+        throw new Error(
+          `Unrelated Binance Futures orders remain open for ${symbol} (${outstanding}); they were not canceled and emergency close is blocked`,
+        );
+      }
+      return;
+    }
+
+    const listClientOrderId = this.makeOcoClientOrderId(operationKey, 'LIST');
+    const list = await this.getSpotOcoByClientIdStrict(symbol, listClientOrderId);
+    if (list) {
+      const listStatus = String(list.listStatusType ?? '').trim().toUpperCase();
+      const orderStatus = String(list.listOrderStatus ?? '').trim().toUpperCase();
+      const active =
+        ['EXEC_STARTED', 'EXECUTING'].includes(listStatus) ||
+        orderStatus === 'EXECUTING';
+      const terminalList = ['ALL_DONE', 'REJECT', 'REJECTED'].includes(listStatus) ||
+        ['ALL_DONE', 'REJECT', 'REJECTED'].includes(orderStatus);
+      if (active) {
+        await this.cancelSpotProtectionByOperation(symbol, operationKey);
+      } else if (!terminalList) {
+        throw new Error(
+          `Binance Spot OCO status is ambiguous for ${symbol}: ${listStatus}/${orderStatus}`,
+        );
+      }
+    }
+
+    for (const kind of ['ABOVE', 'BELOW'] as const) {
+      const clientOrderId = this.makeOcoClientOrderId(operationKey, kind);
+      const order = await this.getOrderByClientIdStrict(symbol, clientOrderId);
+      if (!order) continue;
+      const status = String(order.status ?? '').trim().toUpperCase();
+      const expectedType = kind === 'ABOVE' ? 'LIMIT_MAKER' : 'STOP_LOSS_LIMIT';
+      if (
+        String(order.clientOrderId ?? order.origClientOrderId ?? '') !== clientOrderId ||
+        String(order.symbol ?? '').trim().toUpperCase() !== symbol ||
+        String(order.side ?? '').trim().toUpperCase() !== closeSide ||
+        String(order.type ?? '').trim().toUpperCase() !== expectedType
+      ) {
+        throw new Error(
+          `Operation-owned Binance Spot OCO leg identity/shape mismatch for ${symbol}; refusing market close`,
+        );
+      }
+      if (
+        status === 'FILLED' ||
+        status === 'PARTIALLY_FILLED' ||
+        status === 'NEW' ||
+        !terminalOrderStatuses.has(status)
+      ) {
+        throw new Error(
+          `Operation-owned Binance Spot OCO leg ${clientOrderId} remains active or ambiguous (status=${status || 'UNKNOWN'})`,
+        );
+      }
+    }
+
+    const openOrders = await this.getOpenOrders(symbol);
+    if (openOrders.length > 0) {
+      const outstanding = openOrders.map((order: any) =>
+        String(order.clientOrderId ?? order.origClientOrderId ?? order.orderId ?? 'unknown'),
+      ).join(',');
+      throw new Error(
+        `Binance Spot orders remain open for ${symbol} (${outstanding}); they were not canceled and emergency close is blocked`,
+      );
+    }
   }
 
   private async findOrderByClientId(symbol: string, clientOrderId: string): Promise<any | null> {
