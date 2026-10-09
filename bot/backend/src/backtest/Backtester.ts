@@ -150,306 +150,228 @@ export class Backtester {
   ): Promise<BacktestResult> {
     const tmpDb = path.join(os.tmpdir(), `backtest_${Date.now()}.db`);
     const db    = new DatabaseManager(tmpDb);
-    await db.initialize();
+    try {
+      await db.initialize();
 
-    const orchestrator = new ConsensusOrchestrator(
-      db,
-      {
-        minimum_total_weight: 0.20,
-        dominance_ratio: 0.55,
-        gate: {
-          min_win_rate: 0,
-          min_sharpe_ratio: -Infinity,
-          min_rolling_expectancy: -Infinity,
-          max_drawdown: Infinity,
-          min_trades_for_gate: Infinity,
+      const orchestrator = new ConsensusOrchestrator(
+        db,
+        {
+          minimum_total_weight: 0.20,
+          dominance_ratio: 0.55,
+          gate: {
+            min_win_rate: 0,
+            min_sharpe_ratio: -Infinity,
+            min_rolling_expectancy: -Infinity,
+            max_drawdown: Infinity,
+            min_trades_for_gate: Infinity,
+          },
         },
-      },
-      undefined,
-      startBalance,
-    );
+        undefined,
+        startBalance,
+      );
 
-    const riskFraction = Math.min(
-      0.02,
-      Math.max(0.0001, Number(this.config.riskPerTrade ?? 0.01)),
-    );
-    const minimumSignalConfidence = normalizedConfidenceThreshold(this.config.minConfidence, 0);
+      const riskFraction = Math.min(
+        0.02,
+        Math.max(0.0001, Number(this.config.riskPerTrade ?? 0.01)),
+      );
+      const minimumSignalConfidence = normalizedConfidenceThreshold(this.config.minConfidence, 0);
 
-    marketRegimeDetector.invalidate(symbol);
-    const market = marketOverride ?? getMarketDefinition(symbol, timeframe);
-    const costProfile = costProfileOverride ?? getCostProfile(symbol, {
-      priceIncrement: market?.economics.priceIncrement,
-      requireExplicit: Boolean(market?.brokerSymbol),
-    });
-    const economics = market?.economics;
-    const accountCurrency = (this.config.accountCurrency ?? 'USD').toUpperCase();
-    const quoteCurrency = market?.quoteCurrency ?? 'USD';
-    let valid = true;
-    let blockedReason: string | undefined;
-    const WARMUP = 250;
+      marketRegimeDetector.invalidate(symbol);
+      const market = marketOverride ?? getMarketDefinition(symbol, timeframe);
+      const costProfile = costProfileOverride ?? getCostProfile(symbol, {
+        priceIncrement: market?.economics.priceIncrement,
+        requireExplicit: Boolean(market?.brokerSymbol),
+      });
+      const economics = market?.economics;
+      const accountCurrency = (this.config.accountCurrency ?? 'USD').toUpperCase();
+      const quoteCurrency = market?.quoteCurrency ?? 'USD';
+      let valid = true;
+      let blockedReason: string | undefined;
+      const WARMUP = 250;
 
-    const trades: BacktestTrade[] = [];
-    const equityCurve: Array<{ t: number; equity: number }> = [];
-    const monthlyMap = new Map<string, MonthlyBreakdown>();
+      const trades: BacktestTrade[] = [];
+      const equityCurve: Array<{ t: number; equity: number }> = [];
+      const monthlyMap = new Map<string, MonthlyBreakdown>();
 
-    let balance = startBalance;
-    let peak = startBalance;
-    let maxDDPct = 0;
-    let maxDDUsd = 0;
-    let totalComm = 0;
-    let totalSpread = 0;
-    let totalCost = 0;
-    let simulationErrors = 0;
+      let balance = startBalance;
+      let peak = startBalance;
+      let maxDDPct = 0;
+      let maxDDUsd = 0;
+      let totalComm = 0;
+      let totalSpread = 0;
+      let totalCost = 0;
+      let simulationErrors = 0;
 
-    const conversionAt = (time: number): number | null =>
-      resolveHistoricalQuoteToAccount(
-        quoteCurrency,
-        accountCurrency,
-        time,
+      const conversionAt = (time: number): number | null =>
+        resolveHistoricalQuoteToAccount(
+          quoteCurrency,
+          accountCurrency,
+          time,
+          historicalCurrencyRates,
+        );
+
+      const dataQuality = evaluateMarketDataQuality(
+        candles,
+        timeframe,
+        {
+          allowScheduledSessionGaps:
+            market?.assetClass === 'FOREX' ||
+            market?.assetClass === 'METAL' ||
+            market?.assetClass === 'ENERGY' ||
+            market?.assetClass === 'INDEX',
+        },
+      );
+
+      const currencyValidation = validateHistoricalRateSeries(
         historicalCurrencyRates,
       );
 
-    const dataQuality = evaluateMarketDataQuality(
-      candles,
-      timeframe,
-      {
-        allowScheduledSessionGaps:
-          market?.assetClass === 'FOREX' ||
-          market?.assetClass === 'METAL' ||
-          market?.assetClass === 'ENERGY' ||
-          market?.assetClass === 'INDEX',
-      },
-    );
+      const requiresConversion =
+        quoteCurrency !== accountCurrency &&
+        !(
+          accountCurrency === 'USD' &&
+          ['USD', 'USDT', 'USDC', 'BUSD'].includes(quoteCurrency)
+        );
 
-    const currencyValidation = validateHistoricalRateSeries(
-      historicalCurrencyRates,
-    );
-
-    const requiresConversion =
-      quoteCurrency !== accountCurrency &&
-      !(
-        accountCurrency === 'USD' &&
-        ['USD', 'USDT', 'USDC', 'BUSD'].includes(quoteCurrency)
-      );
-
-    if (!dataQuality.passed) {
-      valid = false;
-      blockedReason = `Market data quality gate failed: ${dataQuality.hardFailures.join('; ')}`;
-    } else if (!market) {
-      valid = false;
-      blockedReason = `Missing market definition for ${symbol}`;
-    } else if (!currencyValidation.valid) {
-      valid = false;
-      blockedReason =
-        `Invalid historical currency series: ${currencyValidation.errors.join('; ')}`;
-    } else if (requiresConversion && !Object.keys(historicalCurrencyRates).length) {
-      valid = false;
-      blockedReason =
-        `Missing historical ${quoteCurrency}->${accountCurrency} conversion series`;
-    } else if (requiresConversion) {
-      const startIndex = Math.min(WARMUP, Math.max(0, candles.length - 1));
-      for (let index = startIndex; index < candles.length; index++) {
-        if (conversionAt(candles[index].time) == null) {
-          valid = false;
-          blockedReason =
-            `Missing historical ${quoteCurrency}->${accountCurrency} conversion coverage at ${candles[index].time}`;
-          break;
-        }
-      }
-    }
-
-    if (!valid) {
-      try { fs.unlinkSync(tmpDb); } catch { /* pass */ }
-      return this.buildResult(
-        symbol,
-        timeframe,
-        startBalance,
-        balance,
-        trades,
-        equityCurve,
-        Array.from(monthlyMap.values()),
-        maxDDPct,
-        maxDDUsd,
-        totalComm,
-        totalSpread,
-        simulationErrors,
-        totalCost,
-        false,
-        blockedReason,
-        dataQuality.score,
-      );
-    }
-
-    let openPos: {
-      side: Side; entry: number; sl: number; tp: number;
-      size: number; openedAt: number; openBar: number; source: string;
-      entryQuoteToAccount: number; entryCostAccount: number;
-    } | null = null;
-
-    let pendingSignal: {
-      side: Side;
-      sl: number;
-      tp: number;
-      source: string;
-      signalTime: number;
-    } | null = null;
-
-    const recordEquity = (at: number, equity: number) => {
-      if (!Number.isFinite(equity)) return;
-      equityCurve.push({ t: at, equity });
-      if (peak > 0) {
-        if (equity > peak) peak = equity;
-        const ddUsd = Math.max(0, peak - equity);
-        const ddPct = ddUsd / peak;
-        maxDDPct = Math.max(maxDDPct, ddPct);
-        maxDDUsd = Math.max(maxDDUsd, ddUsd);
-      }
-    };
-
-    const settlePosition = (
-      exitPrice: number,
-      exitReason: 'TP' | 'SL' | 'TIMEOUT',
-      at: number,
-      exitQuoteToAccount: number,
-    ) => {
-      if (!openPos) return;
-
-      const rawPnl = calculateGrossPnlAccount({
-        entryPrice: openPos.entry,
-        exitPrice,
-        volume: openPos.size,
-        contractSize: economics!.contractSize,
-        quoteToAccount: exitQuoteToAccount,
-        side: openPos.side,
-      });
-
-      const costs = estimateCosts({
-        entryPrice: openPos.entry,
-        exitPrice,
-        volume: openPos.size,
-        contractSize: economics!.contractSize,
-        quoteToAccount: exitQuoteToAccount,
-        entryQuoteToAccount: openPos.entryQuoteToAccount,
-        exitQuoteToAccount,
-        holdingDays: Math.max(0, (at - openPos.openedAt) / (24 * 3_600_000)),
-      }, costProfile);
-
-      const pnl = rawPnl - costs.total;
-
-      balance += pnl;
-      totalComm += costs.commission;
-      totalSpread += costs.spread;
-      totalCost += costs.total;
-
-      trades.push({
-        symbol, source: openPos.source,
-        side: openPos.side, entry: openPos.entry, exit: exitPrice,
-        sl: openPos.sl, tp: openPos.tp, size: openPos.size,
-        pnl, pnlPct: (pnl / startBalance) * 100,
-        openedAt: openPos.openedAt, closedAt: at, exitReason,
-      });
-
-      const monthKey = new Date(at).toISOString().slice(0, 7);
-      const mo = monthlyMap.get(monthKey) ??
-        { month: monthKey, trades: 0, wins: 0, pnl: 0, winRate: 0 };
-      mo.trades++;
-      mo.pnl += pnl;
-      if (pnl > 0) mo.wins++;
-      mo.winRate = mo.wins / mo.trades;
-      monthlyMap.set(monthKey, mo);
-
-      openPos = null;
-    };
-
-    equityCurve.push({ t: candles[0]?.time ?? 0, equity: balance });
-
-    for (let i = WARMUP; i < candles.length; i++) {
-      const slice = candles.slice(0, i + 1);
-      const cur   = slice[slice.length - 1];
-
-      // ── Execute pending signal on the NEXT bar open ───────────────────
-      // The signal is formed from the completed previous bar. Filling at this
-      // bar's open prevents the signal bar's close from leaking into execution.
-      if (!openPos && pendingSignal) {
-        const entryQuoteToAccount = conversionAt(cur.time);
-        if (entryQuoteToAccount == null) {
-          valid = false;
-          blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
-          break;
-        }
-
-        const simulatedEntry = cur.open;
-        const geometryValid =
-          pendingSignal.side === 'BUY'
-            ? pendingSignal.sl < simulatedEntry && pendingSignal.tp > simulatedEntry
-            : pendingSignal.sl > simulatedEntry && pendingSignal.tp < simulatedEntry;
-
-        if (geometryValid) {
-          const size = calculateBacktestPositionSize(
-            balance,
-            riskFraction,
-            simulatedEntry,
-            pendingSignal.sl,
-            economics!.contractSize,
-            economics!.minVolume,
-            economics!.maxVolume,
-            economics!.volumeStep,
-            entryQuoteToAccount,
-          );
-
-          if (size > 0) {
-            const entryCostAccount = estimateEntryCosts({
-              price: simulatedEntry,
-              volume: size,
-              contractSize: economics!.contractSize,
-              quoteToAccount: entryQuoteToAccount,
-            }, costProfile);
-
-            openPos = {
-              side: pendingSignal.side,
-              entry: simulatedEntry,
-              sl: pendingSignal.sl,
-              tp: pendingSignal.tp,
-              size,
-              openedAt: cur.time,
-              openBar: i,
-              source: pendingSignal.source,
-              entryQuoteToAccount,
-              entryCostAccount,
-            };
-          }
-        }
-
-        pendingSignal = null;
-      }
-
-      // ── Manage open position ──────────────────────────────────────────
-      if (openPos) {
-        const hitSL   = openPos.side === 'BUY' ? cur.low  <= openPos.sl : cur.high >= openPos.sl;
-        const hitTP   = openPos.side === 'BUY' ? cur.high >= openPos.tp : cur.low  <= openPos.tp;
-        const timeout = (i - openPos.openBar) >= MAX_TRADE_BARS;
-
-        if (hitSL || hitTP || timeout) {
-          const exitPrice  = hitSL ? openPos.sl : hitTP ? openPos.tp : cur.close;
-          const exitReason = hitSL ? 'SL' : hitTP ? 'TP' : 'TIMEOUT';
-
-          const exitQuoteToAccount = conversionAt(cur.time);
-          if (exitQuoteToAccount == null) {
+      if (!dataQuality.passed) {
+        valid = false;
+        blockedReason = `Market data quality gate failed: ${dataQuality.hardFailures.join('; ')}`;
+      } else if (!market) {
+        valid = false;
+        blockedReason = `Missing market definition for ${symbol}`;
+      } else if (!currencyValidation.valid) {
+        valid = false;
+        blockedReason =
+          `Invalid historical currency series: ${currencyValidation.errors.join('; ')}`;
+      } else if (requiresConversion && !Object.keys(historicalCurrencyRates).length) {
+        valid = false;
+        blockedReason =
+          `Missing historical ${quoteCurrency}->${accountCurrency} conversion series`;
+      } else if (requiresConversion) {
+        const startIndex = Math.min(WARMUP, Math.max(0, candles.length - 1));
+        for (let index = startIndex; index < candles.length; index++) {
+          if (conversionAt(candles[index].time) == null) {
             valid = false;
-            blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+            blockedReason =
+              `Missing historical ${quoteCurrency}->${accountCurrency} conversion coverage at ${candles[index].time}`;
             break;
           }
-
-          settlePosition(exitPrice, exitReason, cur.time, exitQuoteToAccount);
         }
       }
 
-      // ── Signal generation ─────────────────────────────────────────────
-      if (
-        !openPos &&
-        (evaluationStartTime == null || cur.time >= evaluationStartTime)
-      ) {
-        try {
+      if (!valid) {
+
+        return this.buildResult(
+          symbol,
+          timeframe,
+          startBalance,
+          balance,
+          trades,
+          equityCurve,
+          Array.from(monthlyMap.values()),
+          maxDDPct,
+          maxDDUsd,
+          totalComm,
+          totalSpread,
+          simulationErrors,
+          totalCost,
+          false,
+          blockedReason,
+          dataQuality.score,
+        );
+      }
+
+      let openPos: {
+        side: Side; entry: number; sl: number; tp: number;
+        size: number; openedAt: number; openBar: number; source: string;
+        entryQuoteToAccount: number; entryCostAccount: number;
+      } | null = null;
+
+      let pendingSignal: {
+        side: Side;
+        sl: number;
+        tp: number;
+        source: string;
+        signalTime: number;
+      } | null = null;
+
+      const recordEquity = (at: number, equity: number) => {
+        if (!Number.isFinite(equity)) return;
+        equityCurve.push({ t: at, equity });
+        if (peak > 0) {
+          if (equity > peak) peak = equity;
+          const ddUsd = Math.max(0, peak - equity);
+          const ddPct = ddUsd / peak;
+          maxDDPct = Math.max(maxDDPct, ddPct);
+          maxDDUsd = Math.max(maxDDUsd, ddUsd);
+        }
+      };
+
+      const settlePosition = (
+        exitPrice: number,
+        exitReason: 'TP' | 'SL' | 'TIMEOUT',
+        at: number,
+        exitQuoteToAccount: number,
+      ) => {
+        if (!openPos) return;
+
+        const rawPnl = calculateGrossPnlAccount({
+          entryPrice: openPos.entry,
+          exitPrice,
+          volume: openPos.size,
+          contractSize: economics!.contractSize,
+          quoteToAccount: exitQuoteToAccount,
+          side: openPos.side,
+        });
+
+        const costs = estimateCosts({
+          entryPrice: openPos.entry,
+          exitPrice,
+          volume: openPos.size,
+          contractSize: economics!.contractSize,
+          quoteToAccount: exitQuoteToAccount,
+          entryQuoteToAccount: openPos.entryQuoteToAccount,
+          exitQuoteToAccount,
+          holdingDays: Math.max(0, (at - openPos.openedAt) / (24 * 3_600_000)),
+        }, costProfile);
+
+        const pnl = rawPnl - costs.total;
+
+        balance += pnl;
+        totalComm += costs.commission;
+        totalSpread += costs.spread;
+        totalCost += costs.total;
+
+        trades.push({
+          symbol, source: openPos.source,
+          side: openPos.side, entry: openPos.entry, exit: exitPrice,
+          sl: openPos.sl, tp: openPos.tp, size: openPos.size,
+          pnl, pnlPct: (pnl / startBalance) * 100,
+          openedAt: openPos.openedAt, closedAt: at, exitReason,
+        });
+
+        const monthKey = new Date(at).toISOString().slice(0, 7);
+        const mo = monthlyMap.get(monthKey) ??
+          { month: monthKey, trades: 0, wins: 0, pnl: 0, winRate: 0 };
+        mo.trades++;
+        mo.pnl += pnl;
+        if (pnl > 0) mo.wins++;
+        mo.winRate = mo.wins / mo.trades;
+        monthlyMap.set(monthKey, mo);
+
+        openPos = null;
+      };
+
+      equityCurve.push({ t: candles[0]?.time ?? 0, equity: balance });
+
+      for (let i = WARMUP; i < candles.length; i++) {
+        const slice = candles.slice(0, i + 1);
+        const cur   = slice[slice.length - 1];
+
+        // ── Execute pending signal on the NEXT bar open ───────────────────
+        // The signal is formed from the completed previous bar. Filling at this
+        // bar's open prevents the signal bar's close from leaking into execution.
+        if (!openPos && pendingSignal) {
           const entryQuoteToAccount = conversionAt(cur.time);
           if (entryQuoteToAccount == null) {
             valid = false;
@@ -457,120 +379,201 @@ export class Backtester {
             break;
           }
 
-          const regime = marketRegimeDetector.detect(
-            symbol,
-            timeframe,
-            slice.slice(-100),
-            { useCache: false },
-          );
-          if (regime.regime === 'VOLATILE') continue;
+          const simulatedEntry = cur.open;
+          const geometryValid =
+            pendingSignal.side === 'BUY'
+              ? pendingSignal.sl < simulatedEntry && pendingSignal.tp > simulatedEntry
+              : pendingSignal.sl > simulatedEntry && pendingSignal.tp < simulatedEntry;
 
-          // FIX BUG-C3: resample current slice to H4 and pass to orchestrator
-          // instead of the empty [] that caused H4 confirmation to be skipped.
-          const h4Candles = resampleToH4(slice).slice(0, -1).slice(-50);
+          if (geometryValid) {
+            const size = calculateBacktestPositionSize(
+              balance,
+              riskFraction,
+              simulatedEntry,
+              pendingSignal.sl,
+              economics!.contractSize,
+              economics!.minVolume,
+              economics!.maxVolume,
+              economics!.volumeStep,
+              entryQuoteToAccount,
+            );
 
-          const result = orchestrator.process(symbol, slice, h4Candles, regime.regime, timeframe);
-          if (result.outcome === 'NO_TRADE' || !result.signal) continue;
+            if (size > 0) {
+              const entryCostAccount = estimateEntryCosts({
+                price: simulatedEntry,
+                volume: size,
+                contractSize: economics!.contractSize,
+                quoteToAccount: entryQuoteToAccount,
+              }, costProfile);
 
-          const sig = result.signal;
-          if (!passesMinimumSignalConfidence(sig.confidence, minimumSignalConfidence)) {
-            continue;
+              openPos = {
+                side: pendingSignal.side,
+                entry: simulatedEntry,
+                sl: pendingSignal.sl,
+                tp: pendingSignal.tp,
+                size,
+                openedAt: cur.time,
+                openBar: i,
+                source: pendingSignal.source,
+                entryQuoteToAccount,
+                entryCostAccount,
+              };
+            }
           }
 
-          const atr = calculateATR(slice.slice(-50), 14);
-          if (!atr) continue;
+          pendingSignal = null;
+        }
 
-          // Queue the signal for the next completed bar's open. We deliberately
-          // do not use the current close as the fill price.
-          pendingSignal = {
-            side: sig.side,
-            sl: sig.sl,
-            tp: sig.tp,
-            source: sig.source,
-            signalTime: cur.time,
-          };
-        } catch (e) {
-          simulationErrors++;
-          this.logger.error(`[Backtest] Signal generation failed at ${symbol}/${cur.time}: ${e instanceof Error ? e.message : String(e)}`);
+        // ── Manage open position ──────────────────────────────────────────
+        if (openPos) {
+          const hitSL   = openPos.side === 'BUY' ? cur.low  <= openPos.sl : cur.high >= openPos.sl;
+          const hitTP   = openPos.side === 'BUY' ? cur.high >= openPos.tp : cur.low  <= openPos.tp;
+          const timeout = (i - openPos.openBar) >= MAX_TRADE_BARS;
+
+          if (hitSL || hitTP || timeout) {
+            const exitPrice  = hitSL ? openPos.sl : hitTP ? openPos.tp : cur.close;
+            const exitReason = hitSL ? 'SL' : hitTP ? 'TP' : 'TIMEOUT';
+
+            const exitQuoteToAccount = conversionAt(cur.time);
+            if (exitQuoteToAccount == null) {
+              valid = false;
+              blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+              break;
+            }
+
+            settlePosition(exitPrice, exitReason, cur.time, exitQuoteToAccount);
+          }
+        }
+
+        // ── Signal generation ─────────────────────────────────────────────
+        if (
+          !openPos &&
+          (evaluationStartTime == null || cur.time >= evaluationStartTime)
+        ) {
+          try {
+            const entryQuoteToAccount = conversionAt(cur.time);
+            if (entryQuoteToAccount == null) {
+              valid = false;
+              blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+              break;
+            }
+
+            const regime = marketRegimeDetector.detect(
+              symbol,
+              timeframe,
+              slice.slice(-100),
+              { useCache: false },
+            );
+            if (regime.regime === 'VOLATILE') continue;
+
+            // FIX BUG-C3: resample current slice to H4 and pass to orchestrator
+            // instead of the empty [] that caused H4 confirmation to be skipped.
+            const h4Candles = resampleToH4(slice).slice(0, -1).slice(-50);
+
+            const result = orchestrator.process(symbol, slice, h4Candles, regime.regime, timeframe);
+            if (result.outcome === 'NO_TRADE' || !result.signal) continue;
+
+            const sig = result.signal;
+            if (!passesMinimumSignalConfidence(sig.confidence, minimumSignalConfidence)) {
+              continue;
+            }
+
+            const atr = calculateATR(slice.slice(-50), 14);
+            if (!atr) continue;
+
+            // Queue the signal for the next completed bar's open. We deliberately
+            // do not use the current close as the fill price.
+            pendingSignal = {
+              side: sig.side,
+              sl: sig.sl,
+              tp: sig.tp,
+              source: sig.source,
+              signalTime: cur.time,
+            };
+          } catch (e) {
+            simulationErrors++;
+            this.logger.error(`[Backtest] Signal generation failed at ${symbol}/${cur.time}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        // Mark open positions to market on every historical bar. This keeps
+        // intra-trade adverse excursions in max drawdown instead of only
+        // measuring realized PnL after a trade closes.
+        if (valid && openPos) {
+          const markRate = conversionAt(cur.time);
+          if (markRate == null) {
+            valid = false;
+            blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
+            break;
+          }
+
+          const markGross = calculateGrossPnlAccount({
+            entryPrice: openPos.entry,
+            exitPrice: cur.close,
+            volume: openPos.size,
+            contractSize: economics!.contractSize,
+            quoteToAccount: markRate,
+            side: openPos.side,
+          });
+          const holdingCost = estimateHoldingCost({
+            entryPrice: openPos.entry,
+            exitPrice: cur.close,
+            volume: openPos.size,
+            contractSize: economics!.contractSize,
+            quoteToAccount: markRate,
+            entryQuoteToAccount: openPos.entryQuoteToAccount,
+            exitQuoteToAccount: markRate,
+            holdingDays: Math.max(0, (cur.time - openPos.openedAt) / (24 * 3_600_000)),
+          }, costProfile);
+          const liquidationExitCost = estimateExitCosts({
+            price: cur.close,
+            volume: openPos.size,
+            contractSize: economics!.contractSize,
+            quoteToAccount: markRate,
+          }, costProfile);
+
+          // Balance does not include opening costs until the position settles.
+          // Mark-to-liquidation equity therefore deducts the one-time entry cost,
+          // accrued holding cost, and the current hypothetical exit cost exactly once.
+          const liquidationCosts =
+            openPos.entryCostAccount + holdingCost + liquidationExitCost;
+
+          recordEquity(
+            cur.time,
+            balance + markGross - liquidationCosts,
+          );
+        } else {
+          recordEquity(cur.time, balance);
         }
       }
 
-      // Mark open positions to market on every historical bar. This keeps
-      // intra-trade adverse excursions in max drawdown instead of only
-      // measuring realized PnL after a trade closes.
+      // Settle a position still open when the historical dataset ends rather
+      // than silently dropping it from performance and cost accounting.
       if (valid && openPos) {
-        const markRate = conversionAt(cur.time);
-        if (markRate == null) {
+        const last = candles[candles.length - 1];
+        const exitQuoteToAccount = conversionAt(last.time);
+        if (exitQuoteToAccount == null) {
           valid = false;
-          blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${cur.time}`;
-          break;
+          blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${last.time}`;
+        } else {
+          settlePosition(last.close, 'TIMEOUT', last.time, exitQuoteToAccount);
+          recordEquity(last.time, balance);
         }
-
-        const markGross = calculateGrossPnlAccount({
-          entryPrice: openPos.entry,
-          exitPrice: cur.close,
-          volume: openPos.size,
-          contractSize: economics!.contractSize,
-          quoteToAccount: markRate,
-          side: openPos.side,
-        });
-        const holdingCost = estimateHoldingCost({
-          entryPrice: openPos.entry,
-          exitPrice: cur.close,
-          volume: openPos.size,
-          contractSize: economics!.contractSize,
-          quoteToAccount: markRate,
-          entryQuoteToAccount: openPos.entryQuoteToAccount,
-          exitQuoteToAccount: markRate,
-          holdingDays: Math.max(0, (cur.time - openPos.openedAt) / (24 * 3_600_000)),
-        }, costProfile);
-        const liquidationExitCost = estimateExitCosts({
-          price: cur.close,
-          volume: openPos.size,
-          contractSize: economics!.contractSize,
-          quoteToAccount: markRate,
-        }, costProfile);
-
-        // Balance does not include opening costs until the position settles.
-        // Mark-to-liquidation equity therefore deducts the one-time entry cost,
-        // accrued holding cost, and the current hypothetical exit cost exactly once.
-        const liquidationCosts =
-          openPos.entryCostAccount + holdingCost + liquidationExitCost;
-
-        recordEquity(
-          cur.time,
-          balance + markGross - liquidationCosts,
-        );
-      } else {
-        recordEquity(cur.time, balance);
       }
-    }
 
-    // Settle a position still open when the historical dataset ends rather
-    // than silently dropping it from performance and cost accounting.
-    if (valid && openPos) {
-      const last = candles[candles.length - 1];
-      const exitQuoteToAccount = conversionAt(last.time);
-      if (exitQuoteToAccount == null) {
+      if (simulationErrors > 0 && valid) {
         valid = false;
-        blockedReason = `Missing historical ${quoteCurrency}->${accountCurrency} conversion at ${last.time}`;
-      } else {
-        settlePosition(last.close, 'TIMEOUT', last.time, exitQuoteToAccount);
-        recordEquity(last.time, balance);
+        blockedReason = `Backtest encountered ${simulationErrors} simulation error(s)`;
       }
+
+      return this.buildResult(
+        symbol, timeframe, startBalance, balance, trades, equityCurve,
+        Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost, valid, blockedReason, dataQuality.score,
+      );
+    } finally {
+      try { db.raw().close(); } catch { /* best effort */ }
+      try { fs.unlinkSync(tmpDb); } catch { /* best effort */ }
     }
-
-    if (simulationErrors > 0 && valid) {
-      valid = false;
-      blockedReason = `Backtest encountered ${simulationErrors} simulation error(s)`;
-    }
-
-    try { fs.unlinkSync(tmpDb); } catch { /* pass */ }
-
-    return this.buildResult(
-      symbol, timeframe, startBalance, balance, trades, equityCurve,
-      Array.from(monthlyMap.values()), maxDDPct, maxDDUsd, totalComm, totalSpread, simulationErrors, totalCost, valid, blockedReason, dataQuality.score,
-    );
   }
 
   private buildResult(
