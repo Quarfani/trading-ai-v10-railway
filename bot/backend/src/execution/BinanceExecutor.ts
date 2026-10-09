@@ -2809,7 +2809,9 @@ export class BinanceExecutor {
       const quantity = Math.abs(signedAmount);
       const step = getSymbolSpec(symbol).volumeStep;
       if (Math.abs(quantity - expectedQuantity) > Math.max(step, expectedQuantity * 0.0001)) {
-        throw new Error(`Live position quantity changed during protection restoration on ${symbol}`);
+        this.logger.warn(
+          `[Binance] live position quantity changed during protection restoration on ${symbol}; restoring closePosition protection for live quantity=${quantity} (persisted=${expectedQuantity})`,
+        );
       }
 
       await this.cancelProtectionByOperationKey(symbol, side, operationKey);
