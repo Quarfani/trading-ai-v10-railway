@@ -7,6 +7,96 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+async function verifyFuturesProtectionCleanupIsOperationScoped() {
+  async function runCase(withUnrelatedOrder: boolean) {
+    const executor = new BinanceExecutor({
+      binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
+    } as any);
+    const operationKey = "owned-protection-cleanup-unit";
+    const slClientOrderId = (executor as any).makeProtectionClientOrderId(operationKey, "SL");
+    const tpClientOrderId = (executor as any).makeProtectionClientOrderId(operationKey, "TP");
+    const orders = new Map<string, any>([
+      [slClientOrderId, {
+        symbol: "BTCUSDT",
+        clientOrderId: slClientOrderId,
+        origClientOrderId: slClientOrderId,
+        orderId: 910,
+        status: "NEW",
+        side: "SELL",
+        type: "STOP_MARKET",
+        closePosition: true,
+      }],
+    ]);
+    const unrelated = {
+      symbol: "BTCUSDT",
+      clientOrderId: "manual-order",
+      orderId: 999,
+      status: "NEW",
+      side: "SELL",
+      type: "LIMIT",
+      closePosition: false,
+    };
+    const deleted: number[] = [];
+
+    (executor as any).signedGet = async (path: string, params: any) => {
+      if (path !== "/fapi/v1/order") throw new Error("unexpected lookup endpoint: " + path);
+      const clientOrderId = String(params?.origClientOrderId ?? "");
+      if (clientOrderId === tpClientOrderId) {
+        const missing: any = new Error("order does not exist");
+        missing.response = { data: { code: -2013 } };
+        throw missing;
+      }
+      const order = orders.get(clientOrderId);
+      if (!order) {
+        const missing: any = new Error("order does not exist");
+        missing.response = { data: { code: -2013 } };
+        throw missing;
+      }
+      return { ...order };
+    };
+    (executor as any).signedDelete = async (path: string, params: any) => {
+      assert(path === "/fapi/v1/order", "owned protective orders must use the Futures order endpoint");
+      const orderId = Number(params?.orderId);
+      deleted.push(orderId);
+      assert(orderId === 910, "cleanup may cancel only the exact operation-owned SL order");
+      const sl = orders.get(slClientOrderId);
+      if (!sl || Number(sl.orderId) !== orderId) throw new Error("delete identity mismatch");
+      orders.set(slClientOrderId, { ...sl, status: "CANCELED" });
+      return { ...orders.get(slClientOrderId) };
+    };
+    (executor as any).getOpenOrders = async (symbol: string) => {
+      assert(symbol === "BTCUSDT", "cleanup open-order verification must be symbol-scoped");
+      const open = [...orders.values()].filter(order => order.status === "NEW");
+      return withUnrelatedOrder ? [...open, unrelated] : open;
+    };
+
+    let threw = false;
+    try {
+      await (executor as any).cancelProtectionForEmergencyClose({
+        symbol: "BTCUSDT",
+        side: "BUY",
+        price: 100,
+        sl: 90,
+        tp: 120,
+        confidence: 0.8,
+        timestamp: 123456,
+        source: "unit",
+      }, operationKey);
+    } catch {
+      threw = true;
+    }
+    return { threw, deleted };
+  }
+
+  const clean = await runCase(false);
+  assert(!clean.threw, "exact owned protection cleanup should pass when no orders remain open");
+  assert(clean.deleted.length === 1 && clean.deleted[0] === 910, "only the exact owned SL order should be canceled");
+
+  const blocked = await runCase(true);
+  assert(blocked.threw, "emergency close must be blocked when an unrelated order remains open");
+  assert(blocked.deleted.length === 1 && !blocked.deleted.includes(999), "unrelated order must never be canceled by protection cleanup");
+}
+
 async function main() {
   let ledger: any = null;
   let ledgerCreates = 0;
@@ -51,6 +141,10 @@ async function main() {
   const executor = new BinanceExecutor({
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
   } as any, db as any);
+  let cleanupCalls = 0;
+  (executor as any).cancelProtectionForEmergencyClose = async () => {
+    cleanupCalls += 1;
+  };
 
   (executor as any).getPosition = async () => ({
     positionAmt: ++positionReads === 1 ? 1 : 0,
@@ -113,6 +207,7 @@ async function main() {
     "simulated SL/TP failure",
   );
 
+  assert(cleanupCalls === 1, "operation-owned protection cleanup must finish before the first emergency order");
   assert(ledgerCreates === 1, "one durable emergency-close intent must be created");
   assert(ledger.action === "PROTECTION_FAIL_CLOSE", "intent must have its own emergency-close action");
   assert(ledger.status === "UNKNOWN", "verified broker execution must remain unresolved until PnL and parent settlement");
@@ -142,6 +237,9 @@ async function main() {
   assert(brokerPosts === 1, "recovery must not submit a duplicate market order");
   assert(ledger.status === "UNKNOWN", "recovery evidence must not bypass atomic accounting settlement");
   assert(positionReads === 3, "recovery must query and validate the post-close inventory again");
+  assert(cleanupCalls === 1, "a replay of an existing emergency intent must not restart the protection/close flow");
+
+  await verifyFuturesProtectionCleanupIsOperationScoped();
 
   let flipLedgerWrites = 0;
   const flipDb = {
