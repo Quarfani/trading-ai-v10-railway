@@ -119,7 +119,7 @@ async function main() {
   assert(ledger.status === "UNKNOWN", "recovery evidence must not bypass atomic accounting settlement");
   assert(positionReads === 3, "recovery must query and validate the post-close inventory again");
 
-  console.log("Result: 12 assertions passed, 0 failed");
+  console.log("Result: 16 assertions passed, 0 failed");
 }
 
 main().catch(error => {
