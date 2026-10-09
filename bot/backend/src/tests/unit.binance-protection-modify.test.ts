@@ -179,31 +179,85 @@ async function verifyReplacementFailureKeepsOldProtection() {
   const executor = new BinanceExecutor({
     binance: { apiKey: "test", secret: "test", env: "testnet", futures: true },
   } as any);
+  const symbol = "BTCUSDT";
+  const priorOperationKey = "old-operation";
+  const nextOperationKey = "new-operation";
+  const oldOrders = new Map<string, any>();
+  for (const [kind, algoId, triggerPrice] of [["SL", 801, 90], ["TP", 802, 110]] as const) {
+    const clientAlgoId = (executor as any).makeProtectionClientOrderId(priorOperationKey, kind);
+    oldOrders.set(clientAlgoId, {
+      symbol,
+      algoId,
+      clientAlgoId,
+      algoType: "CONDITIONAL",
+      algoStatus: "NEW",
+      side: "SELL",
+      orderType: kind === "SL" ? "STOP_MARKET" : "TAKE_PROFIT_MARKET",
+      triggerPrice: String(triggerPrice),
+      closePosition: true,
+    });
+  }
+
   let cancellations = 0;
+  let loggedWarning = "";
+  (executor as any).logger.warn = (message: unknown) => {
+    loggedWarning = String(message);
+  };
   (executor as any).getPosition = async () => ({
     positionAmt: 1,
     entryPrice: 100,
     unrealizedProfit: 0,
   });
-  (executor as any).placeSLTP = async () => {
-    throw new Error("simulated replacement placement failure");
+  (executor as any).recoverProtectionByOperation = async (
+    _symbol: string,
+    operationKey: string,
+  ) => {
+    assert(operationKey === nextOperationKey, "replacement lookup must use the new MOVE_SL_TP key");
+    return { sl: null, tp: null };
   };
+  (executor as any).signedPost = async (path: string, payload: any) => {
+    assert(path === "/fapi/v1/algoOrder", "replacement conditional protection must use the Algo API");
+    assert(payload.clientAlgoId === (executor as any).makeProtectionClientOrderId(nextOperationKey, "SL"), "failed SL request must retain its exact operation identity");
+    const failure: any = new Error("Binance rejected the conflicting conditional order");
+    failure.response = {
+      data: {
+        code: -4130,
+        msg: "An open stop or take profit order with GTE and closePosition in the direction is existing",
+      },
+    };
+    throw failure;
+  };
+  (executor as any).getAlgoOrderByClientIdStrict = async (
+    _symbol: string,
+    clientAlgoId: string,
+  ) => oldOrders.get(clientAlgoId) ?? null;
+  (executor as any).getOpenAlgoOrders = async () =>
+    [...oldOrders.values()].filter(order => order.algoStatus === "NEW");
   (executor as any).signedDelete = async () => {
     cancellations += 1;
-    return {};
+    throw new Error("prior protection must not be canceled by a rejected replacement");
   };
+  (executor as any).placeSLTP = undefined;
 
   const result = await executor.modifyPosition(
     8,
-    "BTCUSDT",
+    symbol,
     "BUY",
-    90,
-    110,
-    "new-operation",
-    "old-operation",
+    91,
+    111,
+    nextOperationKey,
+    priorOperationKey,
   );
-  assert(!result, "modification must fail when replacement protection cannot be created and verified");
-  assert(cancellations === 0, "old protection must not be canceled after replacement creation fails");
+  assert(!result, "modification must remain unresolved when Binance rejects replacement with -4130");
+  assert(cancellations === 0, "old protection must not be canceled after Binance rejects replacement");
+  assert(
+    [...oldOrders.values()].every(order => order.algoStatus === "NEW"),
+    "the exact previous SL/TP pair must remain active after -4130",
+  );
+  assert(
+    loggedWarning.includes("code=-4130"),
+    "Binance conditional-order error code must remain visible for diagnosis and safe recovery",
+  );
 }
 
 async function verifyExistingAlgoPairIsRecoveredWithoutDuplicateSubmission() {
