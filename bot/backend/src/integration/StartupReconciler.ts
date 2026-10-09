@@ -6,6 +6,7 @@ import { TelegramBot } from '../notifications/TelegramBot';
 import { Logger } from '../utils/Logger';
 import { MarketScanner } from '../core/MarketScanner';
 import { CurrencyConversionProvider } from '../market/CurrencyConversionProvider';
+import { getSymbolSpec } from '../config/symbolConfig';
 
 /**
  * Startup reconciliation is a trading gate, not a best-effort diagnostic.
@@ -827,6 +828,8 @@ export class StartupReconciler {
           String(signal.side ?? '').trim().toUpperCase() !== side ||
           !(quantity > 0) ||
           !Number.isFinite(quantity) ||
+          (row.volume != null && (!Number.isFinite(Number(row.volume)) ||
+            Math.abs(Number(row.volume) - quantity) > Math.max(1e-8, quantity * 0.0001))) ||
           !Number.isFinite(positionBeforeSigned) ||
           !(positionBeforeAmount > 0) ||
           !Number.isFinite(positionBeforeAmount) ||
@@ -931,7 +934,7 @@ export class StartupReconciler {
         const expectedSignedAfter = this.config.binance.futures
           ? positionBeforeSigned - (side === 'BUY' ? closeFill.executedQty : -closeFill.executedQty)
           : positionBeforeSigned - closeFill.executedQty;
-        const tolerance = Math.max(1e-8, quantity * 0.0001);
+        const tolerance = Math.max(getSymbolSpec(symbol).volumeStep, quantity * 0.0001);
         if (
           expectedSignedAfter < -tolerance && !this.config.binance.futures ||
           !Number.isFinite(expectedSignedAfter) ||
