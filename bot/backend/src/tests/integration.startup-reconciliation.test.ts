@@ -634,6 +634,163 @@ async function main() {
     binanceModifyDb.raw().close();
   }
 
+  const interruptedProtectionDb = await newDb();
+  const interruptedProtectionTradeId = interruptedProtectionDb.insertTrade({
+    ticket: 603, symbol: 'BTCUSDT', timeframe: 'H1', side: 'BUY', volume: 1,
+    entry: 100, sl: 90, tp: 120, status: 'open', openedAt: Date.now(), source: 'TEST',
+  });
+  interruptedProtectionDb.createExecutionLedger({
+    executionId: 'binance-interrupted-open',
+    operationKey: 'binance-interrupted-open-op',
+    action: 'OPEN',
+    status: 'EXECUTED',
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    volume: 1,
+    request: { tradeId: interruptedProtectionTradeId, volume: 1 },
+  });
+  const interruptedModifyKey = 'binance-interrupted-modify-op';
+  const interruptedRestoreKey = `PROTECTION_RESTORE:${interruptedModifyKey}:binance-interrupted-open-op`;
+  const interruptedProbe = new BinanceExecutor(futuresCfg);
+  const interruptedIds = (key: string) => ({
+    sl: (interruptedProbe as any).makeProtectionClientOrderId(key, 'SL'),
+    tp: (interruptedProbe as any).makeProtectionClientOrderId(key, 'TP'),
+  });
+  const interruptedOldIds = interruptedIds('binance-interrupted-open-op');
+  const interruptedNewIds = interruptedIds(interruptedModifyKey);
+  interruptedProtectionDb.createExecutionLedger({
+    executionId: 'binance-interrupted-modify',
+    operationKey: interruptedModifyKey,
+    action: 'MOVE_SL_TP',
+    status: 'UNKNOWN',
+    symbol: 'BTCUSDT',
+    side: 'BUY',
+    volume: 1,
+    request: {
+      tradeId: interruptedProtectionTradeId,
+      newSl: 95,
+      newTp: 110,
+      schemaVersion: 1,
+      symbol: 'BTCUSDT',
+      ticket: 603,
+      positionSide: 'BUY',
+      quantity: 1,
+      oldProtectionKey: 'binance-interrupted-open-op',
+      newProtectionKey: interruptedModifyKey,
+      restoreProtectionKey: interruptedRestoreKey,
+      phase: 'NEW_PAIR_REQUESTED',
+      activeProtectionKey: null,
+      oldProtection: {
+        slClientAlgoId: interruptedOldIds.sl,
+        tpClientAlgoId: interruptedOldIds.tp,
+        slAlgoId: 9301,
+        tpAlgoId: 9302,
+        slPrice: 90,
+        tpPrice: 120,
+      },
+      requestedProtection: {
+        slPrice: 95,
+        tpPrice: 110,
+        slClientAlgoId: interruptedNewIds.sl,
+        tpClientAlgoId: interruptedNewIds.tp,
+      },
+    },
+  });
+
+  const interruptedOriginalPing = (BinanceExecutor.prototype as any).ping;
+  const interruptedOriginalPositions = (BinanceExecutor.prototype as any).getAllPositions;
+  const interruptedOriginalOpenOrders = (BinanceExecutor.prototype as any).getOpenOrders;
+  const interruptedOriginalAlgoOrders = (BinanceExecutor.prototype as any).getOpenAlgoOrders;
+  const interruptedOriginalRecover = (BinanceExecutor.prototype as any).recoverProtectionByOperation;
+  const interruptedOriginalCancel = (BinanceExecutor.prototype as any).cancelProtectionByOperationKey;
+  const interruptedOriginalRestore = (BinanceExecutor.prototype as any).restoreProtectionPairForReconciliation;
+  const interruptedPairs = new Map<string, { sl: any; tp: any }>();
+  let interruptedOpenAlgoOrders: any[] = [];
+  let restorationCalls = 0;
+  const makeInterruptedPair = (key: string, slPrice: number, tpPrice: number) => {
+    const ids = interruptedIds(key);
+    const pair = {
+      sl: { symbol: 'BTCUSDT', orderId: 9401, clientOrderId: ids.sl, side: 'SELL', type: 'STOP_MARKET', closePosition: true, stopPrice: String(slPrice), status: 'NEW' },
+      tp: { symbol: 'BTCUSDT', orderId: 9402, clientOrderId: ids.tp, side: 'SELL', type: 'TAKE_PROFIT_MARKET', closePosition: true, stopPrice: String(tpPrice), status: 'NEW' },
+    };
+    interruptedPairs.set(key, pair);
+    interruptedOpenAlgoOrders = [...interruptedOpenAlgoOrders.filter((order: any) =>
+      order.clientOrderId !== ids.sl && order.clientOrderId !== ids.tp,
+    ), pair.sl, pair.tp];
+    return pair;
+  };
+  try {
+    (BinanceExecutor.prototype as any).ping = async () => true;
+    (BinanceExecutor.prototype as any).getAllPositions = async () => [{
+      symbol: 'BTCUSDT', positionAmt: 1, entryPrice: 100, unrealizedProfit: 0,
+    }];
+    (BinanceExecutor.prototype as any).getOpenOrders = async () => [];
+    (BinanceExecutor.prototype as any).getOpenAlgoOrders = async (symbol: string) => {
+      assert(symbol === 'BTCUSDT', 'interrupted protection recovery must query the exact symbol');
+      return interruptedOpenAlgoOrders;
+    };
+    (BinanceExecutor.prototype as any).recoverProtectionByOperation = async (symbol: string, key: string) => {
+      assert(symbol === 'BTCUSDT', 'interrupted protection recovery must use the trade symbol');
+      return interruptedPairs.get(key) ?? { sl: null, tp: null };
+    };
+    (BinanceExecutor.prototype as any).cancelProtectionByOperationKey = async (
+      symbol: string,
+      side: string,
+      key: string,
+    ) => {
+      assert(symbol === 'BTCUSDT', 'interrupted protection cancellation must use the trade symbol');
+      assert(side === 'BUY', 'interrupted protection cancellation must preserve the position side');
+      const ids = interruptedIds(key);
+      interruptedOpenAlgoOrders = interruptedOpenAlgoOrders.filter((order: any) =>
+        order.clientOrderId !== ids.sl && order.clientOrderId !== ids.tp,
+      );
+      interruptedPairs.delete(key);
+    };
+    (BinanceExecutor.prototype as any).restoreProtectionPairForReconciliation = async (
+      ticket: number,
+      symbol: string,
+      side: string,
+      quantity: number,
+      key: string,
+      slPrice: number,
+      tpPrice: number,
+    ) => {
+      restorationCalls += 1;
+      assert(ticket === 603 && symbol === 'BTCUSDT' && side === 'BUY' && quantity === 1,
+        'startup restoration must use the original position identity and quantity');
+      assert(key === interruptedRestoreKey && slPrice === 90 && tpPrice === 120,
+        'startup restoration must use a deterministic key and the original protection targets');
+      makeInterruptedPair(key, slPrice, tpPrice);
+      return true;
+    };
+
+    await new StartupReconciler(
+      futuresCfg,
+      interruptedProtectionDb,
+      new TelegramBot(futuresCfg),
+    ).run();
+
+    const interruptedLedger = interruptedProtectionDb.getExecutionByOperationKey(interruptedModifyKey);
+    const restoredTrade = interruptedProtectionDb.getOpenTrades().find((trade: any) => trade.id === interruptedProtectionTradeId);
+    assert(interruptedLedger.status === 'FAILED',
+      'interrupted Binance modification must settle as failed after prior protection is restored');
+    assert(restorationCalls === 1,
+      'startup must invoke restoration exactly once when both requested and prior pairs are absent');
+    assert(restoredTrade?.sl === 90 && restoredTrade?.tp === 120,
+      'restoring prior protection must not persist the failed requested targets');
+    assert(interruptedPairs.has(interruptedRestoreKey),
+      'restored protection must remain under its deterministic restoration identity');
+  } finally {
+    (BinanceExecutor.prototype as any).ping = interruptedOriginalPing;
+    (BinanceExecutor.prototype as any).getAllPositions = interruptedOriginalPositions;
+    (BinanceExecutor.prototype as any).getOpenOrders = interruptedOriginalOpenOrders;
+    (BinanceExecutor.prototype as any).getOpenAlgoOrders = interruptedOriginalAlgoOrders;
+    (BinanceExecutor.prototype as any).recoverProtectionByOperation = interruptedOriginalRecover;
+    (BinanceExecutor.prototype as any).cancelProtectionByOperationKey = interruptedOriginalCancel;
+    (BinanceExecutor.prototype as any).restoreProtectionPairForReconciliation = interruptedOriginalRestore;
+    interruptedProtectionDb.raw().close();
+  }
+
   const spotCfg = { ...config(), mode: 'binance', dataSource: 'binance', binance: { ...config().binance, futures: false } } as SystemConfig;
   const originalPing = (BinanceExecutor.prototype as any).ping;
   const originalBalances = (BinanceExecutor.prototype as any).getAllSpotBalancesForConfiguredSymbols;
