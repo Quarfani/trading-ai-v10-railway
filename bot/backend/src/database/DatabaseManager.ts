@@ -984,6 +984,20 @@ export class DatabaseManager {
     return changed === 1;
   }
 
+  updateExecutionRequest(
+    executionId: string,
+    request: Record<string, unknown>,
+  ): boolean {
+    const serialized = JSON.stringify(request);
+    if (!serialized) return false;
+    const changed = this.db.prepare(`
+      UPDATE execution_ledger
+      SET requestJson=?, updatedAt=?
+      WHERE executionId=? AND status IN ('PENDING','UNKNOWN')
+    `).run(serialized, Date.now(), executionId).changes;
+    return changed === 1;
+  }
+
   updateExecutionLedger(executionId: string, patch: {
     status?: string; brokerOrderId?: string | number; retryCount?: number;
     result?: unknown; error?: string | null;
