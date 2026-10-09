@@ -2648,12 +2648,32 @@ export class BinanceExecutor {
         protectionSide = ids.closeSide === 'SELL' ? 'BUY' : 'SELL';
       }
 
+      if (this.isFutures && protectionOperationKey) {
+        if (!protectionSide) {
+          throw new Error(
+            `Binance Futures close lacks an authoritative position side for operation-owned protection cleanup: ${symbol}`,
+          );
+        }
+        await this.cancelProtectionForEmergencyClose({
+          symbol,
+          side: protectionSide,
+          price: Number(entryPrice ?? 0),
+          sl: 0,
+          tp: 0,
+          confidence: 1,
+          timestamp: Date.now(),
+          source: 'close-protection-cleanup',
+        } as Signal, protectionOperationKey);
+      }
+
       const brokerProtectionIds =
-        this.isFutures && protectionSide
+        this.isFutures && protectionSide && !protectionOperationKey
           ? await this.getProtectiveOrderIds(symbol, protectionSide)
           : [];
       const oldOrderIds = this.isFutures
-        ? [...new Set([...trackedIds, ...brokerProtectionIds])]
+        ? protectionOperationKey
+          ? []
+          : [...new Set([...trackedIds, ...brokerProtectionIds])]
         : protectionOperationKey
           ? []
           : [...new Set(trackedIds)];
