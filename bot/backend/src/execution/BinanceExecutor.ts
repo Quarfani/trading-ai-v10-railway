@@ -551,8 +551,6 @@ export class BinanceExecutor {
 
     const quoteCurrency = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
     if (!quoteCurrency) return null;
-    const quoteCurrency = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
-    if (!quoteCurrency) return null;
     let currency = '';
     let weightedPrice = 0;
     let totalQty = 0;
@@ -622,6 +620,9 @@ export class BinanceExecutor {
     });
 
     if (!Array.isArray(fills) || fills.length === 0) return null;
+
+    const quoteCurrency = ['USDT', 'USDC', 'BUSD'].find(q => symbol.endsWith(q));
+    if (!quoteCurrency) return null;
 
     let net = 0;
     let currency = '';
