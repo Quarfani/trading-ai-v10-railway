@@ -410,7 +410,7 @@ export class ExecutionGateway {
         }
       } else if (this.config.mode === 'binance') {
         if (!t.ticket) throw new Error('Trade has no broker ticket');
-        let protectionState: Record<string, unknown> | null = null;
+        const protectionState: { current: Record<string, unknown> | null } = { current: null };
         const modified = await this.binance.modifyPosition(
           t.ticket,
           t.symbol,
@@ -423,12 +423,12 @@ export class ExecutionGateway {
             const next = { ...state };
             const request = { tradeId: t.id, newSl, newTp, ...next };
             if (!this.db.updateExecutionRequest(op.executionId, request)) return false;
-            protectionState = next;
+            protectionState.current = next;
             return true;
           },
         );
         if (!modified) {
-          const phase = String(protectionState?.phase ?? '');
+          const phase = String(protectionState.current?.phase ?? '');
           if (phase === 'OLD_PAIR_RETAINED' || phase === 'RESTORE_VERIFIED') {
             const failed = this.db.updateExecutionLedger(op.executionId, {
               status: 'FAILED',
@@ -436,7 +436,7 @@ export class ExecutionGateway {
                 broker: 'binance',
                 requestedSl: newSl,
                 requestedTp: newTp,
-                activeProtectionKey: protectionState?.activeProtectionKey ?? currentProtectionOperationKey,
+                activeProtectionKey: protectionState.current?.activeProtectionKey ?? currentProtectionOperationKey,
                 phase,
               },
               error: `Requested SL/TP modification failed; protection remains on the verified prior/restored pair (phase=${phase})`,
