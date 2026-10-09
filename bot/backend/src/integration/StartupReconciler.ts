@@ -1630,7 +1630,7 @@ export class StartupReconciler {
         SELECT operationKey, requestJson, tradeId
         FROM execution_ledger
         WHERE action='MOVE_SL_TP'
-          AND status='EXECUTED'
+          AND status IN ('EXECUTED','FAILED')
           AND (tradeId=? OR tradeId IS NULL)
         ORDER BY updatedAt DESC, executionId DESC
         LIMIT 100
@@ -1638,6 +1638,7 @@ export class StartupReconciler {
         operationKey: string;
         requestJson?: string | null;
         tradeId?: number | null;
+        status?: string;
       }>;
       for (const row of moveRows) {
         try {
@@ -1646,10 +1647,33 @@ export class StartupReconciler {
             Number(row.tradeId ?? moveRequest?.tradeId) === Number(t.id) &&
             Number(moveRequest?.tradeId) === Number(t.id)
           ) {
-            latestMoveOperation = {
-              operationKey: String(row.operationKey),
-              request: moveRequest,
-            };
+            if (
+              row.status === 'FAILED' &&
+              ['RESTORE_VERIFIED', 'OLD_PAIR_RETAINED'].includes(String(moveRequest?.phase ?? ''))
+            ) {
+              const activeKey = String(moveRequest?.activeProtectionKey ?? '').trim();
+              const oldProtection = moveRequest?.oldProtection ?? {};
+              const activeSl = Number(oldProtection.slPrice);
+              const activeTp = Number(oldProtection.tpPrice);
+              if (
+                !activeKey ||
+                !(activeSl > 0) || !(activeTp > 0) ||
+                !Number.isFinite(activeSl) || !Number.isFinite(activeTp)
+              ) {
+                throw new Error(`Failed Binance protection modification has incomplete active protection metadata for trade id=${t.id}`);
+              }
+              latestMoveOperation = {
+                operationKey: activeKey,
+                request: { ...moveRequest, newSl: activeSl, newTp: activeTp },
+              };
+            } else if (row.status === 'EXECUTED') {
+              latestMoveOperation = {
+                operationKey: String(row.operationKey),
+                request: moveRequest,
+              };
+            } else {
+              continue;
+            }
             break;
           }
         } catch {
