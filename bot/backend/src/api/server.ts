@@ -33,6 +33,11 @@ const MonteCarloSchema = z.object({
   simulations: z.number().int().min(100).max(10_000).optional(),
   trades: z.number().int().min(10).max(250).optional(),
 });
+const WalkForwardSchema = z.object({
+  symbol: z.string().min(3).max(20).regex(/^[A-Z0-9]+$/).optional(),
+  timeframe: z.enum(['M1','M5','M15','M30','H1','H4','D1']).optional(),
+  count: z.number().int().min(300).max(5000).optional(),
+});
 const NoteSchema      = z.object({ note: z.string().max(500) });
 const EmergencySchema = z.object({ reason: z.string().max(200).optional() });
 const ResumeSchema    = z.object({ approver: z.string().max(100).optional() });
@@ -54,7 +59,7 @@ export function createApi(engine: TradingEngine) {
   app.use(cors({
     origin: ALLOWED_ORIGIN, credentials: true,
     methods: ['GET','POST','OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Backup-Token'],
   }));
   app.use(express.json({ limit: '512kb' }));
   app.use(rateLimit(180));
@@ -319,7 +324,7 @@ export function extendApiV8(app: Express, engine: any) {
   });
 
   // Walk-Forward (async, returns cached result or triggers new run)
-  app.post('/api/walkforward', requireRole('admin'), rateLimit(1, 'walkforward'), async (req: any, res: any) => {
+  app.post('/api/walkforward', requireRole('admin'), rateLimit(1, 'walkforward'), validate(WalkForwardSchema), async (req: any, res: any) => {
     try {
       // WFO temporarily sets strategy parameters in process.env. Never allow
       // that research mutation while the live/paper execution loop is active.
