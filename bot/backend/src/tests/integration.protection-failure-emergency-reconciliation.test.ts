@@ -698,6 +698,21 @@ async function verifyEmergencyCloseUsesHistoricalEntryAndExitFx() {
     MarketScanner.prototype.fetchCandles = originalFetchCandles;
     f.db.raw().close();
   }
+
+  const stale = await makeFixture(true);
+  stale.config.accountCurrency = 'EUR';
+  const originalFetchCandlesForStaleCase = MarketScanner.prototype.fetchCandles;
+  (MarketScanner.prototype as any).fetchCandles = async () => [];
+  try {
+    await (stale.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(stale.executor);
+    assert(stale.db.getExecutionByOperationKey(stale.parentOperationKey).status === 'UNKNOWN', 'missing historical FX must preserve the unresolved parent OPEN');
+    assert(stale.db.getExecutionByOperationKey(stale.childOperationKey).status === 'UNKNOWN', 'missing historical FX must preserve the unresolved emergency child');
+    assert(stale.db.getRecentTrades(10).length === 0, 'missing historical FX must not create a trade with guessed/current-rate PnL');
+    assert(String(stale.db.getExecutionByOperationKey(stale.childOperationKey).error).includes('Timestamp-aligned FX conversion'), 'unavailable historical FX must explain the fail-closed decision');
+  } finally {
+    MarketScanner.prototype.fetchCandles = originalFetchCandlesForStaleCase;
+    stale.db.raw().close();
+  }
 }
 
 async function main() {
