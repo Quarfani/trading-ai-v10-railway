@@ -85,6 +85,7 @@ This status supersedes earlier statements in this historical report about missin
 
 - **Consensus correctness:** a single vote may use half the configured aggregate-weight threshold only when it is the only vote and its confidence is at least 0.72. The ordinary threshold remains in force for medium-confidence votes; a 0.56-confidence single vote below the configured weight threshold still results in NO_TRADE. Malformed confidence values and non-finite/zero strategy weights are ignored, and non-finite aggregate weights fail closed.
 - **Final portfolio risk:** post-risk sizing multipliers cannot increase the originally approved volume. After absolute per-trade risk is re-applied, the engine re-checks gross exposure/leverage and portfolio heat against the final volume and executable entry price immediately before execution.
+- Paper mode now also fetches current marks for already-open positions before exposure checks. If a mark cannot be obtained, the existing exposure gate remains fail-closed instead of silently ignoring or mispricing a position.
 - **Rate-limit abuse resistance:** caller-supplied `X-Forwarded-For` is ignored; proxy-derived client identity is opt-in. Proxy header values cannot receive the localhost exemption. Both the rate-limit state and login-attempt state have capacity limits; active bans are retained and new identities are rejected when capacity remains full.
 - **Configuration safety:** credential placeholders are rejected at startup. Live broker mode and market-data source must match. Local, cloud Paper, Railway Paper, Binance Testnet, and production profiles have explicit constraints; Binance mainnet and MT5 have separate live acknowledgments. Consensus weighting/dominance/sample-window configuration is range checked.
 - **API resource controls:** heavy research endpoints have separate rate-limit buckets and bounded schemas; numeric query limits and timeframe query values are parsed before reaching SQL or analytics.
@@ -103,7 +104,7 @@ This status supersedes earlier statements in this historical report about missin
 
 ### Verification status
 
-- Current source/test candidate: `05f937e892522ec38440ddcfc50212d0aade4341`. `main` remains `97a176f066848d1fa90d6e3eb8585fcaf50be650`; no merge or deployment has been performed.
+- Latest source change: `1a96cc458dc93eb1cdef8e1e866652f67cc1e886` (Paper open-position marks; source-reviewed but not executed). The broader test additions were last committed in `05f937e892522ec38440ddcfc50212d0aade4341`. `main` remains `97a176f066848d1fa90d6e3eb8585fcaf50be650`; no merge or deployment has been performed.
 - The repository tree contains **121 backend `.test.ts` files** and both backend/frontend `package-lock.json` files. The tree contains no tracked real `.env` file.
 - GitHub check runs for the source/test candidate: **0**. GitHub Actions were not launched.
 - Backend `npm run typecheck`, `npm test`, backend build, frontend build, Python tests, dependency audit, Docker builds, Testnet E2E, Paper soak, and backup/restore drills remain **NOT RUN**.
