@@ -39,8 +39,17 @@ export function rateLimit(maxPerMin = 100, namespace = 'global') {
     let   info = state.get(stateKey);
     if (!info) {
       if (state.size >= MAX_TRACKED_KEYS) {
-        const oldestKey = state.keys().next().value;
-        if (oldestKey !== undefined) state.delete(oldestKey);
+        // Reclaim only genuinely idle, unbanned entries. Never evict an active
+        // rate-limit record just because an attacker varies source addresses.
+        const pruneBefore = now - 120_000;
+        for (const [key, entry] of state) {
+          const last = entry.requests[entry.requests.length - 1] ?? 0;
+          if (last < pruneBefore && now > entry.bannedUntil) state.delete(key);
+        }
+        if (state.size >= MAX_TRACKED_KEYS) {
+          res.setHeader('Retry-After', '60');
+          return res.status(429).json({ error: 'Rate-limit capacity reached; try again later' });
+        }
       }
       info = { requests: [], violations: 0, bannedUntil: 0 };
       state.set(stateKey, info);
