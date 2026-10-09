@@ -96,10 +96,15 @@ export class BinanceExecutor {
       throw new Error('Emergency close position state unavailable for ' + signal.symbol);
     }
 
-    const beforeAmount = Math.abs(Number(before.positionAmt));
+    const beforeSignedAmount = Number(before.positionAmt);
+    const beforeAmount = Math.abs(beforeSignedAmount);
     const quantityTolerance = Math.max(spec.volumeStep, Math.abs(quantity) * 0.0001);
     if (
-      !Number.isFinite(beforeAmount) ||
+      !Number.isFinite(beforeSignedAmount) ||
+      !(beforeAmount > 0) ||
+      (this.isFutures &&
+        ((signal.side === 'BUY' && beforeSignedAmount <= 0) ||
+         (signal.side === 'SELL' && beforeSignedAmount >= 0))) ||
       beforeAmount + quantityTolerance < quantity
     ) {
       throw new Error(
