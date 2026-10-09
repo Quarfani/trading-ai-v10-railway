@@ -71,6 +71,19 @@ function validateRange(
   return v;
 }
 
+function validateIntegerRange(
+  name: string,
+  value: number,
+  min: number,
+  max: number,
+): number {
+  const result = validateRange(name, value, min, max);
+  if (!Number.isInteger(result)) {
+    throw new Error(`[Config] ${name} must be an integer`);
+  }
+  return result;
+}
+
 function validateCurrency(value: string): string {
   const currency = value.trim().toUpperCase();
   if (!/^[A-Z]{3,5}$/.test(currency)) {
@@ -335,6 +348,49 @@ export function loadConfig(): SystemConfig {
   );
   const accountCurrency = validateCurrency(
     env('ACCOUNT_CURRENCY', 'USD'),
+  );
+
+  const consensusMinimumWeight = validateRange(
+    'CONSENSUS_MIN_WEIGHT',
+    num('CONSENSUS_MIN_WEIGHT', 0.25),
+    0.05,
+    2,
+  );
+  const consensusDominance = validateRange(
+    'CONSENSUS_DOMINANCE',
+    num('CONSENSUS_DOMINANCE', 0.60),
+    0.50,
+    1,
+  );
+  const consensusMinimumStrategies = validateIntegerRange(
+    'CONSENSUS_MIN_STRATEGIES',
+    num('CONSENSUS_MIN_STRATEGIES', 1),
+    1,
+    20,
+  );
+  const consensusRollingWindow = validateIntegerRange(
+    'CONSENSUS_ROLLING_WINDOW',
+    num('CONSENSUS_ROLLING_WINDOW', 30),
+    5,
+    500,
+  );
+  const consensusGateMinWinRate = validateRange(
+    'CONSENSUS_GATE_MIN_WIN_RATE',
+    num('CONSENSUS_GATE_MIN_WIN_RATE', 0.48),
+    0,
+    1,
+  );
+  const consensusGateMinSharpe = validateRange(
+    'CONSENSUS_GATE_MIN_SHARPE',
+    num('CONSENSUS_GATE_MIN_SHARPE', 0.80),
+    -5,
+    10,
+  );
+  const consensusGateMinTrades = validateIntegerRange(
+    'CONSENSUS_GATE_MIN_TRADES',
+    num('CONSENSUS_GATE_MIN_TRADES', 20),
+    1,
+    100_000,
   );
 
   const evidencePromotion = {
@@ -711,37 +767,16 @@ export function loadConfig(): SystemConfig {
       ),
     },
     consensus: {
-      minimumTotalWeight: num(
-        'CONSENSUS_MIN_WEIGHT',
-        0.25,
-      ),
-      dominanceRatio: num(
-        'CONSENSUS_DOMINANCE',
-        0.60,
-      ),
-      minimumActiveStrategies: num(
-        'CONSENSUS_MIN_STRATEGIES',
-        1,
-      ),
-      rollingWindowSize: num(
-        'CONSENSUS_ROLLING_WINDOW',
-        30,
-      ),
+      minimumTotalWeight: consensusMinimumWeight,
+      dominanceRatio: consensusDominance,
+      minimumActiveStrategies: consensusMinimumStrategies,
+      rollingWindowSize: consensusRollingWindow,
       gate: {
-        minWinRate: num(
-          'CONSENSUS_GATE_MIN_WIN_RATE',
-          0.48,
-        ),
-        minSharpeRatio: num(
-          'CONSENSUS_GATE_MIN_SHARPE',
-          0.80,
-        ),
+        minWinRate: consensusGateMinWinRate,
+        minSharpeRatio: consensusGateMinSharpe,
         minRollingExpectancy: 0.00,
         maxDrawdown: 0.22,
-        minTradesForGate: num(
-          'CONSENSUS_GATE_MIN_TRADES',
-          20,
-        ),
+        minTradesForGate: consensusGateMinTrades,
       },
     },
     s3Backup: s3Enabled
