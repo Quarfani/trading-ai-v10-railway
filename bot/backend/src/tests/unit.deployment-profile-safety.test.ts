@@ -82,6 +82,24 @@ function expectRejected(overrides: Record<string, string>, fragment: string, mes
 function main(): void {
   try {
     expectRejected(
+      { DASHBOARD_PASSWORD: 'REPLACE_WITH_A_RANDOM_PASSWORD_AT_LEAST_16_CHARS' },
+      'DASHBOARD_PASSWORD must not be a placeholder',
+      'a long dashboard-password template must not be accepted as a real secret',
+    );
+
+    expectRejected(
+      { SESSION_SECRET: 'REPLACE_WITH_A_RANDOM_SECRET_AT_LEAST_64_CHARS' },
+      'SESSION_SECRET must not be a placeholder',
+      'a long session-secret template must not be accepted as a real secret',
+    );
+
+    expectRejected(
+      { OPERATOR_PASSWORD: 'YOUR_OPERATOR_PASSWORD_PLACEHOLDER' },
+      'OPERATOR_PASSWORD must not be a placeholder',
+      'a placeholder operator secret must be rejected even when its length is sufficient',
+    );
+
+    expectRejected(
       { DEPLOYMENT_PROFILE: 'railway-paper', DATA_SOURCE: 'auto' },
       'requires DATA_SOURCE=binance',
       'Railway paper must reject auto mode because it could select MT5',
