@@ -811,6 +811,15 @@ export class StartupReconciler {
         if (!request || request.schemaVersion !== 1) {
           throw new Error('Emergency-close request schema is missing or unsupported');
         }
+        if (request.submissionState === 'PRECHECK_NOT_STARTED') {
+          throw new Error('Emergency-close precheck failed before any broker order was armed; operator reconciliation is required and no automatic resend is allowed');
+        }
+        if (
+          request.submissionState != null &&
+          request.submissionState !== 'SUBMISSION_ARMED'
+        ) {
+          throw new Error('Emergency-close submission state is unknown or unsupported');
+        }
 
         const parentOperationKey = String(request.parentOperationKey ?? '');
         const symbol = String(request.symbol ?? row.symbol ?? '').trim().toUpperCase();
