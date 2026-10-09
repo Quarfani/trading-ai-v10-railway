@@ -310,6 +310,23 @@ async function verifyPrecheckFailurePersistsIntent() {
   }
 }
 
+async function verifyMissingProtectionCleanupEvidenceBlocksSettlement() {
+  const f = await makeFixture(true);
+  try {
+    const child = f.db.getExecutionByOperationKey(f.childOperationKey);
+    const request = JSON.parse(child.requestJson);
+    delete request.protectionCleanupState;
+    assert(f.db.updateExecutionRequest(String(child.executionId), request), 'legacy emergency request should be made to simulate absent cleanup evidence');
+
+    await (f.reconciler as any).resolveProtectionFailureEmergencyCloseLedgers(f.executor);
+    assert(f.db.getRecentTrades(10).length === 0, 'recovery must not settle an emergency close without durable protection-cleanup proof');
+    assert(f.db.getExecutionByOperationKey(f.parentOperationKey).status === 'UNKNOWN', 'parent OPEN remains unresolved without cleanup proof');
+    assert(f.db.getExecutionByOperationKey(f.childOperationKey).status === 'UNKNOWN', 'emergency child remains unresolved without cleanup proof');
+  } finally {
+    f.db.raw().close();
+  }
+}
+
 async function verifyUnresolvedCloseStaysBlocked() {
   const f = await makeFixture(true, false);
   try {
@@ -441,6 +458,7 @@ async function main() {
   await verifyExactFillRecovery();
   await verifySettlement(false);
   await verifySettlement(true);
+  await verifyMissingProtectionCleanupEvidenceBlocksSettlement();
   await verifyUnresolvedCloseStaysBlocked();
   await verifyAtomicRollback();
   console.log(`Result: ${assertions} passed, 0 failed`);
