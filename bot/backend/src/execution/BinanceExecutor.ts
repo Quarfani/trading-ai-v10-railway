@@ -1782,15 +1782,11 @@ export class BinanceExecutor {
       Math.abs(expectedQty) * 0.0001,
     );
 
-    const slQty = Number(sl.origQty ?? sl.quantity ?? expectedQty);
-    const tpQty = Number(tp.origQty ?? tp.quantity ?? expectedQty);
+    // closePosition Algo orders intentionally omit quantity at the broker.
+    // Their identity, side, type, status and trigger prices are validated below.
     if (
       !(expectedQty > 0) ||
-      !Number.isFinite(expectedQty) ||
-      !Number.isFinite(slQty) ||
-      !Number.isFinite(tpQty) ||
-      Math.abs(slQty - expectedQty) > qtyTolerance ||
-      Math.abs(tpQty - expectedQty) > qtyTolerance
+      !Number.isFinite(expectedQty)
     ) {
       return null;
     }
