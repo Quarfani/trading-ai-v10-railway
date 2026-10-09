@@ -119,8 +119,24 @@ async function verifyReplaceThenCancelExactPriorPair() {
     entryPrice: 100,
     unrealizedProfit: 0,
   });
+  (executor as any).getAlgoOrderByClientIdStrict = async (
+    _symbol: string,
+    clientAlgoId: string,
+  ) => {
+    const found = orders.get(clientAlgoId);
+    if (!found) return null;
+    return {
+      ...found,
+      orderId: Number(found.algoId),
+      clientOrderId: String(found.clientAlgoId),
+      origClientOrderId: String(found.clientAlgoId),
+      status: String(found.algoStatus),
+      type: String(found.orderType),
+      stopPrice: found.triggerPrice,
+    };
+  };
   (executor as any).signedGet = async (path: string, params: any) => {
-    if (path === "/fapi/v1/algoOrder") {
+    if (path === "/fapi/v1.algoOrder" || path === "/fapi/v1/algoOrder") {
       const found = orders.get(String(params?.clientAlgoId ?? ""));
       if (found) return { ...found };
       const missing: any = new Error("Algo order not found");
