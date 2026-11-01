@@ -42,7 +42,7 @@ async function main() {
     const signal: Signal = {
       symbol: "BTCUSDT", side: "BUY", price: 100, confidence: 0.8,
       sl: 90, tp: 120, source: "TEST", reason: "paper-fx",
-      timestamp: 1_800_000_000_000, timeframe: "H1",
+      timestamp: Date.now() - 1_000, timeframe: "H1",
     };
 
     const opened = await gateway.execute(signal, 2, "H1");

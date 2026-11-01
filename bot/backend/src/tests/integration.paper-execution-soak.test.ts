@@ -30,7 +30,7 @@ function makeSignal(i: number): Signal {
     confidence: 0.80, sl: i % 2 === 0 ? entry - 0.005 : entry + 0.005,
     tp: i % 2 === 0 ? entry + 0.010 : entry - 0.010,
     source: "PAPER_SOAK", reason: "gateway-soak",
-    timestamp: 1_900_000_000_000 + i, timeframe: "H1",
+    timestamp: Date.now() - 10_000 + i, timeframe: "H1",
   };
 }
 
@@ -41,6 +41,7 @@ async function main() {
   const rates = { getRate: async () => 0.95 } as any;
   const db = new DatabaseManager(dbPath);
   await db.initialize();
+  let dbClosed = false;
 
   try {
     const gateway = new ExecutionGateway(cfg, db, rates);
@@ -65,6 +66,7 @@ async function main() {
 
     const balanceBeforeRestart = gateway.getPaperStats()!.balance;
     db.raw().close();
+    dbClosed = true;
 
     const dbRestarted = new DatabaseManager(dbPath);
     await dbRestarted.initialize();
@@ -77,6 +79,9 @@ async function main() {
 
     console.log("Result: 8 passed, 0 failed");
   } finally {
+    if (!dbClosed) {
+      try { db.raw().close(); } catch { /* already closed */ }
+    }
     if (fs.existsSync(dbPath)) fs.rmSync(dir, { recursive: true, force: true });
   }
 }

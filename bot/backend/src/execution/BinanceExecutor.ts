@@ -454,6 +454,18 @@ export class BinanceExecutor {
     }
   }
 
+  async recoverBinanceSpotOco(
+    symbol: string,
+    operationKey: string,
+  ): Promise<{
+    orderListId: number;
+    listStatusType: string;
+    listOrderStatus: string;
+    orders: any[];
+  } | null> {
+    return this.recoverSpotOcoByOperation(symbol, operationKey);
+  }
+
   async recoverProtectionByOperation(
     symbol: string,
     operationKey: string,
@@ -813,7 +825,7 @@ export class BinanceExecutor {
               );
             }
             fillPriceRecovered = summary.avgPrice;
-            entryCommissionRecovered = this.isFutures
+            entryCommissionRecovered = 'commission' in summary
               ? summary.commission
               : summary.feeQuote;
             entryCommissionCurrencyRecovered = summary.currency;
@@ -1666,6 +1678,7 @@ export class BinanceExecutor {
         throw new Error('Binance partial close returned invalid orderId');
       }
 
+      const executedQty = Number(order?.executedQty ?? order?.cumQty ?? 0);
       const status = String(order?.status ?? '').toUpperCase();
       if (status && status !== 'FILLED') {
         throw new Error(`Binance partial close was not fully filled: status=${status}`);
@@ -1826,6 +1839,9 @@ export class BinanceExecutor {
           throw new Error('Binance full close returned invalid orderId');
         }
 
+        const executedQty = Number(
+          closeOrder?.executedQty ?? closeOrder?.cumQty ?? 0,
+        );
         const closeStatus = String(closeOrder?.status ?? '').toUpperCase();
         const quantityTolerance = Math.max(
           getSymbolSpec(symbol).volumeStep,
@@ -2162,6 +2178,10 @@ export class BinanceExecutor {
     );
     if (!Array.isArray(result)) throw new Error(`Binance openOrders response is not an array${symbol ? ` for ${symbol}` : ''}`);
     return result;
+  }
+
+  async getBinanceOpenOrders(symbol?: string): Promise<any[]> {
+    return this.getOpenOrders(symbol);
   }
 
   // ─── Signed HTTP helpers ─────────────────────────────────────────────

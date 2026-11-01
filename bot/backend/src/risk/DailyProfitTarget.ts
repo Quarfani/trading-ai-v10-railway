@@ -1,8 +1,10 @@
 import { DatabaseManager } from '../database/DatabaseManager';
 import { SystemConfig } from '../types/trading.types';
 import { TelegramBot } from '../notifications/TelegramBot';
+import { Logger } from '../utils/Logger';
 
 export class DailyProfitTarget {
+  private logger = new Logger('DailyProfitTarget');
   private notified = '';
 
   constructor(
@@ -21,10 +23,10 @@ export class DailyProfitTarget {
       Number(currentEquity) > 0
     ) {
       const denominator = this.resolveDailyStartEquity(Number(currentEquity));
-      if (!(denominator > 0) || !Number.isFinite(denominator)) return false;
+      if (!(denominator > 0) || !Number.isFinite(denominator)) return true;
 
       const dailyChange = Number(currentEquity) - denominator;
-      if (!Number.isFinite(dailyChange)) return false;
+      if (!Number.isFinite(dailyChange)) return true;
       gainPct = dailyChange / denominator;
     } else {
       const stats = this.db.getTodayStats();

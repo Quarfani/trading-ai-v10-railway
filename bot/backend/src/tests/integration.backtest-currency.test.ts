@@ -30,7 +30,7 @@ const config: SystemConfig = {
 };
 
 const candles: Candle[] = Array.from({ length: 260 }, (_, i) => ({
-  time: i * 3_600_000,
+  time: (i + 1) * 3_600_000,
   open: 1,
   high: 1.001,
   low: 0.999,

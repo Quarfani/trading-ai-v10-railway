@@ -1,4 +1,5 @@
 import { DailyLossGuard } from "../risk/DailyLossGuard";
+import { DatabaseManager } from "../database/DatabaseManager";
 import { clearBrokerContracts, registerBrokerContract } from "../market/MarketCatalog";
 
 function assert(condition: unknown, message: string): asserts condition {

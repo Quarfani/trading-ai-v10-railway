@@ -635,6 +635,7 @@ export class ExecutionGateway {
             t.symbol,
             t.timeframe ?? 'H1',
           );
+        const closedAt = Date.now();
         const result = this.settlePaperTrade(
           t,
           exitPrice,
@@ -648,7 +649,7 @@ export class ExecutionGateway {
             t.id,
             op.executionId,
             Number(result.profit) - Number(t.realizedProfit ?? 0),
-            Date.now(),
+            closedAt,
             reason,
             {
               ...result,
@@ -667,6 +668,11 @@ export class ExecutionGateway {
         )) {
           throw new Error('Paper settlement succeeded but execution ledger could not be resolved');
         }
+        t.status = 'closed';
+        t.closedAt = closedAt;
+        t.profit = Number(result.profit);
+        t.exitPrice = exitPrice;
+        t.exitQuoteToAccount = quoteToAccount;
         return { ok: true, profit: result.profit };
       }
 
@@ -719,7 +725,7 @@ export class ExecutionGateway {
         },
       );
       this.logger.error(
-        `closeAtMarket: ${e?.message ?? e}`,
+        `closeAtMarket: ${e?.stack ?? e?.message ?? e}`,
       );
       return { ok: false };
     }

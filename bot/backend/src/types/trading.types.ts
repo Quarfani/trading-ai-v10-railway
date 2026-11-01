@@ -86,6 +86,7 @@ export interface Trade {
   status: 'open' | 'closed';
   openedAt: number;
   closedAt?: number;
+  exitPrice?: number;
   profit?: number;
   realizedProfit?: number;
   source: string;
