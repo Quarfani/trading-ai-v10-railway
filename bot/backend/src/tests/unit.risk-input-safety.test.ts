@@ -63,9 +63,9 @@ async function main() {
     { ...base, confidence: Number.NaN } as any,
     [],
   );
-  assert(!nanConfidence.allowed, 'NaN confidence must block before risk evaluation');
+  assert(!nanConfidence.passed, 'NaN confidence must block before risk evaluation');
   assert(
-    nanConfidence.reason === 'invalid_signal',
+    nanConfidence.blockedBy === 'invalid_signal',
     'NaN confidence must return invalid_signal',
   );
 
@@ -73,22 +73,22 @@ async function main() {
     { ...base, side: 'HOLD' } as any,
     [],
   );
-  assert(!badSide.allowed, 'invalid signal side must block');
-  assert(badSide.reason === 'invalid_signal', 'invalid signal side must return invalid_signal');
+  assert(!badSide.passed, 'invalid signal side must block');
+  assert(badSide.blockedBy === 'invalid_signal', 'invalid signal side must return invalid_signal');
 
   const future = await risk.check(
     { ...base, timestamp: Date.now() + 60_000 } as any,
     [],
   );
-  assert(!future.allowed, 'future signal timestamp must block');
-  assert(future.reason === 'invalid_signal', 'future signal timestamp must return invalid_signal');
+  assert(!future.passed, 'future signal timestamp must block');
+  assert(future.blockedBy === 'invalid_signal', 'future signal timestamp must return invalid_signal');
 
   const badPrices = await risk.check(
     { ...base, sl: 0 } as any,
     [],
   );
-  assert(!badPrices.allowed, 'non-positive SL must block');
-  assert(badPrices.reason === 'invalid_prices', 'bad prices must return invalid_prices');
+  assert(!badPrices.passed, 'non-positive SL must block');
+  assert(badPrices.blockedBy === 'invalid_prices', 'bad prices must return invalid_prices');
 
   db.raw().close();
   console.log('Result: 4 passed, 0 failed');

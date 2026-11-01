@@ -12,7 +12,7 @@ const candles: Candle[] = Array.from({ length: 260 }, (_, i) => {
   const open = base;
   const close = base + 0.00005;
   return {
-    time: i * 3_600_000,
+    time: (i + 1) * 3_600_000,
     open,
     high: close + 0.00002,
     low: open - 0.00002,

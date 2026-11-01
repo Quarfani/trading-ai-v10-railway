@@ -33,10 +33,22 @@ function config(): SystemConfig {
 }
 
 function makeReconciler(db: DatabaseManager, exec: any, onClose = () => {}) {
+  const testExecutor = {
+    getBinanceOpenOrders: async (symbol: string) => {
+      const trade = db.getOpenTrades().find(row => row.symbol === symbol);
+      if (!trade) return [];
+      const side = trade.side === 'BUY' ? 'SELL' : 'BUY';
+      return [
+        { side, type: 'STOP_MARKET', stopPrice: String(trade.sl), closePosition: 'true' },
+        { side, type: 'TAKE_PROFIT_MARKET', stopPrice: String(trade.tp), closePosition: 'true' },
+      ];
+    },
+    ...exec,
+  };
   return new Reconciler(
     config(),
     db,
-    exec,
+    testExecutor,
     { sendMessage: async () => {} } as any,
     { recordClose: () => {} } as any,
     {} as any,

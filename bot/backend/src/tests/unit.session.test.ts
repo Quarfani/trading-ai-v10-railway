@@ -4,7 +4,8 @@
 import { SessionFilter } from '../risk/SessionFilter';
 
 const UTC = (h: number) => {
-  const d = new Date(); d.setUTCHours(h, 0, 0, 0); return d.getTime();
+  // Use a fixed Wednesday so session tests do not depend on the current day.
+  return Date.UTC(2024, 0, 3, h, 0, 0, 0);
 };
 
 describe('SessionFilter', () => {

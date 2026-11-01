@@ -11,7 +11,7 @@ function candle(time:number, open=100, close=101): {
 }
 
 const clean = evaluateMarketDataQuality(
-  Array.from({length:10},(_,i)=>candle(i*60_000)),
+  Array.from({length:10},(_,i)=>candle((i+1)*60_000)),
   'M1',
 );
 assert(clean.passed, 'clean sequence should pass');
@@ -38,39 +38,39 @@ const invalidLatency = evaluateMarketDataQuality(
 assert(!invalidLatency.passed, 'invalid latency threshold must block');
 
 const duplicate = evaluateMarketDataQuality(
-  [candle(0), candle(60_000), candle(60_000)],
+  [candle(60_000), candle(120_000), candle(120_000)],
   'M1',
 );
 assert(!duplicate.passed, 'duplicate timestamps must block');
 
 const badOhlc = evaluateMarketDataQuality(
-  [candle(0), { ...candle(60_000), high:90 }],
+  [candle(60_000), { ...candle(120_000), high:90 }],
   'M1',
 );
 assert(!badOhlc.passed, 'invalid OHLC must block');
 
 const synthetic = evaluateMarketDataQuality(
-  [{ ...candle(0), quality:'synthetic', is_synthetic:true }],
+  [{ ...candle(60_000), quality:'synthetic', is_synthetic:true }],
   'M1',
 );
 assert(!synthetic.passed, 'synthetic data must block by default');
 
 const gap = evaluateMarketDataQuality(
-  [candle(0), candle(10*60_000)],
+  [candle(60_000), candle(10*60_000)],
   'M1',
   { maxGapBars:1, maxMissingRatio:0.01 },
 );
 assert(!gap.passed, 'large data gaps must block');
 
 const stale = evaluateMarketDataQuality(
-  [{ ...candle(0), latency:10_000 }],
+  [{ ...candle(60_000), latency:10_000 }],
   'M1',
   { maxLatencyMs:1_000 },
 );
 assert(stale.warnings.length > 0, 'stale candles should be visible');
 
 const forexWeekend = evaluateMarketDataQuality(
-  [candle(0), candle(48 * 60 * 60_000)],
+  [candle(60_000), candle(60_000 + 48 * 60 * 60_000)],
   'M1',
   { maxGapBars: 1, maxMissingRatio: 0.01, allowScheduledSessionGaps: true },
 );

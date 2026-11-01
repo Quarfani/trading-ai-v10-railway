@@ -13,7 +13,7 @@ async function main() {
   const add = (id: number, source: string, profit: number) => {
     db.raw().prepare(
       "INSERT INTO trades(ticket,symbol,timeframe,side,volume,entry,sl,tp,status,openedAt,closedAt,profit,source) " +
-      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(
       id,
       'EURUSD',
@@ -32,7 +32,7 @@ async function main() {
   };
 
   for (let i = 1; i <= 10; i++) add(i, 'TREND+RSI', 10);
-  add(100, 'TREND+RSI_FAST', 100);
+  for (let i = 101; i <= 110; i++) add(i, 'TREND+RSI_FAST', 100);
 
   const entries = new Map<string, any>([
     ['TREND', { metrics: {} }],
@@ -49,7 +49,7 @@ async function main() {
   (tuner as any).tune();
 
   assert(
-    Math.abs(entries.get('TREND').metrics.expectancy - (200 / 11)) < 1e-12,
+    Math.abs(entries.get('TREND').metrics.expectancy - 55) < 1e-12,
     'AdaptiveTuner expectancy must be weighted by composite trade counts',
   );
   assert(

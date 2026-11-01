@@ -576,11 +576,16 @@ export class DatabaseManager {
           throw new Error(`Cumulative PnL overflow for reconciled full-close trade id=${tradeId}`);
         }
 
+        const exitQuoteToAccount = Number((result as any)?.quoteToAccount);
         const changed = this.db.prepare(
           `UPDATE trades
-           SET status='closed', profit=?, closedAt=?, exitReason=?
+           SET status='closed', profit=?, closedAt=?, exitReason=?,
+               exitQuoteToAccount=CASE WHEN ? > 0 THEN ? ELSE exitQuoteToAccount END
            WHERE id=? AND status='open'`,
-        ).run(cumulativeProfit, closedAt, exitReason, tradeId).changes;
+        ).run(
+          cumulativeProfit, closedAt, exitReason,
+          exitQuoteToAccount, exitQuoteToAccount, tradeId,
+        ).changes;
         if (changed !== 1) {
           throw new Error(`Could not persist reconciled full-close trade id=${tradeId}`);
         }
@@ -618,19 +623,6 @@ export class DatabaseManager {
             losses=daily_stats.losses + excluded.losses,
             pnl=daily_stats.pnl + excluded.pnl
         `).run(day, 1, win, 1 - win, cumulativeProfit);
-      }
-
-        const day = new Date(closedAt).toISOString().slice(0, 10);
-        const win = profit > 0 ? 1 : 0;
-        this.db.prepare(`
-          INSERT INTO daily_stats(day, trades, wins, losses, pnl)
-          VALUES (?,?,?,?,?)
-          ON CONFLICT(day) DO UPDATE SET
-            trades=daily_stats.trades + excluded.trades,
-            wins=daily_stats.wins + excluded.wins,
-            losses=daily_stats.losses + excluded.losses,
-            pnl=daily_stats.pnl + excluded.pnl
-        `).run(day, 1, win, 1 - win, profit);
       }
 
       const ledgerChanged = this.db.prepare(`

@@ -97,6 +97,12 @@ async function main() {
   let recoveryGetCount = 0;
   (recovered as any).signedGet = async (path: string, params: any) => {
     recoveryGetCount += 1;
+    if (path === "/api/v3/openOrders") {
+      return [
+        { orderId: 601, symbol: "ETHUSDT", side: "SELL", type: "LIMIT_MAKER", status: "NEW", origQty: "0.5", price: "110" },
+        { orderId: 602, symbol: "ETHUSDT", side: "SELL", type: "STOP_LOSS_LIMIT", status: "NEW", origQty: "0.5", stopPrice: "90", price: "89.95" },
+      ];
+    }
     assert(path === "/api/v3/orderList", "OCO recovery must query the order-list endpoint");
     assert(
       params.origClientOrderId ===

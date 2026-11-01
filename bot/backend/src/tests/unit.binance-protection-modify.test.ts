@@ -24,6 +24,11 @@ async function main() {
   (executor as any).getOpenOrders = async () => [
     { orderId: 102, type: "TAKE_PROFIT_MARKET" },
   ];
+  (executor as any).getPosition = async () => ({
+    positionAmt: 1,
+    entryPrice: 100,
+    unrealizedProfit: 0,
+  });
 
   (executor as any).placeSLTP = async () => {
     throw new Error("must not replace protection while an old order remains");

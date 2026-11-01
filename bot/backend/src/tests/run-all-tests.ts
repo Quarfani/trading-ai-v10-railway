@@ -1,7 +1,7 @@
 /**
  * TEST RUNNER — All test suites
  */
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -23,18 +23,26 @@ for (const t of tests) {
   const source = fs.readFileSync(file, 'utf8');
 
   // Jest suites contain describe/test/it blocks.
-  const isJest = /\b(describe|test|it)\s*\(/.test(source);
+  // The custom harness also uses test(...) calls; Jest suites are the files
+  // that declare describe(...).
+  const isJest = /\bdescribe\s*\(/.test(source);
 
   console.log(`\n?  ${t} [${isJest ? 'JEST' : 'TS-NODE'}]`);
 
   try {
-    const command = isJest
-      ? `npx jest "src/tests/${t}" --runInBand --forceExit`
-      : `npx ts-node --transpile-only "${file}"`;
+    const args = isJest
+      ? [
+          path.join(process.cwd(), 'node_modules', 'jest', 'bin', 'jest.js'),
+          `src/tests/${t}`,
+          '--runInBand', '--forceExit',
+          '--cacheDirectory', path.join(process.cwd(), 'node_modules', '.cache', 'jest'),
+        ]
+      : [path.join(process.cwd(), 'node_modules', 'ts-node', 'dist', 'bin.js'), '--transpile-only', file];
 
-    const out = execSync(command, {
+    const out = execFileSync(process.execPath, args, {
       stdio: 'pipe',
       timeout: 60_000,
+      maxBuffer: 20 * 1024 * 1024,
       windowsHide: true,
     });
 
